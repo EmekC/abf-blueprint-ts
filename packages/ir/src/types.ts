@@ -1,0 +1,158 @@
+// Core IR types (design 6.1) plus the shared shapes used across packages (profile, diagnostics, backend, apply plan, tests).
+
+export interface Span { file: string; line: number; col: number; endLine: number; endCol: number }
+
+export type VarFlag = "transient" | "replicated" | "editable";
+export type IrType = string; // bp_apply type grammar: "int", "object:/Script/Engine.Actor", "array:name", ...
+
+export interface IrModule {
+  irVersion: 1;
+  profile: string; // "ue5.4.4-1050002"
+  mod: string; // "goodsoupWagdD"
+  assets: IrAsset[];
+  /** class path -> meta class path (WidgetBlueprintGeneratedClass vs BlueprintGeneratedClass) used for pin object text. */
+  classMeta: Record<string, string>;
+}
+export interface IrAsset {
+  path: string; // "/goodsoupWagdD/SoupInfo/BP_SoupInfoRelay" (always under /<mod>/)
+  create?: { kind: "Blueprint" | "WidgetBlueprint" | "BlueprintInterface" | "UserDefinedStruct"; parent: string };
+  classDefaults?: Record<string, string>; // property -> T3D value text
+  variables: IrVariable[];
+  units: IrUnit[]; // owned functions/events/overrides
+  structFields?: IrVariable[]; // only for UserDefinedStruct
+}
+export interface IrVariable { name: string; type: IrType; default?: string; flags: VarFlag[]; origin: Span; temp?: boolean }
+export interface IrParam { name: string; type: IrType }
+export interface IrUnit {
+  id: string; // "event:UpdateTarget"
+  kind: "function" | "event" | "override";
+  name: string;
+  graph: string; // "EventGraph" for events, the function name for functions
+  signature: { inputs: IrParam[]; outputs: IrParam[]; net?: "server" | "client" | "multicast"; reliable?: boolean };
+  locals: IrVariable[]; // honored when the backend has functionLocals; else hoisted by the lowering
+  nodes: IrNode[];
+  wires: IrWire[];
+  origin: Span;
+  hash: string; // sha256 of the canonical JSON of signature+nodes+wires (no positions)
+}
+export interface IrNode {
+  id: string; // per-unit emission-order id: "<role><n>", e.g. "cast1"
+  t3d: { class: string; props: string[] }; // authoritative node text without pins (pins are engine-allocated)
+  sem?: SemanticTag; // optional hint so adapters can pick a native kind
+  pinDefaults?: Record<string, string>; // raw T3D defaults
+  pinObjects?: Record<string, string>; // object/class pin defaults by path
+  /** Concrete types for wildcard pins (backend-neutral, bp_apply type grammar). */
+  pinTypes?: Record<string, IrType>;
+  pos: [number, number];
+  origin: Span;
+}
+export type SemanticTag =
+  | { k: "call"; class?: string; function: string } | { k: "get" | "set"; name: string; class?: string }
+  | { k: "event"; name: string; params?: IrParam[] } | { k: "override"; class: string; function: string }
+  | { k: "branch" } | { k: "sequence" } | { k: "cast"; target: string } | { k: "self" }
+  | { k: "spawn" } | { k: "create_widget" } | { k: "call_dispatcher" | "bind_dispatcher"; name: string };
+export type IrWire = [from: `${string}.${string}`, to: `${string}.${string}`]; // output first; "entry"/"result" reserved
+
+export interface Diagnostic {
+  severity: "error" | "warning";
+  code: string; // "ABFC2001"
+  message: string;
+  span?: Span;
+  asset?: string;
+  tried?: Array<{ source: string; detail: string }>;
+  fix?: string;
+}
+
+export interface BackendCapabilities {
+  protocol: number; // abf backend protocol version (handshake, not the server's semver)
+  writers: Array<"memswap" | "import_nodes" | "paste">;
+  headless: boolean; // no desktop, mouse, keyboard or focus
+  needsOpenEditor: boolean;
+  createKinds: Array<"Blueprint" | "WidgetBlueprint" | "BlueprintInterface" | "UserDefinedStruct">;
+  containerTypes: { array: boolean; set: boolean; map: boolean };
+  userPureFunctions: boolean;
+  functionLocals: boolean;
+  rawNodes: boolean; // arbitrary class + props node text
+  replicatedEvents: boolean;
+  classDefaults: boolean;
+  multiPassPerAsset: boolean; // same asset may appear in several passes of one transaction
+  transactional: boolean; // whole plan applies or nothing is saved
+  compileErrorNodeRefs: boolean; // compile errors name the node (needed for line-level mapping)
+  nodeNameMap: boolean; // returns IR id -> real node name
+  reflect: boolean;
+  gameTest: boolean;
+  audit: boolean;
+  publish: boolean;
+  warmSession: boolean; // can keep one editor process across operations
+  /** The backend can type wildcard pins natively (`pin_types` on bp_apply nodes). */
+  pinTypes: boolean;
+  /** The backend types a cast's `Object` input pin itself (`cast_object_pin`). */
+  castObjectPin: boolean;
+  bpApplyFeatures: string[];
+  nodeKinds: string[];
+  /** `mod_audit` can audit the stage (false in Phase 1: it audits the real mod). */
+  stageAudit: boolean;
+  /** Raw container report of the backend, kept for `abfc doctor` only (null when the backend has no `backend_info`). */
+  backendContainerTypes: { array: boolean; set: boolean; map: boolean } | null;
+}
+export interface BackendInfo {
+  id: "bp_apply" | "import_nodes" | "paste_graph";
+  serverVersion: string;
+  /** null = the backend has no `backend_info` tool. */
+  protocol: number | null;
+  engineVersion: string | null;
+  editorRoot: string | null;
+  headlessDir: string | null;
+  documentsDir: string | null;
+  /** Computed by abfc from `headlessDir`. */
+  headlessDirHasSpace: boolean;
+  /** `abfc_extensions.features`, empty when the tool is absent. */
+  extensions: string[];
+  capabilities: BackendCapabilities;
+}
+
+export interface ProfileFunctionRef { class: string; name: string }
+export type ProfileEqualKey = "object" | "name" | "string" | "int" | "real" | "bool" | "byte";
+export interface Profile {
+  id: string;
+  engineVersion: string;
+  buildTag: string;
+  modEditorVersion: string;
+  epicAppVersion: string | null;
+  editorDisplayName: string;
+  exeRelPath: string;
+  programFilesGlob: string;
+  modsFolderName: string;
+  minProtocol: number;
+  defaultHeadlessSubdir: string;
+  pins: {
+    execute: string; then: string; else: string; condition: string; castFailed: string; castObject: string;
+    returnValue: string; self: string; isValidObject: string; arrayLengthArray: string; getItemArray: string;
+    getItemIndex: string; getItemOutput: string; opA: string; opB: string;
+  };
+  nodeClasses: {
+    callFunction: string; callArrayFunction: string; getArrayItem: string; breakStruct: string; variableGet: string;
+    variableSet: string; customEvent: string; branch: string; dynamicCast: string; comment: string;
+  };
+  functions: {
+    isValid: ProfileFunctionRef; arrayLength: ProfileFunctionRef; lessInt: ProfileFunctionRef; addInt: ProfileFunctionRef;
+    equal: Record<ProfileEqualKey, ProfileFunctionRef>;
+    notEqual: Record<ProfileEqualKey, ProfileFunctionRef>;
+  };
+  castObjectPinType: string;
+  variableFlags: { base: number; transient: number };
+  filterOverrides: Array<{ parent?: string; member?: string; cast?: string; reason: string }>;
+  knownLimits: string[];
+}
+
+export interface AssetPlan {
+  asset: string;
+  graphNodes: Record<string /* graph */, Array<{ name: string; pos: [number, number] }>>;
+  variables: IrVariable[];
+  units: Array<{ unit: IrUnit; removeNodes: string[]; origin: [number, number] }>;
+  classMeta: Record<string, string>;
+}
+export interface ApplyPlan { mod: string; assets: AssetPlan[] }
+
+export interface TestStepRecord { step: Record<string, unknown>; span: Span; knownIssue?: string }
+export interface TestCase { name: string; file: string; span: Span; steps: TestStepRecord[] }

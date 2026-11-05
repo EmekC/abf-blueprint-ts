@@ -1,0 +1,15 @@
+{
+  "name": "@abfc/runtime",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist/src"
+  ]
+}

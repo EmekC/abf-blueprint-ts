@@ -1,0 +1,213 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { parseExport } from "@abfc/ir";
+import type { Span, T3dNode } from "@abfc/ir";
+import {
+  adoptionDiagnostics, analyzeAdoption, driftDiagnostics, fingerprintUnit, mapCompileMessages, manifestPath, ownedSets,
+  readManifest, readSourceMap, unitState, writeManifest, writeSourceMap,
+} from "../src/index.js";
+import type { Manifest, ManifestUnit, SourceMapFile } from "../src/index.js";
+
+const BP = "/Fake/Mod/BP_Host.BP_Host";
+const EXEC = 'PinType.PinCategory="exec",PinType.PinSubCategory="",PinType.PinSubCategoryObject=None';
+const DATA = 'PinType.PinCategory="int",PinType.PinSubCategory="",PinType.PinSubCategoryObject=None';
+
+interface PinSpec { id: string; name: string; out?: boolean; data?: boolean; def?: string; links?: string[] }
+interface NodeSpec { name: string; cls: string; head?: string[]; x?: number; pins: PinSpec[] }
+
+const pinLine = (p: PinSpec): string =>
+  `CustomProperties Pin (PinId=${p.id},PinName="${p.name}"${p.out ? ',Direction="EGPD_Output"' : ""},${p.data ? DATA : EXEC},` +
+  "PinType.PinSubCategoryMemberReference=(),PinType.PinValueType=(),PinType.ContainerType=None,PinType.bIsReference=False" +
+  (p.def !== undefined ? `,DefaultValue="${p.def}"` : "") +
+  (p.links && p.links.length > 0 ? `,LinkedTo=(${p.links.join(",")},)` : "") +
+  ",PersistentGuid=00000000000000000000000000000000,bHidden=False,)";
+
+function render(nodes: NodeSpec[]): string {
+  const lines = [
+    `Begin Object Class=/Script/Engine.Blueprint Name="BP_Host" ExportPath="/Script/Engine.Blueprint'${BP}'"`,
+    `   Begin Object Class=/Script/Engine.EdGraph Name="EventGraph" ExportPath="/Script/Engine.EdGraph'${BP}:EventGraph'"`,
+    ...nodes.flatMap((n) => [
+      `      Begin Object Class=${n.cls} Name="${n.name}" ExportPath="${n.cls}'${BP}:EventGraph.${n.name}'"`,
+      "      End Object",
+    ]),
+    "   End Object",
+    `   Begin Object Name="EventGraph" ExportPath="/Script/Engine.EdGraph'${BP}:EventGraph'"`,
+    ...nodes.flatMap((n) => [
+      `      Begin Object Name="${n.name}" ExportPath="${n.cls}'${BP}:EventGraph.${n.name}'"`,
+      ...(n.head ?? []).map((h) => `         ${h}`),
+      `         NodePosX=${n.x ?? 0}`,
+      "         NodePosY=0",
+      ...n.pins.map((p) => `         ${pinLine(p)}`),
+      "      End Object",
+    ]),
+    "   End Object",
+    "End Object",
+    "",
+  ];
+  return lines.join("\r\n");
+}
+
+const CALL = "/Script/BlueprintGraph.K2Node_CallFunction";
+const EVENT = "/Script/BlueprintGraph.K2Node_CustomEvent";
+const GET = "/Script/BlueprintGraph.K2Node_VariableGet";
+const COMMENT = "/Script/UnrealEd.EdGraphNode_Comment";
+const id = (n: number): string => n.toString(16).padStart(32, "0").toUpperCase();
+
+interface Opts { def?: string; x?: number; shareCall2?: boolean; foreign?: boolean; dropPure?: boolean; extraLink?: boolean }
+
+/** Event A -> Call_1 -> Call_2 (Call_1 fed by a pure getter); event B -> Call_3. */
+function snapshot(o: Opts = {}): Map<string, T3dNode> {
+  const nodes: NodeSpec[] = [
+    { name: "Ev_A", cls: EVENT, head: ['CustomFunctionName="A"'], x: o.x ?? 0, pins: [{ id: id(1), name: "then", out: true, links: [`Call_1 ${id(10)}`] }] },
+    {
+      name: "Call_1", cls: CALL, head: ['FunctionReference=(MemberName="One",bSelfContext=True)'],
+      pins: [
+        { id: id(10), name: "execute", links: [`Ev_A ${id(1)}`, ...(o.foreign ? [`Ext_1 ${id(60)}`] : [])] },
+        { id: id(11), name: "then", out: true, links: [`Call_2 ${id(20)}`] },
+        { id: id(12), name: "arg", data: true, def: o.def ?? "0", links: o.dropPure ? [] : [`Pure_1 ${id(30)}`] },
+      ],
+    },
+    {
+      name: "Call_2", cls: CALL, head: ['FunctionReference=(MemberName="Two",bSelfContext=True)'],
+      pins: [
+        { id: id(20), name: "execute", links: [`Call_1 ${id(11)}`, ...(o.shareCall2 ? [`Ev_B ${id(40)}`] : [])] },
+        { id: id(21), name: "then", out: true },
+      ],
+    },
+    ...(o.dropPure ? [] : [{
+      name: "Pure_1", cls: GET, head: ['VariableReference=(MemberName="V",bSelfContext=True)'],
+      pins: [{ id: id(30), name: "V", out: true, data: true, links: [`Call_1 ${id(12)}`] }],
+    }]),
+    {
+      name: "Ev_B", cls: EVENT, head: ['CustomFunctionName="B"'],
+      pins: [{ id: id(40), name: "then", out: true, links: [`Call_3 ${id(50)}`, ...(o.shareCall2 ? [`Call_2 ${id(20)}`] : [])] }],
+    },
+    { name: "Call_3", cls: CALL, head: ['FunctionReference=(MemberName="Three",bSelfContext=True)'], pins: [{ id: id(50), name: "execute", links: [`Ev_B ${id(40)}`] }] },
+    { name: "Cmt_1", cls: COMMENT, pins: [] },
+    ...(o.foreign ? [{ name: "Ext_1", cls: CALL, head: ['FunctionReference=(MemberName="Ext",bSelfContext=True)'], pins: [{ id: id(60), name: "then", out: true, links: [`Call_1 ${id(10)}`] }] }] : []),
+  ];
+  return parseExport(render(nodes)).nodes;
+}
+
+test("adoption: owned, shared and foreign cases", () => {
+  const clean = analyzeAdoption(snapshot(), "EventGraph", "A");
+  assert.equal(clean.entry, "Ev_A");
+  assert.deepEqual(clean.owned, ["Call_1", "Call_2", "Ev_A", "Pure_1"]);
+  assert.deepEqual(clean.shared, []);
+  assert.deepEqual(clean.foreignLinks, []);
+  assert.deepEqual(adoptionDiagnostics(clean, "/Fake/Mod/BP_Host", "A"), []);
+
+  const shared = analyzeAdoption(snapshot({ shareCall2: true }), "EventGraph", "A");
+  assert.deepEqual(shared.shared, ["Call_2"]);
+  assert.deepEqual(shared.owned, ["Call_1", "Ev_A", "Pure_1"]);
+  assert.equal(adoptionDiagnostics(shared, "/Fake/Mod/BP_Host", "A")[0]?.code, "ABFC5005");
+
+  const foreign = analyzeAdoption(snapshot({ foreign: true }), "EventGraph", "A");
+  assert.deepEqual(foreign.foreignLinks, [{ node: "Ext_1", pin: "then", to: "Call_1" }]);
+  assert.equal(adoptionDiagnostics(foreign, "/Fake/Mod/BP_Host", "A")[0]?.code, "ABFC5005");
+
+  assert.throws(() => analyzeAdoption(snapshot(), "EventGraph", "Nope"), /ABFC5002/);
+});
+
+const asset = "/Fake/Mod/BP_Host";
+const stage = { syncedAt: "2026-01-01T00:00:00Z" };
+
+function manifestUnit(over: Partial<ManifestUnit> = {}): ManifestUnit {
+  const names = ["Call_1", "Call_2", "Ev_A", "Pure_1"];
+  const fp = fingerprintUnit(snapshot(), names);
+  return {
+    id: "event:A", graph: "EventGraph", irHash: "sha256:aa", assetHash: fp.assetHash, nodes: names, nodeIds: {}, tag: null,
+    stageSyncedAt: stage.syncedAt, adopt: null, nodeHashes: fp.nodeHashes, links: fp.links, ...over,
+  };
+}
+
+test("drift states", () => {
+  const u = manifestUnit();
+  assert.equal(unitState(u, snapshot(), stage), "clean");
+  assert.equal(unitState(u, snapshot({ x: 500 }), stage), "clean", "moving a node is not an edit");
+  assert.equal(unitState(u, snapshot({ def: "7" }), stage), "edited");
+  assert.equal(unitState(u, snapshot({ dropPure: true }), stage), "missing");
+  assert.equal(unitState(u, snapshot(), { syncedAt: "other" }), "staleStage");
+  assert.equal(unitState(manifestUnit({ stageSyncedAt: null, assetHash: null, nodes: [] }), snapshot(), stage), "pendingApply");
+  const adopt = { entry: "Ev_A", nodes: ["Call_1"], hash: "sha256:x", recordedAt: "now", stageSyncedAt: stage.syncedAt };
+  assert.equal(unitState(manifestUnit({ stageSyncedAt: null, adopt }), snapshot(), stage), "pendingAdoption");
+});
+
+test("drift diagnostics: ABFC5001 with counts, ABFC5002, ABFC5004", () => {
+  const spans = new Map<string, Span>([["event:A", { file: "src/H.ts", line: 3, col: 1, endLine: 9, endCol: 2 }]]);
+  const u = manifestUnit();
+  assert.deepEqual(driftDiagnostics(asset, [u], snapshot(), stage, spans), []);
+
+  const edited = driftDiagnostics(asset, [u], snapshot({ def: "7", extraLink: true }), stage, spans);
+  assert.equal(edited.length, 1);
+  assert.equal(edited[0]!.code, "ABFC5001");
+  assert.match(edited[0]!.message, /BP_Host event A was edited in the editor since the last build \(1 node changed, 0 links added, 0 links removed\)/);
+  assert.equal(edited[0]!.span?.line, 3);
+
+  const missing = driftDiagnostics(asset, [u], snapshot({ dropPure: true }), stage, spans);
+  assert.equal(missing[0]!.code, "ABFC5002");
+  assert.match(missing[0]!.message, /Pure_1/);
+
+  const adopt = fingerprintUnit(snapshot(), ["Call_3"]);
+  const ok = manifestUnit({ stageSyncedAt: null, adopt: { entry: "Ev_B", nodes: ["Call_3"], hash: adopt.assetHash, recordedAt: "now", stageSyncedAt: null } });
+  assert.deepEqual(driftDiagnostics(asset, [ok], snapshot(), stage, spans), []);
+  const changed = manifestUnit({ stageSyncedAt: null, adopt: { entry: "Ev_B", nodes: ["Call_3"], hash: "sha256:zzz", recordedAt: "now", stageSyncedAt: null } });
+  assert.equal(driftDiagnostics(asset, [changed], snapshot(), stage, spans)[0]!.code, "ABFC5004");
+});
+
+test("manifest and source map files", () => {
+  const dir = mkdtempSync(join(tmpdir(), "abfc-own-"));
+  try {
+    const m: Manifest = { asset, compiler: "0.1.0", profile: "p", units: [manifestUnit()], variables: [{ name: "abfc_A_t0", type: "name", hash: "sha256:v" }] };
+    assert.equal(readManifest(dir, asset), null);
+    const file = writeManifest(dir, m);
+    assert.equal(file, manifestPath(dir, asset));
+    assert.match(file.replaceAll("\\", "/"), /\.abfc\/manifest\/Fake__Mod__BP_Host\.json$/);
+    const text = readFileSync(file, "utf8");
+    assert.ok(text.endsWith("}\n"));
+    assert.ok(text.indexOf('"asset"') < text.indexOf('"compiler"') && text.indexOf('"compiler"') < text.indexOf('"profile"'));
+    assert.deepEqual(readManifest(dir, asset), JSON.parse(JSON.stringify(m)));
+    assert.deepEqual(ownedSets(dir), { [asset]: { units: ["A"], variables: ["abfc_A_t0"] } });
+
+    const sm: SourceMapFile = { asset, units: { "event:A": { span: { file: "src/H.ts", line: 1, col: 1, endLine: 2, endCol: 1 }, nodes: {} } } };
+    writeSourceMap(dir, sm);
+    assert.deepEqual(readSourceMap(dir, asset), sm);
+    assert.equal(readSourceMap(dir, "/Fake/Mod/Other"), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("compile messages map to owned nodes, hand-made nodes and units", () => {
+  const span = (line: number): Span => ({ file: "src/H.ts", line, col: 3, endLine: line, endCol: 9 });
+  const sm: SourceMapFile = {
+    asset,
+    units: { "event:A": { span: span(1), nodes: { call0: { span: span(5), real: "K2Node_CallFunction_9" }, get0: { span: span(6), real: null } } } },
+  };
+  const owned = mapCompileMessages(asset, [{ asset, message: "bad pin", node: "K2Node_CallFunction_9" }], sm, {});
+  assert.equal(owned[0]!.code, "ABFC6001");
+  assert.equal(owned[0]!.message, "[Unreal] bad pin");
+  assert.equal(owned[0]!.span?.line, 5);
+
+  const viaIds = mapCompileMessages(asset, [{ asset, message: "x", node: "K2Node_VariableGet_2" }], sm, { K2Node_VariableGet_2: "event:A/get0" });
+  assert.equal(viaIds[0]!.code, "ABFC6001");
+  assert.equal(viaIds[0]!.span?.line, 6);
+
+  const manual = mapCompileMessages(asset, [{ asset, message: "oops", node: "K2Node_Other_1" }], sm, {});
+  assert.equal(manual[0]!.code, "ABFC6002");
+  assert.equal(manual[0]!.span, undefined);
+  assert.match(manual[0]!.message, /\(K2Node_Other_1, hand-made\)$/);
+
+  const unit = mapCompileMessages(asset, [{ asset, message: "oops" }], sm, {});
+  assert.equal(unit[0]!.code, "ABFC6002");
+  assert.equal(unit[0]!.span?.line, 1);
+  assert.match(unit[0]!.message, /\(node not identified\)$/);
+
+  const two: SourceMapFile = { asset, units: { ...sm.units, "event:B": { span: span(20), nodes: {} } } };
+  const wide = mapCompileMessages(asset, [{ asset, message: "oops" }, { asset: "/Fake/Mod/Other", message: "skip" }], two, {});
+  assert.equal(wide.length, 1);
+  assert.equal(wide[0]!.span, undefined);
+});
