@@ -2,7 +2,7 @@
 
 Status: draft for review. Facts marked **(unverified)** have not been confirmed on the cooked Mod Editor yet. Phase 0 of `roadmap.md` checks the ones that matter.
 
-Target: Mod Editor 1.5.0, engine `5.4.4-1050002+++DF+ABF`, Windows only. MIT, public, published as npm packages.
+Target: Mod Editor 1.5.0, engine `5.4.4-1050002+++DF+ABF`, Windows only. MIT, public, published as npm packages. The only supported backend is `https://github.com/EmekC/abf-mod-editor-mcp`. abfc depends on no other backend repository.
 
 ## 1. Goals and non-goals
 
@@ -395,7 +395,7 @@ Before `apply`, the planner checks the plan against `capabilities` and fails wit
 
 Every adapter talks to `abf-mod-editor-mcp`'s `server.py` the way `test_client.py` does: it spawns `python -I -X utf8 <serverDir>\server.py`, speaks MCP JSON-RPC 2.0 over stdio (one JSON object per line), and calls `tools/call`. There is no second protocol to maintain, and the same server stays usable from Claude. Arguments go in an argv array (never `shell: true`), and the child's environment gets `PYTHONUTF8=1` and `PYTHONIOENCODING=utf-8`. Large plans go through `spec_file` (a JSON file in `.abfc/cache/`) rather than inline arguments.
 
-Version check: the fork's 2.3.0 (headless tools) and upstream's 2.3.0 to 2.3.2 (a different `graphbuild.py` route, no headless tools) share version numbers, so semver alone cannot tell them apart. The backend must expose a new read-only tool, `backend_info`, which returns `protocol`, `serverVersion`, `engineVersion`, paths and capabilities. If the tool is missing, or `protocol < minProtocol`, the result is `ABFC4001: abf-mod-editor-mcp at <dir> (server 2.3.x) has no backend_info / protocol <n>; abfc needs protocol >= 1. Update it (see docs/backend.md).`
+Version check: abfc does not rely on the server's semver alone. The backend exposes a read-only tool, `backend_info`, which returns `protocol`, `serverVersion`, `engineVersion`, paths and capabilities. The protocol number is a small integer that changes only when the tool contract changes, so abfc can tell whether the backend has the tools and capabilities it needs, and `abfc doctor` can print them. Version numbers are owned solely by `EmekC/abf-mod-editor-mcp`. If the tool is missing, or `protocol < minProtocol`, the result is `ABFC4001: abf-mod-editor-mcp at <dir> (server <version>) has no backend_info / protocol <n>; abfc needs protocol >= 1. Update it (see docs/backend.md).`
 
 ### 7.3 Adapter (a): `bp_apply` (today)
 
@@ -564,14 +564,14 @@ abfc never uploads to mod.io and never offers to.
 
 A `@blueprint({ path, kind: "widget" })` class extending a `UserWidget` stub owns only the graphs it generates. The widget tree and layout stay in the designer. The stub `<Asset>_Manual` exposes designer widgets marked `IsVariable` as typed fields. Compiler-made `create_widget` and `AddChild` calls work as in the relay. The `widget_tree` and `animations` features of bp_apply are not used in phase 1.
 
-## 14. Backend work required (upstream, in abf-mod-editor-mcp)
+## 14. Backend work required (in EmekC/abf-mod-editor-mcp)
 
-Each item is small and gated by a capability, and abfc works without the optional ones:
+All items land in `EmekC/abf-mod-editor-mcp`. Each item is small and gated by a capability, and abfc works without the optional ones:
 1. `backend_info` tool (required, protocol 1): versions, paths (`documents_dir`, headless dir, editor root), capabilities.
 2. `reflect` op for stubs (required for `abfc stubs`).
 3. Compile messages keep the `from Source:` node path (`compileErrorNodeRefs`).
 4. Optional: map/set types in the type grammar, UserDefinedStruct creation, function local variables, `warmSession`.
-5. Merge path: the headless tools live on the fork `EmekC/abf-mod-editor-mcp` (branch `main`, `headless-blueprints`), built on upstream 2.2.0. Upstream `theelites11gamer/abf-mod-editor-mcp` has since released 2.3.0 to 2.3.2 with a different graph builder (`graphbuild.py`) and without bpkit. Upstreaming therefore means rebasing the headless tools onto 2.3.2 and agreeing on version numbering with the maintainer. Until that lands, abfc documents the fork as the supported backend and checks `protocol`, not the version string.
+5. Single backend: the headless tools (bpkit, staging, headless runs) already live in `EmekC/abf-mod-editor-mcp`, which is the one supported backend. abfc checks `protocol` through `backend_info`, and server version numbers are owned only by that repository.
 
 ## 15. Security and safety
 
@@ -602,11 +602,15 @@ Each item is small and gated by a capability, and abfc works without the optiona
 | Temps as member variables in event graphs | Asset clutter | Owned, prefixed, transient. Later `K2Node_TemporaryVariable` (already used by the the test mod plans). |
 | Same asset listed several times in one bp_apply batch (unverified) | Atomicity | One call per pass plus a resync on failure. |
 | Replacing an owned function whose signature changed: hand-made callers may break between passes (unverified) | Callers lose links | Keep the graph and replace the body when the signature is unchanged. On a signature change, warn and re-check foreign callers after compile. |
-| Upstream merge stalls | Public release blocked | Release against the fork with the protocol check. Upstreaming runs as a parallel track. |
+| Backend extensions (section 14) are late | Optional features and stubs missing | They are all in `EmekC/abf-mod-editor-mcp`, under the same owner. abfc gates each one by capability and checks `protocol`. |
 
 ## 17. Open questions for the user
 
 1. npm scope and package names: is `@abfc/*` acceptable (availability unchecked), and is the CLI name `abfc` final?
 2. Release gate when `mod_audit` cannot run (fragile Mod Browser tile): fail closed with no bypass (current design), or allow `--no-audit` with a loud warning, since the upload runs the real audit anyway?
 3. Manifest location: committed in the TS project (current design), so ownership travels with the source. Is the mod folder itself under version control anywhere, so the two can stay in step?
-4. Upstream versioning: is it acceptable to ask the upstream maintainer for a `backend_info` protocol number, separate from the server semver, given the fork and upstream both used 2.3.0?
+4. Backend versioning: resolved. The user decided to use `EmekC/abf-mod-editor-mcp` entirely, with nothing from the original maintainer and no dependency on other repositories. The `backend_info` protocol number is kept as a capability check, and version numbers are owned by that repo.
+
+## Credits
+
+`abf-mod-editor-mcp` was originally created by theelites11gamer (https://github.com/theelites11gamer/abf-mod-editor-mcp, MIT) and extended with the headless Blueprint tools by DezionDev. abfc depends only on `EmekC/abf-mod-editor-mcp`.
