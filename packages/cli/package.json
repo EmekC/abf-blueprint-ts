@@ -1,0 +1,27 @@
+{
+  "name": "@abfc/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist/src"
+  ],
+  "bin": {
+    "abfc": "./dist/src/bin.js"
+  },
+  "dependencies": {
+    "@abfc/runtime": "0.1.0",
+    "@abfc/ir": "0.1.0",
+    "@abfc/env": "0.1.0",
+    "@abfc/testkit": "0.1.0",
+    "@abfc/compiler": "0.1.0",
+    "@abfc/backend": "0.1.0",
+    "@abfc/stubgen": "0.1.0"
+  }
+}

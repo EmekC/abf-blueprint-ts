@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "lib": ["es2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "useDefineForClassFields": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": [],
+    "paths": {
+      "/Script/*": ["./.abfc/stubs/test/Script/*.js"],
+      "/Game/*": ["./.abfc/stubs/test/Game/*.js"],
+      "/TestMod/*": ["./.abfc/stubs/test/Mod/TestMod/*.js"]
+    }
+  },
+  "include": ["src"]
+}
