@@ -1,0 +1,74 @@
+{
+  "id": "ue5.4.4-1050002",
+  "engineVersion": "5.4.4-1050002+++DF+ABF",
+  "buildTag": "1050002",
+  "modEditorVersion": "1.5.0",
+  "epicAppVersion": "1.5.0.31876",
+  "editorDisplayName": "Abiotic Factor Mod Editor",
+  "exeRelPath": "AbioticFactor\\Binaries\\Win64\\AbioticFactorEditorCooked-Win64-Test.exe",
+  "programFilesGlob": "Epic Games\\AbioticFactorModEdit*",
+  "modsFolderName": "Abiotic Factor Mods",
+  "minProtocol": 1,
+  "defaultHeadlessSubdir": "abf-mod-editor-mcp\\headless",
+  "pins": {
+    "execute": "execute",
+    "then": "then",
+    "else": "else",
+    "condition": "Condition",
+    "castFailed": "CastFailed",
+    "castObject": "Object",
+    "returnValue": "ReturnValue",
+    "self": "self",
+    "isValidObject": "Object",
+    "arrayLengthArray": "TargetArray",
+    "getItemArray": "Array",
+    "getItemIndex": "Dimension 1",
+    "getItemOutput": "Output",
+    "opA": "A",
+    "opB": "B"
+  },
+  "nodeClasses": {
+    "callFunction": "/Script/BlueprintGraph.K2Node_CallFunction",
+    "callArrayFunction": "/Script/BlueprintGraph.K2Node_CallArrayFunction",
+    "getArrayItem": "/Script/BlueprintGraph.K2Node_GetArrayItem",
+    "breakStruct": "/Script/BlueprintGraph.K2Node_BreakStruct",
+    "variableGet": "/Script/BlueprintGraph.K2Node_VariableGet",
+    "variableSet": "/Script/BlueprintGraph.K2Node_VariableSet",
+    "customEvent": "/Script/BlueprintGraph.K2Node_CustomEvent",
+    "branch": "/Script/BlueprintGraph.K2Node_IfThenElse",
+    "dynamicCast": "/Script/BlueprintGraph.K2Node_DynamicCast",
+    "comment": "/Script/UnrealEd.EdGraphNode_Comment"
+  },
+  "functions": {
+    "isValid": { "class": "/Script/Engine.KismetSystemLibrary", "name": "IsValid" },
+    "arrayLength": { "class": "/Script/Engine.KismetArrayLibrary", "name": "Array_Length" },
+    "lessInt": { "class": "/Script/Engine.KismetMathLibrary", "name": "Less_IntInt" },
+    "addInt": { "class": "/Script/Engine.KismetMathLibrary", "name": "Add_IntInt" },
+    "equal": {
+      "object": { "class": "/Script/Engine.KismetMathLibrary", "name": "EqualEqual_ObjectObject" },
+      "name": { "class": "/Script/Engine.KismetMathLibrary", "name": "EqualEqual_NameName" },
+      "string": { "class": "/Script/Engine.KismetMathLibrary", "name": "EqualEqual_StrStr" },
+      "int": { "class": "/Script/Engine.KismetMathLibrary", "name": "EqualEqual_IntInt" },
+      "real": { "class": "/Script/Engine.KismetMathLibrary", "name": "EqualEqual_DoubleDouble" },
+      "bool": { "class": "/Script/Engine.KismetMathLibrary", "name": "EqualEqual_BoolBool" },
+      "byte": { "class": "/Script/Engine.KismetMathLibrary", "name": "EqualEqual_ByteByte" }
+    },
+    "notEqual": {
+      "object": { "class": "/Script/Engine.KismetMathLibrary", "name": "NotEqual_ObjectObject" },
+      "name": { "class": "/Script/Engine.KismetMathLibrary", "name": "NotEqual_NameName" },
+      "string": { "class": "/Script/Engine.KismetMathLibrary", "name": "NotEqual_StrStr" },
+      "int": { "class": "/Script/Engine.KismetMathLibrary", "name": "NotEqual_IntInt" },
+      "real": { "class": "/Script/Engine.KismetMathLibrary", "name": "NotEqual_DoubleDouble" },
+      "bool": { "class": "/Script/Engine.KismetMathLibrary", "name": "NotEqual_BoolBool" },
+      "byte": { "class": "/Script/Engine.KismetMathLibrary", "name": "NotEqual_ByteByte" }
+    }
+  },
+  "castObjectPinType": "object:/Script/CoreUObject.Object",
+  "variableFlags": { "base": 4, "transient": 8192 },
+  "filterOverrides": [
+    { "parent": "/Script/Engine.Controller", "member": "K2_GetPawn", "reason": "mod_audit passed the test mod" },
+    { "parent": "/Script/Engine.Controller", "member": "IsLocalController", "reason": "mod_audit passed the test mod" },
+    { "cast": "/Script/Engine.PlayerController", "reason": "mod_audit passed the test mod" }
+  ],
+  "knownLimits": ["PrintString is not logged", "no live HUD in hidden runs", "user pure functions rejected"]
+}

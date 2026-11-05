@@ -1,0 +1,13 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/runtime" },
+    { "path": "packages/ir" },
+    { "path": "packages/env" },
+    { "path": "packages/testkit" },
+    { "path": "packages/compiler" },
+    { "path": "packages/backend" },
+    { "path": "packages/stubgen" },
+    { "path": "packages/cli" }
+  ]
+}

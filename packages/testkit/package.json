@@ -1,0 +1,22 @@
+{
+  "name": "@abfc/testkit",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    },
+    "./runner": {
+      "types": "./dist/src/runner.d.ts",
+      "default": "./dist/src/runner.js"
+    }
+  },
+  "files": [
+    "dist/src"
+  ],
+  "dependencies": {
+    "@abfc/ir": "0.1.0"
+  }
+}
