@@ -1,0 +1,10 @@
+[
+ {"op":"spawn","class":"/goodsoupWagdD/_abfcSpike/BP_LoopProbe.BP_LoopProbe_C","as":"p"},
+ {"op":"python","as":"fn","code":"r=ctx['p'].call_method('CountFn')\nresult=str(r)"},
+ {"op":"get","target":"$p","property":"Count","as":"c"},
+ {"op":"assert","value":"$c","equals":10},
+ {"op":"python","as":"ev","code":"ctx['p'].call_method('CountEv')\nresult='ok'"},
+ {"op":"wait","seconds":0.5},
+ {"op":"get","target":"$p","property":"CountE","as":"ce"},
+ {"op":"assert","value":"$ce","equals":10}
+]

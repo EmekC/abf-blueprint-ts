@@ -1,0 +1,16 @@
+[
+ {
+  "asset": "/goodsoupWagdD/_abfcSpike/BP_StructProbe",
+  "create": {
+   "class": "Blueprint",
+   "parent": "/Script/Engine.Actor",
+   "if_missing": true
+  },
+  "variables": [
+   {
+    "name": "SP",
+    "type": "struct:/goodsoupWagdD/_abfcSpike/S_Probe.S_Probe"
+   }
+  ]
+ }
+]

@@ -1,0 +1,29 @@
+[{
+  "asset": "/goodsoupWagdD/_abfcSpike/BP_MapProbe",
+  "create": {"class": "Blueprint", "parent": "/Script/Engine.Actor", "if_missing": true},
+  "variables": [
+    {"name": "Counts", "type": "map:name:int"}
+  ],
+  "functions": [{
+    "name": "AddAndFind",
+    "inputs": [{"name": "K", "type": "name"}, {"name": "V", "type": "int"}],
+    "outputs": [{"name": "Found", "type": "int"}, {"name": "Has", "type": "bool"}],
+    "nodes": [
+      {"id": "gm", "k": "get", "name": "Counts"},
+      {"id": "ma", "k": "call", "class": "/Script/Engine.BlueprintMapLibrary", "function": "Map_Add"},
+      {"id": "gm2", "k": "get", "name": "Counts"},
+      {"id": "mf", "k": "call", "class": "/Script/Engine.BlueprintMapLibrary", "function": "Map_Find"}
+    ],
+    "wires": [
+      ["entry.then", "ma.execute"],
+      ["gm.Counts", "ma.TargetMap"],
+      ["entry.K", "ma.Key"],
+      ["entry.V", "ma.Value"],
+      ["ma.then", "result.execute"],
+      ["gm2.Counts", "mf.TargetMap"],
+      ["entry.K", "mf.Key"],
+      ["mf.Value", "result.Found"],
+      ["mf.ReturnValue", "result.Has"]
+    ]
+  }]
+}]

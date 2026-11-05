@@ -4,7 +4,7 @@ Sizes are rough estimates for one developer: S is under 1 week, M is 1 to 3 week
 
 ## Phase 0: spike (M)
 
-Throwaway code in `spikes/`, run against a staged copy of Good Soup only. Nothing is published, nothing touches the real mod, and backend changes stay on a local branch of `EmekC/abf-mod-editor-mcp`.
+Throwaway code in `spike/`, run against a staged copy of Good Soup only. Nothing is published, nothing touches the real mod, and backend changes stay on a local branch of `EmekC/abf-mod-editor-mcp`.
 
 | Probe | Pass | Fail: what we do |
 | --- | --- | --- |
@@ -15,10 +15,12 @@ Throwaway code in `spikes/`, run against a staged copy of Good Soup only. Nothin
 | P5 Raw nodes through `k:"node"`: `K2Node_CallArrayFunction` (`Array_Length`), `K2Node_GetArrayItem`, `K2Node_BreakStruct` (`AbioticInventoryItem`) | Pins allocated with the right types, and compiles clean. | Add native kinds to bp_apply (`array_call`, `break_struct`, `make_struct`) in `EmekC/abf-mod-editor-mcp`. |
 | P6 Map variable: extend bp_apply's type grammar locally (`map:name:int`), then add/find in a game test, then `mod_audit` | Compiles, the game test passes, the audit passes. | Maps and sets use the parallel-array lowering (Phase 4). The capability stays false. |
 | P7 UserDefinedStruct: create one in staging (Python factory), use it as a variable and in a game test, then `mod_audit` | Creates, compiles, the test passes, the audit passes. | Mod-defined structs leave the plan. Only engine structs are supported, and the error ABFC2045 explains why. |
-| P8 Build time: cold `reflect`, `apply` (one asset), `compile`, `game_test` | Numbers recorded in `spikes/timings.md`. Pass: one-asset cold build plus test under 2 minutes. | Over 2 minutes: the warm editor moves from Phase 2 into Phase 1. |
+| P8 Build time: cold `reflect`, `apply` (one asset), `compile`, `game_test` | Numbers recorded in `docs/spike-results.md`. Pass: one-asset cold build plus test under 2 minutes. | Over 2 minutes: the warm editor moves from Phase 2 into Phase 1. |
 | P9 Pick and pin the exact TypeScript version, and confirm the frontend-isolation seam compiles | `typescript` exact version in the root `package.json`. | — |
 
-Exit: a written result per probe in `spikes/RESULTS.md`, and `design.md` updated: (unverified) marks resolved, capabilities and fallbacks fixed.
+Exit: a written result per probe in `docs/spike-results.md`, and `design.md` updated: (unverified) marks resolved, capabilities and fallbacks fixed.
+
+Result (2026-11-05): see `docs/spike-results.md`. P1, P2, P3, P4, P8 and P9 pass. P5 fails for wildcard array nodes (the native-kinds fallback applies, widened to every wildcard-capable node, see Phase 1). P6 and P7 pass compile and game test, but their audit criterion is NOT VERIFIED because the one `mod_audit` run covered the real mod, not the stage; their capabilities stay false until a stage audit passes (compile and game test passed), and the fallbacks apply only if a later audit of the stage fails. P3 triggered fail branch 1 (node classes recorded, P5 route used) and its end criteria passed on that route.
 
 ## Phase 1: milestone 1, the Good Soup relay slice (L)
 
@@ -26,10 +28,11 @@ Scope
 - Monorepo skeleton: `@abfc/runtime`, `ir`, `env`, `compiler`, `backend`, `stubgen`, `testkit`, `cli`. Node 24 pinned, exact TS, `node:test`.
 - `@abfc/env`: full precedence chain, Known Folder Documents lookup, Epic manifest discovery, Python discovery, headless-dir space check, the error shape from design 9.3, and `abfc doctor`.
 - Backend: `backend_info` and `reflect`, plus `compileErrorNodeRefs` if it is small, all in `EmekC/abf-mod-editor-mcp`. The MCP stdio client and the bp_apply adapter with capability gating.
+- Backend, from Phase 0 probe P5 (failed, also seen in P3 and P6): native node kinds `array_call`, `break_struct`, `make_struct`, plus explicit pin-type resolution for every wildcard-capable node (array functions, `GetArrayItem`, `cast` with its `Object` pin, and later `Map_*`, `Select`, `MakeArray`, macros). `k:"node"` and native `cast` leave wildcard pins undetermined and the build fails. Until these land, the adapter may use the two-phase route proven in Phase 0 (apply, read the rolled-back `final_0.t3d`, patch the pins, apply the graph as `raw`), but it should resolve types up front because a failed first apply adds 10 to 20 s.
 - `abfc stubs` for the two `/Game` classes, their `/Script` closure, and the mod's own assets (`_Manual` interfaces). Stub lock and version-mismatch errors.
 - Compiler: the TS subset needed for `UpdateTarget` (casts, `?.`, `&&`, `===`, ExpandEnumAsExecs results, `for..of`, struct breaks, temps), passes 1 to 3 and 6, manifest, drift check, `abfc adopt`, source map.
 - `abfc check`, `build`, `test` (testkit with `spawn`, `call`, `get`, `wait`, `expect`), `status`.
-- Map and struct probes from Phase 0 stay as probes. Their results only set capability flags.
+- Map and struct probes from Phase 0 stay as probes. Their results only set capability flags (both false until a stage audit passes; compile and game test passed, see Phase 4).
 
 Exit criteria
 - The Good Soup TS project (outside the mod folder) holds `UpdateTarget` in TS. `abfc build` adopts and replaces the hand-made event, compiles clean, and passes the existing relay game test plus the new `UpdateTarget` tests, all from a plain terminal with no MCP client.
@@ -51,7 +54,7 @@ Exit: WBP_SoupInfo logic in TS, layout unchanged byte-for-byte outside owned gra
 
 ## Phase 4: maps, sets and structs (M, depends on P6 and P7)
 
-Scope: native `Map`/`Set` if P6 passed (backend type grammar extended in `EmekC/abf-mod-editor-mcp`), else parallel-array lowering with `Array_Find`. `@struct` classes as UserDefinedStruct if P7 passed.
+Scope: native `Map` (not `Set`) if the P6 audit criterion passes (backend type grammar extended in `EmekC/abf-mod-editor-mcp` from `spike/backend-p6-map.patch`, plus wildcard-pin resolution for `Map_*` nodes); P6 compile and game test passed in Phase 0, the audit was not verified. If a later audit of the stage fails, parallel-array lowering with `Array_Find` and the capability stays false. Set not probed in Phase 0; native Set needs a `set:` grammar probe, else parallel-array lowering. `@struct` classes as UserDefinedStruct if the P7 audit criterion passes (compile and game test passed in Phase 0, the audit was not verified); this also needs a backend extension for field authoring, since Python in this build can create the struct but not set its fields, and mod struct variable types use the full object path (`.../S_Probe.S_Probe`). If the audit fails, `@struct` is dropped and ABFC2045 explains why.
 Exit: a sample mod using a `Map<name,int>` and one struct builds, tests and passes `mod_audit`. Unsupported combinations fail with an ABFC error before launch.
 
 ## Phase 5: language service and lint polish (M)

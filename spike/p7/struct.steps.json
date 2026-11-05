@@ -1,0 +1,22 @@
+[
+ {
+  "op": "spawn",
+  "class": "/goodsoupWagdD/_abfcSpike/BP_StructProbe.BP_StructProbe_C",
+  "as": "p"
+ },
+ {
+  "op": "python",
+  "as": "v",
+  "code": "x=ctx['p'].get_editor_property('SP')\nresult=type(x).__name__+'|'+(x.export_text() if hasattr(x,'export_text') else str(x))"
+ },
+ {
+  "op": "assert",
+  "value": "$v",
+  "contains": "MemberVar"
+ },
+ {
+  "op": "python",
+  "as": "w",
+  "code": "x=ctx['p'].get_editor_property('SP')\nresult=str([n for n in dir(x) if not n.startswith('_')][:40])"
+ }
+]

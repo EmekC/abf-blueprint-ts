@@ -1,0 +1,16 @@
+[
+ {
+  "asset": "/goodsoupWagdD/_abfcSpike/BP_StructHost",
+  "create": {
+   "class": "Blueprint",
+   "parent": "/Script/Engine.Actor",
+   "if_missing": true
+  },
+  "raw": [
+   {
+    "kind": "python",
+    "code": "# Spike P7: runs inside bp_apply raw python (globals: unreal, bp, asset_path, ctx, core). Creates a UserDefinedStruct in the mod's _abfcSpike folder.\nimport json\nout = {\"steps\": []}\n\ndef step(name, fn):\n    try:\n        r = fn()\n        out[\"steps\"].append({\"step\": name, \"ok\": True, \"value\": str(r)[:300]})\n        return r\n    except Exception as e:  # noqa\n        out[\"steps\"].append({\"step\": name, \"ok\": False, \"error\": repr(e)[:400]})\n        return None\n\nout[\"has_StructureFactory\"] = hasattr(unreal, \"StructureFactory\")\nout[\"has_UserDefinedStruct\"] = hasattr(unreal, \"UserDefinedStruct\")\nout[\"struct_api_names\"] = sorted(n for n in dir(unreal) if \"Struct\" in n and (\"Editor\" in n or \"UserDefined\" in n or \"Factory\" in n))\ns = None\nif out[\"has_StructureFactory\"]:\n    s = step(\"create_asset\", lambda: unreal.AssetToolsHelpers.get_asset_tools().create_asset(\n        \"S_Probe\", \"/goodsoupWagdD/_abfcSpike\", unreal.UserDefinedStruct, unreal.StructureFactory()))\nif s is not None:\n    out[\"created_path\"] = s.get_path_name()\n    step(\"save\", lambda: unreal.EditorAssetLibrary.save_loaded_asset(s, False))\n    step(\"exists\", lambda: unreal.EditorAssetLibrary.does_asset_exist(\"/goodsoupWagdD/_abfcSpike/S_Probe\"))\n    step(\"export_text\", lambda: len(core.export_text(s, \"s_probe.t3d\")))\n    step(\"dir_struct\", lambda: [n for n in dir(s) if not n.startswith(\"_\")][:60])\n    if hasattr(unreal, \"StructureEditorUtils\"):\n        out[\"StructureEditorUtils\"] = [n for n in dir(unreal.StructureEditorUtils) if not n.startswith(\"_\")]\njson.dump(out, open(core.CFG.tmpdir + \"/p7.json\", \"w\"), indent=1)\n"
+   }
+  ]
+ }
+]

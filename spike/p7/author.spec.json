@@ -1,0 +1,11 @@
+[
+ {
+  "asset": "/goodsoupWagdD/_abfcSpike/BP_StructHost",
+  "raw": [
+   {
+    "kind": "python",
+    "code": "# Spike P7b: can fields of the (already created) S_Probe be added/renamed from Python? Not saved.\nimport json\nout = {}\ndef t(name, fn):\n    try:\n        out[name] = str(fn())[:400]\n    except Exception as e:  # noqa\n        out[name] = \"ERR \" + repr(e)[:300]\ns = unreal.load_asset(\"/goodsoupWagdD/_abfcSpike/S_Probe\")\nout[\"loaded\"] = str(s)\nnames = [n for n in dir(unreal) if \"StructureEditor\" in n or \"UserDefinedStructEditor\" in n or \"StructUtils\" in n or \"BPStructure\" in n]\nout[\"api_names\"] = names\nt(\"editor_data\", lambda: s.get_editor_property(\"editor_data\"))\nt(\"struct_props\", lambda: [n for n in dir(s) if \"struct\" in n.lower() or \"var\" in n.lower() or \"field\" in n.lower()])\nt(\"set_vardesc\", lambda: s.set_editor_property(\"editor_data\", None))\nt(\"add_variable\", lambda: unreal.StructureEditorUtils.add_variable(s, unreal.EdGraphPinType()))\njson.dump(out, open(core.CFG.tmpdir + \"/p7b.json\", \"w\"), indent=1)\n"
+   }
+  ]
+ }
+]
