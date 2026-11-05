@@ -1,3 +1,4 @@
 node_modules/
 .abfc/cache/
 *.log
+spike/out/
