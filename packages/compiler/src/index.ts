@@ -1,0 +1,16 @@
+export * from "./hir.js";
+export { loadProgram } from "./frontend/program.js";
+export type { LoadedProgram } from "./frontend/program.js";
+export { buildHir, checkSubset } from "./frontend/build.js";
+export { compileTests } from "./frontend/tests.js";
+export { lower, formatLiteral, assignPositions } from "./lower/index.js";
+export { analyzeAdoption, adoptionDiagnostics, AdoptionError } from "./ownership/adopt.js";
+export type { AdoptionAnalysis } from "./ownership/adopt.js";
+export { driftDiagnostics, fingerprintUnit, unitState } from "./ownership/drift.js";
+export type { StageInfo, UnitFingerprint, UnitState } from "./ownership/drift.js";
+export { assetFileStem, manifestPath, ownedSets, readManifest, stringifySorted, writeManifest } from "./ownership/manifest.js";
+export type { Manifest, ManifestUnit } from "./ownership/manifest.js";
+export { mapCompileMessages, readSourceMap, sourceMapPath, writeSourceMap } from "./ownership/sourcemap.js";
+export type { CompileMessageLike, SourceMapFile } from "./ownership/sourcemap.js";
+export { planBuild } from "./plan/planner.js";
+export type { PlanInput, PlanResult } from "./plan/planner.js";

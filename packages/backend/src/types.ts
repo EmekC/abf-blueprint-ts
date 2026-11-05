@@ -1,0 +1,139 @@
+import type { BackendInfo } from "@abfc/ir";
+
+export interface StageReport {
+  mod: string;
+  files: number;
+  stagingPath: string;
+}
+
+export interface StageStatus {
+  mod: string;
+  stagingPath: string;
+  syncedAt: string | null;
+  changed: string[];
+  added: string[];
+  removed: string[];
+  conflicts: string[];
+}
+
+export interface AssetSnapshot {
+  asset: string;
+  run: string;
+  /** `<run>/export.t3d` */
+  exportPath: string;
+  structure: unknown;
+  seconds: number | null;
+}
+
+export interface CompileMessage {
+  asset: string | null;
+  message: string;
+  /** Real node name from `from Source:` in the compile log, when the backend reports it. */
+  node?: string;
+  graph?: string;
+}
+
+export interface BpApplyResult {
+  ok: boolean;
+  rolledBack: boolean;
+  run: string;
+  seconds: number;
+  assets: Array<{ asset: string; node_ids: Record<string, Record<string, string>>; final?: string }> | null;
+  compile: { errors: CompileMessage[]; warnings: CompileMessage[] };
+  error?: string;
+  logTail?: string;
+}
+
+export interface CompileReport {
+  clean: boolean;
+  messages: Array<CompileMessage & { severity: "error" | "warning" }>;
+  run: string;
+  seconds: number;
+}
+
+export interface ReflectRequest {
+  mod: string;
+  classes: string[];
+  structs: string[];
+  castTargets: string[];
+}
+
+/** One pin of a reflected member (the backend's `Pin` shape of `reflect.json`). */
+export interface ReflectPin {
+  name: string;
+  dir: "in" | "out";
+  category: string;
+  subCategory: string;
+  subCategoryObject: string | null;
+  objectMeta: string | null;
+  container: string;
+  hidden: boolean;
+  default: string | null;
+}
+
+export interface ReflectMember {
+  name: string;
+  pins: ReflectPin[];
+}
+
+export interface ReflectClass {
+  meta: string | null;
+  ancestors: string[];
+  functions: ReflectMember[];
+  properties: ReflectMember[];
+  castPin: string | null;
+  /** The class appears only as a cast target: no member lists. */
+  castOnly?: boolean;
+}
+
+/** `<run>/reflect.json` */
+export interface ReflectData {
+  engineVersion: string | null;
+  classes: Record<string, ReflectClass>;
+  structs: Record<string, { fields: ReflectPin[] }>;
+  errors: string[];
+}
+
+export interface ReflectResult {
+  run: string;
+  seconds: number;
+  file: string;
+  data: ReflectData;
+  filter: { contentVersion: string | null; rules: Array<["Allow" | "Block", string]> };
+}
+
+export interface GameTestReport {
+  ok: boolean;
+  steps: Array<{ i: number; op: string; ok: boolean; value: unknown; error?: string }>;
+  passed: number;
+  failed: number;
+  complete: boolean;
+  runtimeLog: string[];
+  run: string;
+  seconds: number;
+  timedOut: boolean;
+  error?: string;
+}
+
+export interface AuditReport {
+  ok: boolean;
+  raw: unknown;
+  seconds: number;
+}
+
+export interface Backend {
+  info(): Promise<BackendInfo>;
+  stage(modDir: string, o: { discardChanges: boolean }): Promise<StageReport>;
+  stageStatus(mod: string): Promise<StageStatus | null>;
+  read(mod: string, asset: string): Promise<AssetSnapshot>;
+  applySpecs(
+    mod: string,
+    specs: unknown[],
+    o: { label: string; cacheDir: string; keepOnError?: boolean },
+  ): Promise<BpApplyResult>;
+  compile(mod: string, assets: string[]): Promise<CompileReport>;
+  reflect(r: ReflectRequest): Promise<ReflectResult>;
+  gameTest(mod: string, steps: unknown[], o: { timeoutSeconds: number }): Promise<GameTestReport>;
+  audit(mod: string): Promise<AuditReport>;
+  close(): Promise<void>;
+}

@@ -1,0 +1,102 @@
+// stubs.lock.json: which editor build the stubs were generated for (design 5.3).
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { profileForBuild } from "@abfc/env";
+import type { Environment, ProjectConfig } from "@abfc/env";
+import type { Diagnostic } from "@abfc/ir";
+import { STUBGEN_VERSION } from "./manual.js";
+
+export interface StubsLock {
+  generator: string;
+  profile: string;
+  engineVersion: string | null;
+  modEditorVersion: string;
+  editorFingerprint: string;
+  filterContentVersion: string | null;
+  classes: string[];
+  scriptClasses: string[];
+  modAssets: string[];
+  createdAt: string;
+}
+
+export const LOCK_FILE = "stubs.lock.json";
+
+/** `stubsDir` is the profile folder, `.abfc/stubs/<profile>`. */
+export function lockPath(stubsDir: string): string {
+  return join(stubsDir, LOCK_FILE);
+}
+
+export function readLock(stubsDir: string): StubsLock | null {
+  const file = lockPath(stubsDir);
+  if (!existsSync(file)) return null;
+  try {
+    return JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, "")) as StubsLock;
+  } catch {
+    return null;
+  }
+}
+
+export function writeLock(stubsDir: string, lock: StubsLock): void {
+  mkdirSync(stubsDir, { recursive: true });
+  writeFileSync(lockPath(stubsDir), JSON.stringify(lock, null, 2) + "\n", "utf8");
+}
+
+export function newLock(
+  fields: Omit<StubsLock, "generator" | "createdAt"> & { createdAt: string },
+): StubsLock {
+  return { generator: STUBGEN_VERSION, ...fields };
+}
+
+/**
+ * Compares the lock with the installed editor and the config. `mode` decides the severity of a fingerprint change:
+ * an error for `build`, a warning for `check`.
+ */
+export function checkLock(lock: StubsLock | null, env: Environment, config: ProjectConfig, mode: "check" | "build"): Diagnostic[] {
+  const out: Diagnostic[] = [];
+  if (lock === null) {
+    out.push({
+      severity: "error",
+      code: "ABFC3003",
+      message: "stubs are missing: no stubs.lock.json for this editor build.",
+      fix: 'run "abfc stubs" to generate them.',
+    });
+    return out;
+  }
+  const detected = env.appVersion;
+  if (detected !== null && profileForBuild(detected) === null) {
+    out.push({
+      severity: "error",
+      code: "ABFC3002",
+      message: `abfc ${STUBGEN_VERSION} supports Mod Editor build ${env.profile.id} only; found ${detected}.`,
+      fix: "update abfc, or wait for a release with a profile for this build.",
+    });
+  } else if (lock.profile !== env.profile.id) {
+    out.push({
+      severity: "error",
+      code: "ABFC3002",
+      message: `stubs were generated for profile ${lock.profile} but abfc uses ${env.profile.id}.`,
+      fix: 'run "abfc stubs" to regenerate.',
+    });
+  }
+  if (env.fingerprint !== null && lock.editorFingerprint !== env.fingerprint) {
+    out.push({
+      severity: mode === "build" ? "error" : "warning",
+      code: "ABFC3001",
+      message:
+        `stubs were generated for Mod Editor ${lock.profile} (${lock.modEditorVersion}) but the installed editor is ` +
+        `${detected ?? env.profile.id} (${env.profile.modEditorVersion}). Run "abfc stubs" to regenerate.`,
+      fix: 'run "abfc stubs".',
+    });
+  }
+  const covered = new Set([...lock.classes, ...lock.scriptClasses]);
+  const missing = [...config.stubs.classes, ...config.stubs.scriptClasses].filter((c) => !covered.has(c));
+  if (missing.length > 0) {
+    out.push({
+      severity: "warning",
+      code: "ABFC3003",
+      message: `the stubs do not cover: ${missing.join(", ")}.`,
+      fix: 'run "abfc stubs" to regenerate.',
+    });
+  }
+  return out;
+}

@@ -1,0 +1,378 @@
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { AbfcError, envError } from "@abfc/env";
+import type { Environment } from "@abfc/env";
+import type { BackendInfo } from "@abfc/ir";
+import { capabilitiesFrom } from "./capabilities.js";
+import type { RawBackendInfo } from "./capabilities.js";
+import { McpStdioClient, spawnBackendServer } from "./mcp.js";
+import type {
+  AssetSnapshot,
+  AuditReport,
+  Backend,
+  BpApplyResult,
+  CompileMessage,
+  CompileReport,
+  GameTestReport,
+  ReflectData,
+  ReflectRequest,
+  ReflectResult,
+  StageReport,
+  StageStatus,
+} from "./types.js";
+
+type Json = Record<string, unknown>;
+
+/** Tools abfc cannot work without (`backend_info` and the extensions are optional). */
+export const CORE_TOOLS = [
+  "staging_sync",
+  "staging_status",
+  "bp_apply",
+  "bp_read",
+  "bp_compile_report",
+  "bp_game_test",
+] as const;
+
+const NOT_STAGED = /not staged|staging_sync|no staged/i;
+const MEMSWAP_REFUSAL = /offset|Nodes array not found/;
+
+export interface BpApplyBackendOptions {
+  /** Folder of the abf-mod-editor-mcp checkout (named in ABFC4001). */
+  serverDir?: string;
+  now?: () => Date;
+}
+
+function isObject(v: unknown): v is Json {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function str(v: unknown): string | null {
+  return typeof v === "string" ? v : null;
+}
+
+function num(v: unknown, fallback = 0): number {
+  return typeof v === "number" ? v : fallback;
+}
+
+function strList(v: unknown): string[] {
+  return Array.isArray(v) ? v.map((x) => (typeof x === "string" ? x : JSON.stringify(x))) : [];
+}
+
+function stamp(d: Date): string {
+  const p = (n: number, w = 2): string => String(n).padStart(w, "0");
+  return `${p(d.getFullYear(), 4)}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+function compileMessage(e: unknown): CompileMessage {
+  const o = isObject(e) ? e : {};
+  const m: CompileMessage = { asset: str(o.asset), message: str(o.message) ?? "" };
+  const node = str(o.node);
+  const graph = str(o.graph);
+  if (node !== null) m.node = node;
+  if (graph !== null) m.graph = graph;
+  return m;
+}
+
+function compileList(v: unknown): CompileMessage[] {
+  return Array.isArray(v) ? v.map(compileMessage) : [];
+}
+
+export class BpApplyBackend implements Backend {
+  private readonly client: McpStdioClient;
+  private readonly serverDir: string;
+  private readonly now: () => Date;
+
+  constructor(client: McpStdioClient, o: BpApplyBackendOptions = {}) {
+    this.client = client;
+    this.serverDir = o.serverDir ?? "<unknown>";
+    this.now = o.now ?? ((): Date => new Date());
+  }
+
+  async info(): Promise<BackendInfo> {
+    const tools = await this.client.listTools();
+    const missing = CORE_TOOLS.filter((t) => !tools.includes(t));
+    let raw: RawBackendInfo | null = null;
+    if (tools.includes("backend_info")) {
+      const r = await this.call("backend_info", {});
+      raw = r.json as RawBackendInfo;
+    }
+    if (missing.length > 0) {
+      throw new AbfcError({
+        severity: "error",
+        code: "ABFC4001",
+        message: `abf-mod-editor-mcp at ${this.serverDir} lacks the tools abfc needs: ${missing.join(", ")}. abfc needs protocol >= 1.`,
+        tried: [{ source: "tools/list", detail: tools.join(", ") }],
+        fix: "update the backend checkout (see docs/backend.md).",
+      });
+    }
+    let ext: { features?: string[] } | null = null;
+    let extServerVersion: string | null = null;
+    if (tools.includes("abfc_extensions")) {
+      const r = await this.call("abfc_extensions", {});
+      ext = { features: strList(r.json.features) };
+      extServerVersion = str(r.json.serverVersion);
+    }
+    const capabilities = capabilitiesFrom(tools, raw, ext);
+    const headlessDir = str(raw?.headlessDir);
+    return {
+      id: "bp_apply",
+      serverVersion: str(raw?.serverVersion) ?? extServerVersion ?? "unknown",
+      protocol: raw === null ? null : typeof raw.protocol === "number" ? raw.protocol : null,
+      engineVersion: null,
+      editorRoot: str(raw?.editorRoot),
+      headlessDir,
+      documentsDir: str(raw?.documentsDir),
+      headlessDirHasSpace: headlessDir?.includes(" ") ?? false,
+      extensions: ext?.features ?? [],
+      capabilities,
+    };
+  }
+
+  async stage(modDir: string, o: { discardChanges: boolean }): Promise<StageReport> {
+    const { json } = await this.call("staging_sync", { mod_dir: modDir, discard_changes: o.discardChanges });
+    return {
+      mod: str(json.mod) ?? "",
+      files: num(json.files),
+      stagingPath: str(json.staging_path) ?? "",
+    };
+  }
+
+  async stageStatus(mod: string): Promise<StageStatus | null> {
+    let json: Json;
+    try {
+      json = (await this.call("staging_status", { mod })).json;
+    } catch (e) {
+      if (e instanceof AbfcError && e.diagnostic.code === "ABFC4002" && NOT_STAGED.test(e.diagnostic.message)) return null;
+      throw e;
+    }
+    return {
+      mod: str(json.mod) ?? mod,
+      stagingPath: str(json.staging_path) ?? "",
+      syncedAt: str(json.synced_at),
+      changed: strList(json.changed),
+      added: strList(json.added),
+      removed: strList(json.removed),
+      conflicts: strList(json.conflicts),
+    };
+  }
+
+  async read(mod: string, asset: string): Promise<AssetSnapshot> {
+    const { json } = await this.call("bp_read", { mod, asset_path: asset, include_pins: false, timeout_seconds: 300 });
+    const run = str(json.run) ?? "";
+    return {
+      asset,
+      run,
+      exportPath: join(run, "export.t3d"),
+      structure: json,
+      seconds: typeof json.seconds === "number" ? json.seconds : null,
+    };
+  }
+
+  async applySpecs(
+    mod: string,
+    specs: unknown[],
+    o: { label: string; cacheDir: string; keepOnError?: boolean },
+  ): Promise<BpApplyResult> {
+    mkdirSync(o.cacheDir, { recursive: true });
+    const safeLabel = o.label.replace(/[^A-Za-z0-9_.-]+/g, "_");
+    const specFile = join(o.cacheDir, `apply-${stamp(this.now())}-${safeLabel}.json`);
+    writeFileSync(specFile, JSON.stringify(specs, null, 2), "utf8");
+    const { json } = await this.call(
+      "bp_apply",
+      { mod, spec_file: specFile, timeout_seconds: 600, keep_on_error: o.keepOnError === true },
+      { tolerate: (j) => typeof j.ok === "boolean" },
+    );
+    const compile = isObject(json.compile) ? json.compile : {};
+    const result: BpApplyResult = {
+      ok: json.ok === true,
+      rolledBack: json.rolled_back === true,
+      run: str(json.run) ?? "",
+      seconds: num(json.seconds),
+      assets: Array.isArray(json.assets)
+        ? json.assets.map((a) => {
+            const ao = isObject(a) ? a : {};
+            const entry: NonNullable<BpApplyResult["assets"]>[number] = {
+              asset: str(ao.asset) ?? "",
+              node_ids: isObject(ao.node_ids) ? (ao.node_ids as Record<string, Record<string, string>>) : {},
+            };
+            const final = str(ao.final);
+            if (final !== null) entry.final = final;
+            return entry;
+          })
+        : null,
+      compile: { errors: compileList(compile.errors), warnings: compileList(compile.warnings) },
+    };
+    let error = str(json.error);
+    if (error === "invalid spec" && Array.isArray(json.problems) && json.problems.length > 0) {
+      error = `invalid spec: ${JSON.stringify(json.problems)}`;
+    }
+    if (error !== null) result.error = error;
+    const logTail = str(json.log_tail);
+    if (logTail !== null) result.logTail = logTail;
+    if (!result.ok && error !== null && MEMSWAP_REFUSAL.test(error)) {
+      throw new AbfcError({
+        severity: "error",
+        code: "ABFC4100",
+        message: `the backend refused the in-memory write of this asset graph: ${error} (run folder: ${result.run})`,
+        fix: "this graph shape is not supported by the memory-swap writer yet; report it with the run folder.",
+      });
+    }
+    return result;
+  }
+
+  async compile(mod: string, assets: string[]): Promise<CompileReport> {
+    const { json } = await this.call("bp_compile_report", { mod, asset_paths: assets, timeout_seconds: 600 });
+    const messages: CompileReport["messages"] = [];
+    if (Array.isArray(json.messages)) {
+      for (const m of json.messages) {
+        const o = isObject(m) ? m : {};
+        messages.push({ ...compileMessage(o), severity: o.severity === "warning" ? "warning" : "error" });
+      }
+    }
+    return { clean: json.clean === true, messages, run: str(json.run) ?? "", seconds: num(json.seconds) };
+  }
+
+  async reflect(r: ReflectRequest): Promise<ReflectResult> {
+    const { json } = await this.call(
+      "reflect",
+      { mod: r.mod, classes: r.classes, structs: r.structs, cast_targets: r.castTargets, timeout_seconds: 900 },
+      { timeoutMs: 960_000 },
+    );
+    const file = str(json.file);
+    if (file === null) {
+      throw new AbfcError({
+        severity: "error",
+        code: "ABFC4002",
+        message: `backend tool "reflect" returned no result file (run folder: ${str(json.run) ?? "unknown"}).`,
+      });
+    }
+    const parsed = JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, "")) as Partial<ReflectData>;
+    const data: ReflectData = {
+      engineVersion: parsed.engineVersion ?? null,
+      classes: parsed.classes ?? {},
+      structs: parsed.structs ?? {},
+      errors: parsed.errors ?? [],
+    };
+    const filter = isObject(json.filter) ? json.filter : {};
+    const rules: Array<["Allow" | "Block", string]> = [];
+    if (Array.isArray(filter.rules)) {
+      for (const rule of filter.rules) {
+        if (Array.isArray(rule) && typeof rule[1] === "string") rules.push([rule[0] === "Block" ? "Block" : "Allow", rule[1]]);
+      }
+    }
+    return {
+      run: str(json.run) ?? "",
+      seconds: num(json.seconds),
+      file,
+      data,
+      filter: { contentVersion: str(filter.content_version), rules },
+    };
+  }
+
+  async gameTest(mod: string, steps: unknown[], o: { timeoutSeconds: number }): Promise<GameTestReport> {
+    const { json } = await this.call(
+      "bp_game_test",
+      { mod, steps, timeout_seconds: o.timeoutSeconds },
+      { tolerate: (j) => Array.isArray(j.steps) },
+    );
+    const stepList = Array.isArray(json.steps) ? json.steps : [];
+    const report: GameTestReport = {
+      ok: json.ok === true,
+      steps: stepList.map((s, idx) => {
+        const so = isObject(s) ? s : {};
+        const step: GameTestReport["steps"][number] = {
+          i: typeof so.i === "number" ? so.i : idx,
+          op: str(so.op) ?? "",
+          ok: so.ok === true,
+          value: so.value,
+        };
+        const err = str(so.error);
+        if (err !== null) step.error = err;
+        return step;
+      }),
+      passed: num(json.passed),
+      failed: num(json.failed),
+      complete: json.complete === true,
+      runtimeLog: Array.isArray(json.runtime_log)
+        ? json.runtime_log.map((l) => (typeof l === "string" ? l : JSON.stringify(l)))
+        : [],
+      run: str(json.run) ?? "",
+      seconds: num(json.seconds),
+      timedOut: json.timed_out === true,
+    };
+    const error = str(json.error);
+    if (error !== null) report.error = error;
+    return report;
+  }
+
+  async audit(mod: string): Promise<AuditReport> {
+    const { json } = await this.call(
+      "mod_audit",
+      { mod, timeout_seconds: 420 },
+      { tolerate: (j) => typeof j.ok === "boolean" },
+    );
+    return { ok: json.ok === true, raw: json, seconds: num(json.seconds) };
+  }
+
+  async close(): Promise<void> {
+    await this.client.close();
+  }
+
+  // ------------------------------------------------------------ internals
+
+  /**
+   * Calls one tool and returns its JSON object. A tool-level error becomes ABFC4002 (or ABFC4100 for memory-swap refusals)
+   * unless `tolerate` accepts the JSON (tools whose failure is a normal result: bp_apply, bp_game_test, mod_audit).
+   */
+  private async call(
+    tool: string,
+    args: Record<string, unknown>,
+    o?: { timeoutMs?: number; tolerate?: (j: Json) => boolean },
+  ): Promise<{ json: Json; text: string; wallSeconds: number }> {
+    const res = await this.client.callTool(tool, args, o?.timeoutMs !== undefined ? { timeoutMs: o.timeoutMs } : undefined);
+    const json = isObject(res.json) ? res.json : null;
+    if (res.isError && !(json !== null && o?.tolerate?.(json) === true)) {
+      const message = (json !== null ? str(json.error) : null) ?? res.text.trim().split(/\r?\n/).slice(-3).join(" | ");
+      const run = json !== null ? str(json.run) : null;
+      if (tool === "bp_apply" && MEMSWAP_REFUSAL.test(message)) {
+        throw new AbfcError({
+          severity: "error",
+          code: "ABFC4100",
+          message: `the backend refused the in-memory write of this asset graph: ${message}${run ? ` (run folder: ${run})` : ""}`,
+          fix: "this graph shape is not supported by the memory-swap writer yet; report it with the run folder.",
+        });
+      }
+      throw new AbfcError({
+        severity: "error",
+        code: "ABFC4002",
+        message: `backend tool "${tool}" failed: ${message}${run ? ` (run folder: ${run})` : ""}`,
+      });
+    }
+    if (json === null) {
+      throw new AbfcError({
+        severity: "error",
+        code: "ABFC4002",
+        message: `backend tool "${tool}" returned no JSON object: ${res.text.slice(0, 200)}`,
+      });
+    }
+    return { json, text: res.text, wallSeconds: res.wallSeconds };
+  }
+}
+
+/** Spawns the backend server for `env` and wraps it. Needs python, backend dir and headless dir to be resolved. */
+export async function startBackend(env: Environment): Promise<BpApplyBackend> {
+  const python = env.python.value;
+  const backendDir = env.backendDir.value;
+  const headlessDir = env.headlessDir.value;
+  if (python === null || backendDir === null || headlessDir === null) {
+    const what = python === null ? "Python" : backendDir === null ? "the backend folder" : "the headless folder";
+    throw envError(
+      4002,
+      `cannot start the backend: ${what} is not resolved.`,
+      [],
+      "run abfc doctor and fix the errors it lists first.",
+    );
+  }
+  const client = await spawnBackendServer({ python, backendDir, headlessDir, editorRoot: env.editorRoot.value });
+  return new BpApplyBackend(client, { serverDir: backendDir });
+}
