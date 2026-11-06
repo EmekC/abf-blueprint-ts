@@ -1,4 +1,5 @@
 // Build planner: IR + manifests + stage snapshots -> the units to (re)apply, and the diagnostics that block others.
+import { classDefaultsHash } from "@abfc/ir";
 import type { ApplyPlan, AssetPlan, Diagnostic, IrModule, IrUnit, IrVariable, Span, T3dNode } from "@abfc/ir";
 import { driftDiagnostics, unitState } from "../ownership/drift.js";
 import type { StageInfo } from "../ownership/drift.js";
@@ -13,6 +14,8 @@ export interface PlanInput {
   handMadeUnits: Map<string, string[]>;
   /** Variable names present in each snapshot (temps already declared are not declared again). */
   snapshotVariables?: Map<string, string[]>;
+  /** `<asset path> <unit id>` of units to re-plan although their IR hash is unchanged (compiler or stub lock changed). */
+  forceReplan?: Set<string>;
 }
 
 export interface PlanResult {
@@ -34,11 +37,51 @@ const nodePos = (n: T3dNode): [number, number] => {
   return [x, y];
 };
 
-function hasHandMadeEvent(snapshot: Map<string, T3dNode>, name: string): boolean {
+function hasHandMadeEvent(snapshot: Map<string, T3dNode>, name: string, kind: IrUnit["kind"] = "event"): boolean {
   for (const n of snapshot.values()) {
-    if (n.cls.endsWith("K2Node_CustomEvent") && n.head.includes(`CustomFunctionName="${name}"`)) return true;
+    if (kind === "override") {
+      // a disabled engine default node (an unused ReceiveBeginPlay) is not hand-made logic
+      if (n.cls.endsWith("K2Node_Event") && n.head.some((h) => h.startsWith("EventReference=") && h.includes(`MemberName="${name}"`)) && !n.head.includes("EnabledState=Disabled")) return true;
+    } else if (n.cls.endsWith("K2Node_CustomEvent") && n.head.includes(`CustomFunctionName="${name}"`)) return true;
   }
   return false;
+}
+
+/** Does the asset's class defaults pass need to run (hash or stage changed)? */
+function defaultsStale(asset: IrModule["assets"][number], manifest: Manifest | null, stage: StageInfo): boolean {
+  if (asset.classDefaults === undefined && asset.classManagerRow === undefined) return false;
+  const hash = classDefaultsHash(asset.classDefaults ?? {}, asset.classManagerRow);
+  return manifest?.classDefaultsHash !== hash || (manifest.classDefaultsStageSyncedAt ?? null) !== stage.syncedAt;
+}
+
+/**
+ * The assets that need a `bp_read` before planning: some unit is new, changed, forced, adopted but not applied, applied to an
+ * older stage, or the class defaults changed. For any other asset nothing would be planned, so the read (and its drift check)
+ * is skipped; `abfc status` still reads everything.
+ */
+export function assetsNeedingRead(
+  ir: IrModule,
+  input: { manifests: Map<string, Manifest | null>; stage: StageInfo; forceReplan?: Set<string> },
+): Set<string> {
+  const out = new Set<string>();
+  for (const asset of ir.assets) {
+    const manifest = input.manifests.get(asset.path) ?? null;
+    const need =
+      asset.units.some((unit) => {
+        const mu = manifest?.units.find((m) => m.id === unit.id);
+        return (
+          !mu ||
+          mu.irHash !== unit.hash ||
+          input.forceReplan?.has(`${asset.path} ${unit.id}`) === true ||
+          (mu.stageSyncedAt !== null && input.stage.syncedAt !== mu.stageSyncedAt) ||
+          (mu.adopt !== null && mu.stageSyncedAt === null) ||
+          mu.assetHash === null ||
+          mu.nodes.length === 0
+        );
+      }) || defaultsStale(asset, manifest, input.stage);
+    if (need) out.add(asset.path);
+  }
+  return out;
 }
 
 function unitHeight(u: IrUnit): number {
@@ -63,14 +106,14 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
       const state = mu ? unitState(mu, snapshot, input.stage) : null;
 
       if (!mu || state === "pendingApply") {
-        if (!(mu?.adopt) && (handMade.includes(unit.name) || hasHandMadeEvent(snapshot, unit.name))) {
+        if (!(mu?.adopt) && (handMade.includes(unit.name) || hasHandMadeEvent(snapshot, unit.name, unit.kind))) {
           diagnostics.push({
             severity: "error",
             code: "ABFC5003",
             asset: asset.path,
             span: unit.origin,
             message: `${unit.name} is declared in TypeScript but already exists as a hand-made event in ${asset.path.slice(asset.path.lastIndexOf("/") + 1)}.`,
-            fix: `run: abfc adopt ${asset.path} ${unit.name}`,
+            fix: `run: abfc adopt ${asset.path} ${unit.kind === "override" ? "override:" : ""}${unit.name}`,
           });
           continue;
         }
@@ -85,13 +128,42 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
       }
       if (state === "pendingAdoption" || state === "staleStage") {
         picked.push({ unit, removeNodes: [...(mu.adopt?.nodes ?? [])] });
-      } else if (mu.irHash !== unit.hash) {
+      } else if (mu.irHash !== unit.hash || input.forceReplan?.has(`${asset.path} ${unit.id}`) === true) {
         picked.push({ unit, removeNodes: [...mu.nodes] });
       } else {
         upToDate.push(`${asset.path} ${unit.id}`);
       }
     }
-    if (picked.length === 0) continue;
+
+    // Delegate owners: a unit with a cross wire into a planned unit loses that wire when the target is replaced, so it is replanned too.
+    const pickedIds = new Set(picked.map((p) => p.unit.id));
+    for (let grew = true; grew; ) {
+      grew = false;
+      for (const unit of asset.units) {
+        if (pickedIds.has(unit.id) || !(unit.crossWires ?? []).some((w) => pickedIds.has(w.toUnit))) continue;
+        const mu = manifest?.units.find((m) => m.id === unit.id);
+        if (!mu || !upToDate.includes(`${asset.path} ${unit.id}`)) continue; // blocked by a diagnostic, or not applied yet (then it is picked anyway)
+        picked.push({ unit, removeNodes: [...mu.nodes] });
+        pickedIds.add(unit.id);
+        upToDate.splice(upToDate.indexOf(`${asset.path} ${unit.id}`), 1);
+        grew = true;
+      }
+    }
+
+    let defaults: AssetPlan["defaults"];
+    if (asset.classDefaults !== undefined || asset.classManagerRow !== undefined) {
+      const values = asset.classDefaults ?? {};
+      const hash = classDefaultsHash(values, asset.classManagerRow);
+      if (defaultsStale(asset, manifest, input.stage)) {
+        defaults = {
+          classPath: `${asset.path}.${asset.path.slice(asset.path.lastIndexOf("/") + 1)}_C`,
+          values,
+          hash,
+          ...(asset.classManagerRow !== undefined ? { classManagerRow: asset.classManagerRow } : {}),
+        };
+      }
+    }
+    if (picked.length === 0 && defaults === undefined) continue;
 
     const removedByGraph = new Map<string, Set<string>>();
     for (const p of picked) {
@@ -120,7 +192,24 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
     const variables: IrVariable[] = asset.variables.filter(
       (v) => prefixes.some((pre) => v.name.startsWith(pre)) && !declared.has(v.name),
     );
-    assets.push({ asset: asset.path, graphNodes, variables, units, classMeta: ir.classMeta });
+    // Entry nodes of cross wire targets that stay as they are: their real names come from the manifest.
+    const entryNames: Record<string, string> = {};
+    for (const p of picked) {
+      for (const w of p.unit.crossWires ?? []) {
+        if (pickedIds.has(w.toUnit)) continue;
+        const real = manifest?.units.find((m) => m.id === w.toUnit)?.nodeIds[w.from.slice(0, w.from.indexOf("."))];
+        if (real !== undefined) entryNames[w.toUnit] = real;
+      }
+    }
+    assets.push({
+      asset: asset.path,
+      graphNodes,
+      variables,
+      units,
+      classMeta: ir.classMeta,
+      ...(Object.keys(entryNames).length > 0 ? { entryNames } : {}),
+      ...(defaults !== undefined ? { defaults } : {}),
+    });
   }
 
   return { plan: { mod: ir.mod, assets }, diagnostics, upToDate };

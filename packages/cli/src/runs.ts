@@ -8,7 +8,7 @@ export interface RunEntry {
   seconds: number;
   ok: boolean;
   units?: number;
-  mode: "cold";
+  mode: "warm" | "cold";
 }
 
 /** Appends one JSON line to the runs file (`.abfc/runs.jsonl`), creating the folder when needed. */

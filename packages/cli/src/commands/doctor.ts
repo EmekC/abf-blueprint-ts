@@ -175,6 +175,7 @@ function printInfo(ctx: CliContext, info: BackendInfo): void {
   output.info(
     `  reflect: ${yn(c.reflect)}, compile node refs: ${yn(c.compileErrorNodeRefs)}, game test: ${yn(c.gameTest)}, audit: ${yn(c.audit)}`,
   );
+  output.info(`  warm session: ${yn(c.warmSession)}, stage audit: ${yn(c.stageAudit)}`);
   output.info(`  extensions: ${info.extensions.length > 0 ? info.extensions.join(", ") : "(none)"}`);
   if (info.headlessDir !== null) output.info(`  backend headless folder: ${info.headlessDir}`);
   if (info.headlessDirHasSpace) output.info("  backend headless folder contains a space");

@@ -3,10 +3,10 @@ import type { ReflectPin } from "./types.js";
 import { UOBJECT_PATH } from "./names.js";
 
 export type RuntimeName =
-  | "int" | "int64" | "byte" | "float" | "double" | "name" | "text" | "TSubclassOf" | "TSoftObjectPtr" | "TSoftClassPtr";
+  | "int" | "int64" | "byte" | "float" | "double" | "name" | "text" | "TSubclassOf" | "TSoftObjectPtr" | "TSoftClassPtr" | "EnumText" | "DelegateRef";
 
 export const RUNTIME_NAMES: readonly RuntimeName[] = [
-  "int", "int64", "byte", "float", "double", "name", "text", "TSubclassOf", "TSoftObjectPtr", "TSoftClassPtr",
+  "int", "int64", "byte", "float", "double", "name", "text", "TSubclassOf", "TSoftObjectPtr", "TSoftClassPtr", "EnumText", "DelegateRef",
 ];
 
 export interface TypeRef {
@@ -88,7 +88,13 @@ interface Mapped {
   union: boolean;
 }
 
-function mapInner(inner: string, ctx: TypeCtx): Mapped {
+/**
+ * Where a type appears: `param` accepts a class constructor for class pins, `value` (properties, outputs) is the plain type, and
+ * `struct` keeps the declared enum type for struct fields. Enums are `EnumText<path>` everywhere except struct fields.
+ */
+export type TypeMode = "param" | "value" | "struct";
+
+function mapInner(inner: string, ctx: TypeCtx, mode: TypeMode): Mapped {
   const colon = inner.indexOf(":");
   const head = colon < 0 ? inner : inner.slice(0, colon);
   const path = colon < 0 ? "" : inner.slice(colon + 1);
@@ -100,22 +106,29 @@ function mapInner(inner: string, ctx: TypeCtx): Mapped {
     case "real": return { ts: ctx.runtime("double"), union: false };
     case "object": case "interface":
       return { ts: `${ctx.ref(path, "class")} | null`, union: true };
-    case "class":
-      return { ts: `${ctx.runtime("TSubclassOf")}<${ctx.ref(path, "class")}> | null`, union: true };
+    case "class": {
+      const cls = ctx.ref(path, "class");
+      const ctor = mode === "param" ? ` | (abstract new (...a: never[]) => ${cls})` : "";
+      return { ts: `${ctx.runtime("TSubclassOf")}<${cls}>${ctor} | null`, union: true };
+    }
     case "softobject":
       return { ts: `${ctx.runtime("TSoftObjectPtr")}<${ctx.ref(path, "class")}>`, union: false };
     case "softclass":
       return { ts: `${ctx.runtime("TSoftClassPtr")}<${ctx.ref(path, "class")}>`, union: false };
     case "struct": return { ts: ctx.ref(path, "struct"), union: false };
-    case "enum": return { ts: ctx.ref(path, "enum"), union: false };
+    case "enum":
+      return mode === "struct"
+        ? { ts: ctx.ref(path, "enum"), union: false }
+        : { ts: `${ctx.runtime("EnumText")}<${JSON.stringify(path)}>`, union: false };
+    case "unsupported": return path === "delegate" ? { ts: ctx.runtime("DelegateRef"), union: false } : { ts: "unknown", union: false };
     default: return { ts: "unknown", union: false };
   }
 }
 
 /** TypeScript type text for a grammar string. */
-export function tsOfGrammar(g: string, ctx: TypeCtx): string {
+export function tsOfGrammar(g: string, ctx: TypeCtx, mode: TypeMode = "value"): string {
   const { array, inner } = split(g);
-  const m = mapInner(inner, ctx);
+  const m = mapInner(inner, ctx, mode);
   if (!array) return m.ts;
   return m.union ? `(${m.ts})[]` : `${m.ts}[]`;
 }

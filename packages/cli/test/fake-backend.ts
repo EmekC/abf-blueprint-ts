@@ -83,7 +83,7 @@ interface Spec {
   asset: string;
   variables?: Array<{ name: string; type: string; flags: number }>;
   graphs?: SpecGraph[];
-  raw?: Array<{ kind: "graph"; graph: string; text: string }>;
+  raw?: Array<{ kind: "graph"; graph: string; text: string } | { kind: "python"; code: string }>;
 }
 
 export interface RecordedCall {
@@ -99,7 +99,16 @@ export interface FakeBackendOptions {
   backendInfo?: boolean;
   /** The initial asset holds a hand-made `UpdateTarget` event (default true). */
   handMadeEvent?: boolean;
+  /** `backend_info` reports the stageAudit capability (default false: mod_audit audits the real mod). */
+  stageAudit?: boolean;
+  /** The initial asset also holds a hand-made engine override event (`ReceiveTick`, calling HideAll). */
+  overrideEvent?: boolean;
+  /** The initial asset also holds the unlinked node `SPARE_NODE` (to be removed with `--remove-node`). */
+  spareNode?: boolean;
 }
+
+/** Name of the unlinked node that `spareNode` adds. */
+export const SPARE_NODE = "K2Node_CallFunction_77";
 
 const shortOf = (cls: string): string => cls.slice(cls.lastIndexOf(".") + 1);
 const pinId = (node: string, name: string, dir: string): string => sha256(`${node}|${name}|${dir}`).slice(0, 32).toUpperCase();
@@ -243,7 +252,7 @@ function connect(from: FNode, fromPin: string, to: FNode, toPin: string): void {
 }
 
 /** The asset as it is in the real mod: two hand-made events, each calling HideAll. */
-function initialAsset(withUpdateTarget: boolean): FAsset {
+function initialAsset(withUpdateTarget: boolean, o: FakeBackendOptions = {}): FAsset {
   const nodes: FNode[] = [];
   const events: Array<[string, string, number]> = [["K2Node_CustomEvent_1", "OtherEvent", 400]];
   if (withUpdateTarget) events.unshift(["K2Node_CustomEvent_0", "UpdateTarget", 0]);
@@ -257,11 +266,33 @@ function initialAsset(withUpdateTarget: boolean): FAsset {
     connect(ev, "then", call, "execute");
     nodes.push(ev, call);
   }
+  if (o.overrideEvent === true) {
+    const ev = handMade(
+      "K2Node_Event_5",
+      "/Script/BlueprintGraph.K2Node_Event",
+      [`EventReference=(MemberParent="/Script/CoreUObject.Class'/Script/FakeEngine.Actor'",MemberName="ReceiveTick")`, "bOverrideFunction=True"],
+      0,
+      800,
+    );
+    const call = handMade("K2Node_CallFunction_5", CLS.callFunction, ['FunctionReference=(MemberName="HideAll")'], 300, 800);
+    getPin(ev, "then", "out");
+    getPin(call, "execute", "in");
+    getPin(call, "then", "out");
+    connect(ev, "then", call, "execute");
+    nodes.push(ev, call);
+  }
+  if (o.spareNode === true) {
+    const spare = handMade(SPARE_NODE, CLS.callFunction, ['FunctionReference=(MemberName="HideAll")'], 700, 400);
+    getPin(spare, "execute", "in");
+    nodes.push(spare);
+  }
   return { path: RELAY_ASSET, variables: [], nodes };
 }
 
 export class FakeBackend implements Backend {
   readonly calls: RecordedCall[] = [];
+  /** Python code of the raw `python` entries (the class-defaults pass), in order. */
+  readonly pythonCode: Array<{ asset: string; code: string }> = [];
   /** Folder of the run folders (`export.t3d`, `final_<i>.t3d`); real files, below the system temp folder. */
   readonly root: string;
   closed = 0;
@@ -273,9 +304,17 @@ export class FakeBackend implements Backend {
   gameTestFailures: number[][] = [];
   gameTestCalls = 0;
   auditOk = true;
+  /** Extra staged files that `staging_status` lists as changed (files no unit of the project owns). */
+  extraChanged: string[] = [];
+  /** The raw JSON of the audit result. */
+  auditRaw: unknown = { audited_copy: "stage" };
+  /** Pretend the server runs a warm session: read, apply and compile results say `warm: true` (`lastWarm`). */
+  warm = false;
+  lastWarm = false;
 
   private readonly infoValue: BackendInfo;
   private readonly withUpdateTarget: boolean;
+  private readonly options: FakeBackendOptions;
   private assets = new Map<string, FAsset>();
   private staged = false;
   private syncs = 0;
@@ -286,9 +325,11 @@ export class FakeBackend implements Backend {
   constructor(o: FakeBackendOptions = {}) {
     const withInfo = o.backendInfo === true;
     this.withUpdateTarget = o.handMadeEvent !== false;
+    this.options = o;
     this.root = mkdtempSync(join(tmpdir(), "abfc-fake-backend-"));
     const tools = withInfo ? ALL_TOOLS : ALL_TOOLS.filter((t) => t !== "backend_info");
     const capabilities = capabilitiesFrom(tools, withInfo ? (fixInfo() as RawBackendInfo) : null, { features: EXT_FEATURES });
+    capabilities.stageAudit = o.stageAudit === true;
     this.infoValue = {
       id: "bp_apply",
       serverVersion: "fake-1",
@@ -337,7 +378,7 @@ export class FakeBackend implements Backend {
   async stage(_modDir: string, o: { discardChanges: boolean }): Promise<StageReport> {
     this.calls.push({ tool: "staging_sync" });
     if (!this.staged || o.discardChanges) {
-      this.assets = new Map([[RELAY_ASSET, initialAsset(this.withUpdateTarget)]]);
+      this.assets = new Map([[RELAY_ASSET, initialAsset(this.withUpdateTarget, this.options)]]);
       this.changed.clear();
     }
     this.staged = true;
@@ -352,7 +393,7 @@ export class FakeBackend implements Backend {
       mod,
       stagingPath: join(this.root, "stage"),
       syncedAt: `sync-${this.syncs}`,
-      changed: [...this.changed],
+      changed: [...this.changed, ...this.extraChanged],
       added: ["Content/_McpTmp/Scratch.uasset"],
       removed: [],
       conflicts: [],
@@ -361,6 +402,7 @@ export class FakeBackend implements Backend {
 
   async read(_mod: string, asset: string): Promise<AssetSnapshot> {
     this.calls.push({ tool: "bp_read" });
+    this.lastWarm = this.warm;
     const a = this.assets.get(asset);
     if (a === undefined) throw new Error(`fake stage: no asset ${asset}`);
     const run = this.newRun();
@@ -370,6 +412,7 @@ export class FakeBackend implements Backend {
 
   async applySpecs(_mod: string, specs: unknown[], o: { label: string; cacheDir: string; keepOnError?: boolean }): Promise<BpApplyResult> {
     this.calls.push({ tool: "bp_apply", label: o.label, specs: specs as Array<Record<string, any>> });
+    this.lastWarm = this.warm;
     const run = this.newRun();
     const work = new Map([...this.assets].map(([k, v]) => [k, structuredClone(v)]));
     const scripted: CompileMessage[] = [];
@@ -392,6 +435,10 @@ export class FakeBackend implements Backend {
         nodeIds[`graph:${k}`] = this.applyGraph(a, g, castTyped, scripted);
       });
       for (const r of spec.raw ?? []) {
+        if (r.kind === "python") {
+          this.pythonCode.push({ asset: spec.asset, code: r.code });
+          continue;
+        }
         const wrapped = [
           'Begin Object Class=/Script/Engine.Blueprint Name="Raw"',
           `   Begin Object Name="${r.graph}"`,
@@ -436,7 +483,8 @@ export class FakeBackend implements Backend {
 
   async compile(_mod: string, _assets: string[]): Promise<CompileReport> {
     this.calls.push({ tool: "bp_compile_report" });
-    return { clean: this.reportMessages.length === 0, messages: this.reportMessages, run: "", seconds: 0.1 };
+    this.lastWarm = this.warm;
+    return { clean: this.reportMessages.length === 0, messages: this.reportMessages, run: "", seconds: 0.1, warm: this.warm };
   }
 
   async reflect(): Promise<ReflectResult> {
@@ -445,6 +493,7 @@ export class FakeBackend implements Backend {
 
   async gameTest(_mod: string, steps: unknown[], _o: { timeoutSeconds: number }): Promise<GameTestReport> {
     this.calls.push({ tool: "bp_game_test" });
+    this.lastWarm = false; // the game test always runs cold
     const failing = new Set(this.gameTestFailures[this.gameTestCalls++] ?? []);
     const report = steps.map((s, i) => {
       const op = String((s as { op?: unknown }).op ?? "step");
@@ -465,7 +514,8 @@ export class FakeBackend implements Backend {
 
   async audit(_mod: string): Promise<AuditReport> {
     this.calls.push({ tool: "mod_audit" });
-    return { ok: this.auditOk, raw: null, seconds: 0.2 };
+    this.lastWarm = false; // the audit always runs cold, on the staged copy
+    return { ok: this.auditOk, raw: this.auditRaw, seconds: 0.2 };
   }
 
   async close(): Promise<void> {
@@ -488,6 +538,8 @@ export class FakeBackend implements Backend {
         return CLS.variableSet;
       case "event":
         return CLS.customEvent;
+      case "override":
+        return "/Script/BlueprintGraph.K2Node_Event";
       case "branch":
         return CLS.branch;
       case "cast":
@@ -506,6 +558,8 @@ export class FakeBackend implements Backend {
       head.push(`FunctionReference=(${s.class ? `MemberParent="${s.class}",` : ""}MemberName="${s.function ?? ""}")`);
     } else if (s.k === "get" || s.k === "set") {
       head.push(`VariableReference=(${s.class ? `MemberParent="${s.class}",` : ""}MemberName="${s.name ?? ""}")`);
+    } else if (s.k === "override") {
+      head.push(`EventReference=(MemberParent="/Script/CoreUObject.Class'${s.class ?? ""}'",MemberName="${s.function ?? ""}")`, "bOverrideFunction=True");
     } else if (s.k === "event") {
       head.push(`CustomFunctionName="${s.name ?? ""}"`);
     } else if (s.k === "cast") {

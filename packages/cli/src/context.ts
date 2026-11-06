@@ -8,8 +8,10 @@ import { Output } from "./output.js";
 /** Everything with side effects that tests replace. */
 export interface CliDeps {
   host: Host;
-  startBackend: (env: Environment) => Promise<Backend>;
+  startBackend: (env: Environment, o?: { cold: boolean }) => Promise<Backend>;
   now: () => Date;
+  /** Lists the files below a mod folder for the publish file check (default: a read-only walk of the real file system). */
+  listFiles?: ((root: string) => Array<{ rel: string; size: number }>) | undefined;
   /** Folder the command line is relative to (default: `process.cwd()`). */
   cwd?: string | undefined;
   stdout?: ((line: string) => void) | undefined;

@@ -29,6 +29,10 @@ interface Value {
 interface Operand {
   pin?: string;
   lit?: string;
+  /** Class path for a class-typed pin (pin object default). */
+  obj?: string;
+  /** Owned event whose `OutputDelegate` feeds the pin (recorded as a cross wire). */
+  delegate?: string;
   nulls: Exit[];
 }
 
@@ -39,6 +43,14 @@ interface Extra {
 }
 
 const REAL_TYPES = new Set(["float", "double", "real"]);
+
+const ARITH_NAMES = { "+": "Add", "-": "Subtract", "*": "Multiply" } as const;
+const CMP_NAMES = { "<": "Less", "<=": "LessEqual", ">": "Greater", ">=": "GreaterEqual" } as const;
+const K2_EVENT = "/Script/BlueprintGraph.K2Node_Event";
+const K2_CREATE_WIDGET = "/Script/UMGEditor.K2Node_CreateWidget";
+const K2_SPAWN_ACTOR = "/Script/BlueprintGraph.K2Node_SpawnActorFromClass";
+/** Id of the entry node of every unit (the first node emitted, role "ev"). */
+const ENTRY_ID = "ev0";
 
 /** Default text of a literal for a pin of the given type (undefined for null). */
 export function formatLiteral(value: string | number | boolean | null, type: string): string | undefined {
@@ -76,6 +88,7 @@ export class UnitBuilder {
   private entryId = "";
   private tempCount = 0;
   private loopCount = 0;
+  private readonly cross: NonNullable<IrUnit["crossWires"]> = [];
 
   constructor(
     private readonly profile: Profile,
@@ -86,15 +99,22 @@ export class UnitBuilder {
   build(): IrUnit {
     const P = this.profile.pins;
     const ev = this.event;
-    const evSem: Extract<SemanticTag, { k: "event" }> = { k: "event", name: ev.name };
-    if (ev.params.length > 0) evSem.params = ev.params.map((p) => ({ name: p.name, type: p.type }));
-    this.entryId = this.emit("ev", this.profile.nodeClasses.customEvent, [`CustomFunctionName="${ev.name}"`], evSem, ev.span);
+    if (ev.kind === "override") {
+      if (ev.overrideOf === undefined) throw new Error(`ABFC2060: override ${ev.name} has no declaring class`);
+      const sem: SemanticTag = { k: "override", class: ev.overrideOf, function: ev.name };
+      const ref = `EventReference=(MemberParent="${pinObjectText("class", ev.overrideOf, this.classMeta)}",MemberName="${ev.name}")`;
+      this.entryId = this.emit("ev", K2_EVENT, [ref, "bOverrideFunction=True"], sem, ev.span);
+    } else {
+      const evSem: Extract<SemanticTag, { k: "event" }> = { k: "event", name: ev.name };
+      if (ev.params.length > 0) evSem.params = ev.params.map((p) => ({ name: p.name, type: p.type }));
+      this.entryId = this.emit("ev", this.profile.nodeClasses.customEvent, [`CustomFunctionName="${ev.name}"`], evSem, ev.span);
+    }
     for (const p of ev.params) this.params.set(p.name, `${this.entryId}.${p.name}`);
     this.cur = [`${this.entryId}.${P.then}`];
     this.stmts(ev.body);
     const unit: IrUnit = {
-      id: `event:${ev.name}`,
-      kind: "event",
+      id: `${ev.kind}:${ev.name}`,
+      kind: ev.kind,
       name: ev.name,
       graph: "EventGraph",
       signature: { inputs: ev.params.map((p) => ({ name: p.name, type: p.type })), outputs: [] },
@@ -104,6 +124,7 @@ export class UnitBuilder {
       origin: ev.span,
       hash: "",
     };
+    if (this.cross.length > 0) unit.crossWires = this.cross;
     assignPositions(unit, P.execute);
     unit.hash = unitHash(unit);
     return unit;
@@ -202,14 +223,39 @@ export class UnitBuilder {
       const l = this.local(e.id);
       if (l.lit !== undefined) return { lit: l.lit, nulls: [] };
     }
+    if (e.k === "enumLit" || e.k === "nameLit") return { lit: e.text, nulls: [] };
+    if (e.k === "classRef") return { obj: e.path, nulls: [] };
+    if (e.k === "delegateRef") return { delegate: e.event, nulls: [] };
     const v = this.value(e);
     return { pin: v.pin, nulls: v.nulls };
   }
 
-  /** Wires an operand into `<id>.<pin>` (pin or default). */
-  private feed(o: Operand, id: string, pin: string, defaults: Record<string, string>): void {
+  /** Wires an operand into `<id>.<pin>` (pin, default, class object or delegate cross wire). */
+  private feed(o: Operand, id: string, pin: string, defaults: Record<string, string>, objects?: Record<string, string>): void {
     if (o.pin !== undefined) this.link(o.pin, `${id}.${pin}`);
     else if (o.lit !== undefined) defaults[pin] = o.lit;
+    else if (o.obj !== undefined && objects) objects[pin] = o.obj;
+    else if (o.delegate !== undefined) this.cross.push({ toUnit: `event:${o.delegate}`, from: `${ENTRY_ID}.OutputDelegate`, to: `${id}.${pin}` });
+  }
+
+  /** Stores the collected pin defaults and pin objects on a node. */
+  private settle(id: string, defaults: Record<string, string>, objects?: Record<string, string>): void {
+    const n = this.nodes.find((x) => x.id === id)!;
+    if (Object.keys(defaults).length > 0) n.pinDefaults = { ...n.pinDefaults, ...defaults };
+    if (objects && Object.keys(objects).length > 0) n.pinObjects = { ...n.pinObjects, ...objects };
+  }
+
+  private mathFn(op: string, kind: "int" | "real"): { class: string; name: string } {
+    return { class: this.profile.functions.addInt.class, name: `${op}_${kind === "int" ? "IntInt" : "DoubleDouble"}` };
+  }
+
+  private arrayFn(name: string): string {
+    return this.funcRef(this.profile.functions.arrayLength.class, name);
+  }
+
+  /** Operand of an optional argument: undefined for a `null` literal. */
+  private optOperand(e: HirExpr, asType?: string): Operand | undefined {
+    return e.k === "lit" && e.value === null ? undefined : this.operand(e, asType);
   }
 
   private value(e: HirExpr): Value {
@@ -322,10 +368,76 @@ export class UnitBuilder {
         this.link(arr.pin, `${id}.${P.arrayLengthArray}`);
         return { pin: `${id}.${P.returnValue}`, nulls: arr.nulls };
       }
+      case "callOwn":
+        return this.callOwn(e);
+      case "createWidget": {
+        const owner = this.optOperand(e.owner);
+        const defaults: Record<string, string> = {};
+        const id = this.emit("widget", K2_CREATE_WIDGET, [], { k: "create_widget" }, e.span, { pinObjects: { Class: e.cls } });
+        this.execInto(id);
+        if (owner) this.feed(owner, id, "OwningPlayer", defaults);
+        this.settle(id, defaults);
+        return { pin: `${id}.${P.returnValue}`, nulls: owner?.nulls ?? [] };
+      }
+      case "spawn": {
+        const owner = e.owner ? this.optOperand(e.owner) : undefined;
+        const mk = this.pureCall(this.profile.functions.addInt.class, "MakeTransform", e.span, {
+          pinDefaults: { Location: "0, 0, 0", Rotation: "0, 0, 0", Scale: "1.000000,1.000000,1.000000" },
+        });
+        const defaults: Record<string, string> = {};
+        if (e.collision !== undefined) defaults.CollisionHandlingOverride = e.collision;
+        if (e.scale !== undefined) defaults.TransformScaleMethod = e.scale;
+        const id = this.emit("spawn", K2_SPAWN_ACTOR, [], { k: "spawn" }, e.span, { pinObjects: { Class: e.cls } });
+        this.execInto(id);
+        this.link(`${mk}.${P.returnValue}`, `${id}.SpawnTransform`);
+        if (owner) this.feed(owner, id, "Owner", defaults);
+        this.settle(id, defaults);
+        return { pin: `${id}.${P.returnValue}`, nulls: owner?.nulls ?? [] };
+      }
+      case "arith":
+      case "cmp": {
+        const t = e.kind === "int" ? "int" : "real";
+        const a = this.operand(e.a, t);
+        const b = this.operand(e.b, t);
+        const op = e.k === "arith" ? ARITH_NAMES[e.op] : CMP_NAMES[e.op];
+        const fn = this.mathFn(op, e.kind);
+        const defaults: Record<string, string> = {};
+        const id = this.pureCall(fn.class, fn.name, e.span);
+        this.feed(a, id, P.opA, defaults);
+        this.feed(b, id, P.opB, defaults);
+        this.settle(id, defaults);
+        return { pin: `${id}.${P.returnValue}`, nulls: [...a.nulls, ...b.nulls] };
+      }
+      case "index": {
+        const arr = this.value(e.array);
+        const idx = this.operand(e.index, "int");
+        const defaults: Record<string, string> = {};
+        const id = this.emit("item", this.profile.nodeClasses.getArrayItem, ["bReturnByRefDesired=False"], undefined, e.span,
+          { pinTypes: { [P.getItemArray]: e.array.type, [P.getItemOutput]: e.elem } });
+        this.link(arr.pin, `${id}.${P.getItemArray}`);
+        this.feed(idx, id, P.getItemIndex, defaults);
+        this.settle(id, defaults);
+        return { pin: `${id}.${P.getItemOutput}`, nulls: [...arr.nulls, ...idx.nulls] };
+      }
+      case "arrayFind": {
+        const arr = this.value(e.array);
+        const item = this.operand(e.value, e.elem);
+        const defaults: Record<string, string> = {};
+        const id = this.emit("arr", this.profile.nodeClasses.callArrayFunction, ["bIsPureFunc=True", this.arrayFn("Array_Find")], undefined, e.span,
+          { pinTypes: { [P.arrayLengthArray]: e.array.type, ItemToFind: e.elem } });
+        this.link(arr.pin, `${id}.${P.arrayLengthArray}`);
+        this.feed(item, id, "ItemToFind", defaults);
+        this.settle(id, defaults);
+        return { pin: `${id}.${P.returnValue}`, nulls: [...arr.nulls, ...item.nulls] };
+      }
       case "not":
       case "and":
       case "or":
       case "execIs":
+      case "classRef":
+      case "delegateRef":
+      case "enumLit":
+      case "nameLit":
         return this.unsupported(`'${e.k}' as a value`, e.span);
     }
   }
@@ -336,6 +448,7 @@ export class UnitBuilder {
     const target = e.target ? this.value(e.target) : null;
     if (target) nulls.push(...target.nulls);
     const defaults: Record<string, string> = {};
+    const objects: Record<string, string> = {};
     const fed: Array<{ pin: string; o: Operand }> = [];
     for (const a of e.args) {
       if (a.value.k === "lit" && a.value.value === null) continue;
@@ -351,14 +464,34 @@ export class UnitBuilder {
     const id = this.emit("call", this.profile.nodeClasses.callFunction, props, sem, e.span);
     if (!e.pure) this.execInto(id);
     if (target) this.link(target.pin, `${id}.${P.self}`);
-    for (const f of fed) this.feed(f.o, id, f.pin, defaults);
-    if (Object.keys(defaults).length > 0) this.nodes.find((n) => n.id === id)!.pinDefaults = defaults;
+    for (const f of fed) this.feed(f.o, id, f.pin, defaults, objects);
+    this.settle(id, defaults, objects);
     const result: Value = { pin: `${id}.${P.returnValue}`, nulls };
     if (e.execOutputs) {
       this.cur = [];
       result.execOuts = Object.fromEntries(e.execOutputs.map((p) => [p, [`${id}.${p}`]]));
     }
     return result;
+  }
+
+  /** Call of an owned event/override of the same class (`this.Step(dt)`). */
+  private callOwn(e: Extract<HirExpr, { k: "callOwn" }>): Value {
+    const P = this.profile.pins;
+    const nulls: Exit[] = [];
+    const fed: Array<{ pin: string; o: Operand }> = [];
+    for (const a of e.args) {
+      const o = this.optOperand(a.value);
+      if (!o) continue;
+      nulls.push(...o.nulls);
+      fed.push({ pin: a.pin, o });
+    }
+    const id = this.emit("call", this.profile.nodeClasses.callFunction, [this.funcRef(null, e.name)], { k: "call", function: e.name }, e.span);
+    this.execInto(id);
+    const defaults: Record<string, string> = {};
+    const objects: Record<string, string> = {};
+    for (const f of fed) this.feed(f.o, id, f.pin, defaults, objects);
+    this.settle(id, defaults, objects);
+    return { pin: `${id}.${P.returnValue}`, nulls };
   }
 
   // ---- conditions ----
@@ -492,6 +625,67 @@ export class UnitBuilder {
       case "return":
         this.cur = [];
         return;
+      case "setSelfCond":
+        // c ? a : b assigned to a variable is an if/else with one set per side
+        this.stmt({
+          k: "if",
+          cond: s.cond,
+          then: [{ k: "setSelf", name: s.name, type: s.type, value: s.a, span: s.span }],
+          else: [{ k: "setSelf", name: s.name, type: s.type, value: s.b, span: s.span }],
+          span: s.span,
+        });
+        return;
+      case "arrayOp": {
+        const fn = s.op === "push" ? "Array_Add" : s.op === "removeAt" ? "Array_Remove" : "Array_Clear";
+        const elem = s.array.type.slice("array:".length);
+        const arr = this.getVar(s.array.self, s.span);
+        const arg = s.op === "push" ? s.value : s.op === "removeAt" ? s.index : undefined;
+        const argPin = s.op === "push" ? "NewItem" : "IndexToRemove";
+        const o = arg ? this.optOperand(arg, s.op === "push" ? elem : "int") : undefined;
+        const pinTypes: Record<string, string> = { [P.arrayLengthArray]: s.array.type };
+        if (s.op === "push") pinTypes[argPin] = elem;
+        const id = this.emit("arr", this.profile.nodeClasses.callArrayFunction, [this.arrayFn(fn)], undefined, s.span, { pinTypes });
+        this.execInto(id);
+        this.link(arr, `${id}.${P.arrayLengthArray}`);
+        const defaults: Record<string, string> = {};
+        if (o) this.feed(o, id, argPin, defaults);
+        this.settle(id, defaults);
+        if (o && o.nulls.length > 0) this.cur = [...this.cur, ...o.nulls];
+        return;
+      }
+      case "forCount": {
+        const counter = `abfc_${this.event.name}_i${this.loopCount++}`;
+        this.vars.push({ name: counter, type: "int", flags: ["transient"], origin: s.span, temp: true });
+        this.locals.set(s.counter, { temp: counter });
+        const start = this.operand(s.init, "int");
+        const init = this.setVar(counter, s.span);
+        this.execInto(init);
+        const initDefaults: Record<string, string> = {};
+        this.feed(start, init, counter, initDefaults);
+        this.settle(init, initDefaults);
+        if (start.nulls.length > 0) this.cur = [...this.cur, ...start.nulls];
+        // the loop head is whatever exec node the condition starts with; the back-edge returns there
+        const fromInit = new Set(this.cur);
+        const mark = this.wires.length;
+        const c = this.cond(s.cond, this.cur);
+        const heads = this.wires.slice(mark).filter((w) => fromInit.has(w[0]) && w[1].endsWith(`.${P.execute}`)).map((w) => w[1]);
+        const head = heads[0];
+        if (head === undefined || heads.length !== 1) return this.unsupported("a loop condition without a single entry", s.span);
+        this.cur = c.t;
+        this.stmts(s.body);
+        if (this.cur.length > 0) {
+          const get = this.getVar(counter, s.span);
+          const fn = this.mathFn(s.step === 1 ? "Add" : "Subtract", "int");
+          const step = this.pureCall(fn.class, fn.name, s.span, { pinDefaults: { [P.opB]: "1" } });
+          this.link(get, `${step}.${P.opA}`);
+          const next = this.setVar(counter, s.span);
+          this.execInto(next);
+          this.link(`${step}.${P.returnValue}`, `${next}.${counter}`);
+          this.link(`${next}.${P.then}`, head);
+        }
+        this.cur = c.f;
+        return;
+      }
       case "forOf": {
         const arr = this.value(s.array);
         const counter = `abfc_${this.event.name}_i${this.loopCount++}`;

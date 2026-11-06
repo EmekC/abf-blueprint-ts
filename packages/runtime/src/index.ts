@@ -14,7 +14,19 @@ export type TSubclassOf<T> = { readonly __bpClassOf?: T };
 export type TSoftObjectPtr<T> = { readonly __bpSoftObjectOf?: T };
 export type TSoftClassPtr<T> = { readonly __bpSoftClassOf?: T };
 
-// Only `path` and `parent` are honored in Phase 1; the other design 4.1 options are Phase 2 (the frontend warns ABFC2099 if used).
+/** Enum value as its T3D text (for example `"Collapsed"`); `P` is the enum path. */
+export type EnumText<P extends string> = string & { readonly __bpEnum?: P };
+
+/** A delegate argument: a reference to an own `@event` method (`this.ScanPlayers`). */
+export type DelegateRef = { readonly __bpDelegate?: true } | ((...a: any[]) => void);
+
+export interface SpawnOptions {
+  owner?: object | null;
+  instigator?: object | null;
+  collisionHandlingOverride?: EnumText<"/Script/Engine.ESpawnActorCollisionHandlingMethod">;
+  transformScaleMethod?: EnumText<"/Script/Engine.ESpawnActorScaleMethod">;
+}
+
 export interface BlueprintOptions {
   path: string;
   parent?: string;
@@ -24,12 +36,18 @@ export interface BlueprintOptions {
   netUpdateFrequency?: number;
   minNetUpdateFrequency?: number;
   tickInterval?: number;
+  /** Not supported yet (ABFC2063): writing the saved bStartWithTickEnabled is unverified. */
   tickEnabled?: boolean;
+  /** row asset path, verified (Phase 2) */
   classManagerRow?: string;
   kind?: "widget";
 }
 
 export declare function blueprint(o: BlueprintOptions): <T extends abstract new (...a: any) => any>(c: T, ctx: ClassDecoratorContext<T>) => void;
 export declare function event(m: (this: any, ...a: any[]) => void, ctx: ClassMethodDecoratorContext): void;
+export declare function override(m: (this: any, ...a: any[]) => void, ctx: ClassMethodDecoratorContext): void;
+export declare function createWidget<T>(cls: abstract new (...a: never[]) => T, owningPlayer: object | null): T;
+export declare function spawnActor<T>(cls: abstract new (...a: never[]) => T, opts?: SpawnOptions): T;
+export declare function nameOf(text: string): name;
 export declare function cast<T>(value: object | null | undefined, cls: abstract new (...a: never[]) => T): T | null;
 export declare function isValid<T>(value: T | null | undefined): value is T;

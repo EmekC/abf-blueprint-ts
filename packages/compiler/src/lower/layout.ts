@@ -25,7 +25,7 @@ export function assignPositions(unit: IrUnit, executePin = "execute"): void {
     else adj.set(a, [b]);
   }
 
-  const entry = (unit.nodes.find((n) => n.sem?.k === "event") ?? unit.nodes[0])?.id;
+  const entry = (unit.nodes.find((n) => n.sem?.k === "event" || n.sem?.k === "override") ?? unit.nodes[0])?.id;
   const col = new Map<string, number>();
   if (entry !== undefined) {
     const color = new Map<string, 1 | 2>();

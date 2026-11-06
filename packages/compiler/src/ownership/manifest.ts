@@ -17,7 +17,15 @@ export interface ManifestUnit {
   tag: string | null;
   /** `StageStatus.syncedAt` of the stage the unit was last applied to. */
   stageSyncedAt: string | null;
-  adopt: { entry: string; nodes: string[]; hash: string; recordedAt: string; stageSyncedAt: string | null } | null;
+  adopt: {
+    entry: string;
+    nodes: string[];
+    hash: string;
+    recordedAt: string;
+    stageSyncedAt: string | null;
+    /** Delegate links to or from other units' entries found at adoption (informational). */
+    crossLinks?: Array<{ node: string; pin: string; entry: string; role: "uses" | "supplies" }>;
+  } | null;
   /** Per-node state hashes (optional; used to count edits in ABFC5001). */
   nodeHashes?: Record<string, string>;
   /** Sorted link list of the unit (optional; used to count links added/removed in ABFC5001). */
@@ -30,6 +38,10 @@ export interface Manifest {
   profile: string;
   units: ManifestUnit[];
   variables: Array<{ name: string; type: string; hash: string }>;
+  /** Hash of the class defaults (and class manager row) of the last pass 5 that succeeded; absent until then. */
+  classDefaultsHash?: string;
+  /** `StageStatus.syncedAt` of the stage the class defaults were applied to (a resync discards them). */
+  classDefaultsStageSyncedAt?: string | null;
 }
 
 /** `/Mod/Dir/BP_X` -> `Mod__Dir__BP_X` */

@@ -259,6 +259,25 @@ export interface BackendServerEnv {
   backendDir: string;
   headlessDir: string;
   editorRoot: string | null;
+  /**
+   * true: start the server with ABF_WARM_SESSION=1. false: remove an inherited ABF_WARM_SESSION so the server stays cold
+   * (`abfc --cold` must be cold even when the shell exports the variable). Unset: inherit whatever the shell has.
+   */
+  warm?: boolean;
+}
+
+/** The environment of the backend server process: `parent` plus what abfc sets (pure; `spawnBackendServer` passes `process.env`). */
+export function backendServerEnv(env: BackendServerEnv, parent: Record<string, string | undefined>): Record<string, string> {
+  const childEnv: Record<string, string> = {};
+  for (const [k, v] of Object.entries(parent)) if (v !== undefined) childEnv[k] = v;
+  childEnv.PYTHONUTF8 = "1";
+  childEnv.PYTHONIOENCODING = "utf-8";
+  childEnv.ABF_HEADLESS_DIR = env.headlessDir;
+  childEnv.ABF_ABFC_TOOLS = "1";
+  if (env.warm === true) childEnv.ABF_WARM_SESSION = "1";
+  else if (env.warm === false) delete childEnv.ABF_WARM_SESSION;
+  if (env.editorRoot) childEnv.ABF_EDITOR_ROOT = env.editorRoot;
+  return childEnv;
 }
 
 /** Starts the abf-mod-editor-mcp `server.py` over stdio with abfc's environment. */
@@ -266,13 +285,7 @@ export function spawnBackendServer(
   env: BackendServerEnv,
   o?: Pick<McpStartOptions, "requestTimeoutMs" | "onStderr" | "closeGraceMs">,
 ): Promise<McpStdioClient> {
-  const childEnv: Record<string, string> = {};
-  for (const [k, v] of Object.entries(process.env)) if (v !== undefined) childEnv[k] = v;
-  childEnv.PYTHONUTF8 = "1";
-  childEnv.PYTHONIOENCODING = "utf-8";
-  childEnv.ABF_HEADLESS_DIR = env.headlessDir;
-  childEnv.ABF_ABFC_TOOLS = "1";
-  if (env.editorRoot) childEnv.ABF_EDITOR_ROOT = env.editorRoot;
+  const childEnv = backendServerEnv(env, process.env);
   return McpStdioClient.start({
     command: env.python,
     args: ["-I", "-X", "utf8", join(env.backendDir, "server.py")],

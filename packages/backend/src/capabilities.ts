@@ -10,6 +10,8 @@ export interface RawBackendInfo {
   capabilities?: {
     pinTypes?: unknown;
     containerTypes?: { array?: unknown; map?: unknown; set?: unknown } | null;
+    warmSession?: unknown;
+    stageAudit?: unknown;
   } | null;
   bpApply?: { features?: unknown; nodeKinds?: unknown } | null;
 }
@@ -80,5 +82,7 @@ export function capabilitiesFrom(
     audit: tools.includes("mod_audit"),
     publish: tools.includes("bp_publish"),
     compileErrorNodeRefs: ext?.features?.includes("compile_node_refs") ?? false,
+    warmSession: bool(info?.capabilities?.warmSession) && tools.includes("warm_session"),
+    stageAudit: bool(info?.capabilities?.stageAudit),
   };
 }
