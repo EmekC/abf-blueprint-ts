@@ -40,7 +40,7 @@ npm test
 
 Wildcard pins (array length, array item, casts) use one apply when the backend's `backend_info` reports `pin_types` (branch `abfc-wildcard-pins`). Without `backend_info`, abfc prints warning ABFC4012 and uses the two-phase fallback (apply, patch the rolled-back graph, apply it again as a raw block), which costs about 10-20 s more per build.
 
-`abfc publish` is a stub in Phase 1: it checks, builds, tests, audits and lists what would be published, and never publishes.
+`abfc publish` builds and copies the built assets into the mod named in `abf.config.json` (about 30 s with a warm build; the Mod Editor may stay open with the mod loaded, stop Play In Editor first). Every publish backs up the replaced files first. `abfc publish --full` also runs the game tests, the stage audit and the upload file check: use it before an upload to mod.io. `--dry-run` lists what would be copied.
 
 ## Requirements
 

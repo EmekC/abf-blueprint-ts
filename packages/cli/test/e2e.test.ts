@@ -224,7 +224,7 @@ test("(b) an edit of an owned node in the stage stops the build with ABFC5001 an
   });
 });
 
-test("(b1) a build that applies but fails Unreal's compile is repeated by the next unchanged build, and publish gate 3 fails on it", async () => {
+test("(b1) a build that applies but fails Unreal's compile is repeated by the next unchanged build, and publish --full gate 3 fails on it", async () => {
   await withRig({ handMadeEvent: false, stageAudit: true }, async (r) => {
     r.backend.reportMessages = [{ severity: "error", asset: RELAY_ASSET, message: "boom" }];
     let x = await r.run(["build"]);
@@ -244,11 +244,16 @@ test("(b1) a build that applies but fails Unreal's compile is repeated by the ne
     assert.ok(r.backend.applyLabels().length > applies, "the unchanged build applied again");
 
     // the publish gate stops at gate 3
-    x = await r.run(["publish", "--dry-run"]);
+    x = await r.run(["publish", "--full", "--dry-run"]);
     assert.notEqual(x.code, 0, x.out);
     assert.doesNotMatch(x.out, /would publish/);
     const gates = readRuns(join(r.dir, ".abfc", "runs.jsonl")).filter((e) => e.step === "gate.3");
     assert.equal(gates[gates.length - 1]!.ok, false);
+
+    // the fast publish stops at the build too
+    x = await r.run(["publish"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.equal(r.backend.publishCalls.length, 0);
 
     // once Unreal compiles it clean the hash is recorded and the build is up to date
     r.backend.reportMessages = [];
@@ -263,7 +268,7 @@ test("(b1) a build that applies but fails Unreal's compile is repeated by the ne
   });
 });
 
-test("(b3) publish gate 3 reads every owned asset: an editor edit of an unchanged unit fails with ABFC5001 and nothing is applied", async () => {
+test("(b3) publish --full gate 3 reads every owned asset: an editor edit of an unchanged unit fails with ABFC5001 and nothing is applied", async () => {
   await withRig({}, async (r) => {
     assert.equal((await r.run(["adopt", RELAY_ASSET, "UpdateTarget", "--yes"])).code, 0);
     assert.equal((await r.run(["build"])).code, 0);
@@ -274,7 +279,7 @@ test("(b3) publish gate 3 reads every owned asset: an editor edit of an unchange
 
     const before = r.backend.applyLabels().length;
     assert.equal((await r.run(["build"])).code, 0, "an unchanged build does not read the asset");
-    const x = await r.run(["publish", "--dry-run"]);
+    const x = await r.run(["publish", "--full", "--dry-run"]);
     assert.equal(x.code, 3, x.out);
     assert.match(x.out, /error ABFC5001/);
     assert.doesNotMatch(x.out, /would publish/);
@@ -345,6 +350,8 @@ test("(c) an Unreal compile error on the name comparison maps to its TypeScript 
     assert.equal(x.code, 1, x.out);
     const expected = `src/Relay.ts:${node.origin.line}:${node.origin.col}: error ABFC6001: [Unreal] The pins cannot be compared`;
     assert.ok(x.out.split("\n").includes(expected), `${expected}\n--- got ---\n${x.out}`);
+    const errs = x.out.split("\n").filter((l) => /error ABFC\d+/.test(l));
+    assert.equal(errs.length, 1, x.out);
     assert.deepEqual(r.backend.applyLabels(), ["main-a"], "phase B is not tried after a real compile error");
     assert.equal(readManifest(r.dir, RELAY_ASSET), null, "the manifest is untouched");
     assert.equal(r.backend.nodeNames(RELAY_ASSET).length, 2, "the stage was rolled back");
@@ -409,27 +416,31 @@ test("(e) tests: a known-issue failure passes with ABFC6102, a real failure is A
   });
 });
 
-test("(f) publish --dry-run lists the staged changes and never publishes; without --dry-run it is ABFC7001", async () => {
-  await withRig({ handMadeEvent: false }, async (r) => {
-    let x = await r.run(["publish", "--dry-run"]);
+test("(f) publish (fast) builds, copies the owned assets with a grant for the project's mod, and skips tests, audit and upload check", async () => {
+  await withRig({ handMadeEvent: false, stageAudit: true }, async (r) => {
+    r.backend.extraChanged = ["Content/Other/BP_NotMine.uasset"];
+    const x = await r.run(["publish", "--timings"]);
     assert.equal(x.code, 0, x.out);
-    assert.match(x.out, /would publish:/);
-    assert.match(x.out, /changed Content\/Relay\/BP_Relay\.uasset/);
-    assert.doesNotMatch(x.out, /_McpTmp/);
-    assert.ok(r.backend.tools().includes("mod_audit"));
-    assert.ok(!r.backend.tools().includes("bp_publish"));
-
-    x = await r.run(["publish"]);
-    assert.equal(x.code, 3, x.out);
-    assert.match(x.out, /error ABFC7001/);
-    assert.ok(!r.backend.tools().includes("bp_publish"));
+    assert.equal(r.backend.publishCalls.length, 1);
+    const call = r.backend.publishCalls[0]!;
+    assert.equal(call.mod, "TestMod");
+    assert.deepEqual(call.assets, ["/TestMod/Relay/BP_Relay"]);
+    assert.equal(call.grant.mod, "TestMod");
+    assert.match(x.out, /published:/);
+    assert.match(x.out, /backup: backups\/fake/);
+    assert.match(x.out, /publish\.copy/);
+    assert.ok(!r.backend.tools().includes("mod_audit"));
+    assert.ok(!r.backend.tools().includes("bp_game_test"));
+    const steps = readRuns(join(r.dir, ".abfc", "runs.jsonl")).map((e) => e.step);
+    assert.ok(!steps.some((s) => s.startsWith("gate.")));
+    for (const s of ["publish.list", "publish.copy", "publish.total"]) assert.ok(steps.includes(s), s);
   });
 });
 
-test("(f2) publish gate: success passes seven gates, lists only owned assets, times each gate, never calls bp_publish", async () => {
+test("(f2) publish --full: success passes seven gates, lists only owned assets, times each gate, never calls bp_publish", async () => {
   await withRig({ handMadeEvent: false, stageAudit: true }, async (r) => {
     r.backend.extraChanged = ["Content/Other/BP_NotMine.uasset", "Binaries/x.dll"];
-    const x = await r.run(["publish", "--dry-run"]);
+    const x = await r.run(["publish", "--full", "--dry-run"]);
     assert.equal(x.code, 0, x.out);
     assert.doesNotMatch(x.out, /ABFC7003/, "the stage is audited, no warning");
     assert.match(x.out, /changed Content\/Relay\/BP_Relay\.uasset/);
@@ -447,12 +458,17 @@ test("(f3) publish gate 1: a stale stub fingerprint stops before the backend sta
     const lock = JSON.parse(readFileSync(join(r.lockFile, "stubs.lock.json"), "utf8")) as Record<string, unknown>;
     lock.editorFingerprint = "0".repeat(64);
     writeFileSync(join(r.lockFile, "stubs.lock.json"), JSON.stringify(lock), "utf8");
-    const x = await r.run(["publish", "--dry-run"]);
+    const x = await r.run(["publish", "--full", "--dry-run"]);
     assert.equal(x.code, 2, x.out);
     assert.match(x.out, /error ABFC3001/);
     assert.equal(r.started.count, 0);
     const gates = readRuns(join(r.dir, ".abfc", "runs.jsonl")).filter((e) => e.step.startsWith("gate."));
     assert.deepEqual(gates.map((e) => [e.step, e.ok]), [["gate.1", false]]);
+
+    const fast = await r.run(["publish", "--dry-run"]);
+    assert.equal(fast.code, 2, fast.out);
+    assert.match(fast.out, /error ABFC3001/);
+    assert.equal(r.started.count, 0);
   });
 });
 
@@ -463,7 +479,7 @@ test("(f4) publish gate 4: a failing test stops before the audit", async () => {
     const at = cases[0]!.steps.findIndex((s) => "equals" in s.step);
     assert.ok(at >= 0);
     r.backend.gameTestFailures = [[at], []];
-    const x = await r.run(["publish", "--dry-run"]);
+    const x = await r.run(["publish", "--full", "--dry-run"]);
     assert.equal(x.code, 1, x.out);
     assert.match(x.out, /error ABFC6101/);
     assert.doesNotMatch(x.out, /would publish/);
@@ -475,19 +491,19 @@ test("(f5) publish gate 5: audit not passed is ABFC7002 with the reason; the rea
   await withRig({ handMadeEvent: false, stageAudit: true }, async (r) => {
     r.backend.auditOk = false;
     r.backend.auditRaw = { ok: false, error: "the picker lists two mods" };
-    let x = await r.run(["publish", "--dry-run"]);
+    let x = await r.run(["publish", "--full", "--dry-run"]);
     assert.equal(x.code, 1, x.out);
     assert.match(x.out, /error ABFC7002: .*the picker lists two mods/);
     assert.doesNotMatch(x.out, /would publish/);
 
     r.backend.auditOk = true;
     r.backend.auditRaw = { ok: true, audited_copy: "mod" };
-    x = await r.run(["publish", "--dry-run"]);
+    x = await r.run(["publish", "--full", "--dry-run"]);
     assert.equal(x.code, 1, x.out);
     assert.match(x.out, /error ABFC7002: .*audited the mod copy/);
   });
   await withRig({ handMadeEvent: false }, async (r) => {
-    const x = await r.run(["publish", "--dry-run"]);
+    const x = await r.run(["publish", "--full", "--dry-run"]);
     assert.equal(x.code, 0, x.out);
     assert.match(x.out, /warning ABFC7003/);
   });
@@ -500,7 +516,7 @@ test("(f6) publish gate 6: a .md file in the mod or the stage folder is ABFC7010
       { rel: root.includes("abfc-fake-backend-") ? "Notes/CHANGES.md" : "README.md", size: 5 },
       { rel: "Content/Relay/readme.txt", size: 1 },
     ];
-    const x = await r.run(["publish", "--dry-run"], { listFiles });
+    const x = await r.run(["publish", "--full", "--dry-run"], { listFiles });
     assert.equal(x.code, 1, x.out);
     assert.match(x.out, /error ABFC7010: mod folder: README\.md/);
     assert.match(x.out, /error ABFC7010: stage folder: Notes\/CHANGES\.md/);
@@ -509,6 +525,216 @@ test("(f6) publish gate 6: a .md file in the mod or the stage folder is ABFC7010
     const gates = readRuns(join(r.dir, ".abfc", "runs.jsonl")).filter((e) => e.step.startsWith("gate."));
     assert.equal(gates.at(-1)?.step, "gate.6");
     assert.equal(gates.at(-1)?.ok, false);
+  });
+});
+
+test("(f7) publish --dry-run (fast) lists and never sends bp_publish", async () => {
+  await withRig({ handMadeEvent: false, stageAudit: true }, async (r) => {
+    const x = await r.run(["publish", "--dry-run"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /would publish:/);
+    assert.match(x.out, /changed Content\/Relay\/BP_Relay\.uasset/);
+    assert.equal(r.backend.publishCalls.length, 0);
+    assert.ok(!r.backend.tools().includes("bp_publish"));
+    assert.ok(!r.backend.tools().includes("mod_audit"));
+  });
+});
+
+test("(f8) publish --full runs gates 1-8 and copies", async () => {
+  await withRig({ handMadeEvent: false, stageAudit: true }, async (r) => {
+    const x = await r.run(["publish", "--full"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(r.backend.publishCalls.length, 1);
+    assert.equal(r.backend.publishCalls[0]!.mod, "TestMod");
+    assert.ok(r.backend.tools().includes("mod_audit"));
+    assert.match(x.out, /published:/);
+    const gates = readRuns(join(r.dir, ".abfc", "runs.jsonl")).filter((e) => e.step.startsWith("gate."));
+    assert.deepEqual(gates.map((e) => e.step), ["gate.1", "gate.2", "gate.3", "gate.4", "gate.5", "gate.6", "gate.7", "gate.8"]);
+    assert.ok(gates.every((e) => e.ok));
+  });
+});
+
+test("(f9) a refusal of bp_publish becomes a diagnostic with a specific fix and exit code", async () => {
+  await withRig({ handMadeEvent: false, stageAudit: true }, async (r) => {
+    const base = r.backend.publishResult;
+    const refuse = async (patch: Partial<typeof base>): Promise<Run> => {
+      r.backend.publishResult = { ...base, ok: false, published: [], ...patch };
+      const x = await r.run(["publish"]);
+      const steps = readRuns(join(r.dir, ".abfc", "runs.jsonl")).filter((e) => e.step === "publish.copy");
+      assert.equal(steps.at(-1)?.ok, false, "the publish step failed");
+      return x;
+    };
+
+    let x = await refuse({
+      refused: "compile errors",
+      message: "Refused: 1 compile error",
+      compileErrors: [{ asset: "/TestMod/Relay/BP_Relay", message: "bad pin" }],
+    });
+    assert.equal(x.code, 1, x.out);
+    assert.match(x.out, /error ABFC7004/);
+    assert.match(x.out, /bad pin/);
+
+    x = await refuse({
+      refused: "editor refused",
+      editorReason: "Play In Editor is running",
+      message: "Refused by the open editor: x (Play In Editor is running). Stop Play In Editor, then publish again. Nothing was copied.",
+    });
+    assert.equal(x.code, 3, x.out);
+    assert.match(x.out, /error ABFC7005/);
+    assert.match(x.out, /stop Play In Editor/);
+
+    x = await refuse({
+      refused: "editor refused",
+      editorReason: "modified assets (unsaved changes)",
+      message: "Refused by the open editor: x (modified assets (unsaved changes)). Save or revert those assets, then publish again. Nothing was copied.",
+    });
+    assert.equal(x.code, 3, x.out);
+    assert.match(x.out, /save or revert/);
+    assert.doesNotMatch(x.out, /stop Play In Editor/);
+
+    x = await refuse({
+      refused: "editor refused",
+      editorReason:
+        "unload incomplete (packages still loaded); asset editors of these packages may have been closed and the unloaded ones were loaded back. Nothing was copied.",
+      message:
+        "Refused by the open editor: /TestMod/A/BP_A, /TestMod/A/BP_B (unload incomplete (packages still loaded); asset editors of these packages may have been closed and the unloaded ones were loaded back. Nothing was copied.). Save or close those assets, stop Play In Editor, then publish again. Nothing was copied.",
+    });
+    assert.equal(x.code, 3, x.out);
+    assert.match(x.out, /ABFC7005/);
+    assert.match(x.out, /Update the backend/);
+    assert.doesNotMatch(x.out, /stop Play In Editor in the Mod Editor/);
+
+    x = await refuse({
+      refused: "file locked",
+      editor: "open",
+      message: "Refused: Content/A/BP_A.uasset is still held by the open editor after it released the assets.",
+    });
+    assert.equal(x.code, 3, x.out);
+    assert.match(x.out, /close the asset editor tabs/);
+
+    x = await refuse({
+      refused: "conflicts",
+      message: "Refused: the real mod changed",
+      conflicts: ["Content/Relay/BP_Relay.uasset: changed"],
+    });
+    assert.equal(x.code, 3, x.out);
+    assert.match(x.out, /abfc build --resync/);
+
+    x = await refuse({ refused: "editor unreachable", message: "The editor did not answer" });
+    assert.equal(x.code, 2, x.out);
+    assert.match(x.out, /error ABFC7006/);
+
+    x = await refuse({ refused: "copy failed", message: "Copy failed", restored: false, backup: "B1" });
+    assert.equal(x.code, 2, x.out);
+    assert.match(x.out, /copy the listed files back from B1/);
+  });
+});
+
+test("(f10) nothing staged: no bp_publish call, exit 0 (fast and --full)", async () => {
+  await withRig({ handMadeEvent: false, stageAudit: true }, async (r) => {
+    r.backend.hideChanged = true;
+    for (const argv of [["publish"], ["publish", "--full"]]) {
+      const x = await r.run(argv);
+      assert.equal(x.code, 0, x.out);
+      assert.match(x.out, /nothing to publish\./);
+    }
+    assert.equal(r.backend.publishCalls.length, 0);
+  });
+});
+
+test("(f11) publish --full --dry-run never sends bp_publish", async () => {
+  await withRig({ handMadeEvent: false, stageAudit: true }, async (r) => {
+    const x = await r.run(["publish", "--full", "--dry-run"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /would publish:/);
+    assert.equal(r.backend.publishCalls.length, 0);
+    assert.ok(!r.backend.tools().includes("bp_publish"));
+  });
+});
+
+test("(f12) a failing test stops --full before bp_publish, while fast publish ignores tests", async () => {
+  await withRig({ handMadeEvent: false, stageAudit: true }, async (r) => {
+    assert.equal((await r.run(["build"])).code, 0);
+    const cases = compileTests(loadProgram(r.dir), profile).cases;
+    const at = cases[0]!.steps.findIndex((s) => "equals" in s.step);
+    assert.ok(at >= 0);
+    r.backend.gameTestFailures = [[at], []];
+    let x = await r.run(["publish", "--full"]);
+    assert.equal(x.code, 1, x.out);
+    assert.match(x.out, /error ABFC6101/);
+    assert.equal(r.backend.publishCalls.length, 0);
+
+    r.backend.gameTestFailures = [];
+    r.backend.hideChanged = false;
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(r.backend.publishCalls.length, 1);
+  });
+});
+
+test("(f13) a build error stops fast publish", async () => {
+  await withRig({ handMadeEvent: false, stageAudit: true }, async (r) => {
+    r.backend.reportMessages = [{ severity: "error", asset: RELAY_ASSET, message: "boom" }];
+    const x = await r.run(["publish"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, /ABFC6002/);
+    assert.equal(r.backend.publishCalls.length, 0);
+  });
+});
+
+test("(f14) a live-reload publish names the closed tabs and the assets left modified", async () => {
+  await withRig({ handMadeEvent: false, stageAudit: true }, async (r) => {
+    const base = r.backend.publishResult;
+    assert.ok(base.published.length > 0, "base result publishes something");
+    r.backend.publishResult = {
+      ...base,
+      route: "live-reload",
+      editor: "open",
+      reloadedInPlace: ["/TestMod/A/BP_A"],
+      dirtyAfter: ["/TestMod/Data/Row_A"],
+    };
+    const x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /reloaded the published assets in place/);
+    assert.match(x.out, /Row_A/);
+  });
+});
+
+test("(f15) a live-reload publish names the reloaded referencers and warns about editor compile errors", async () => {
+  await withRig({ handMadeEvent: false, stageAudit: true }, async (r) => {
+    const base = r.backend.publishResult;
+    r.backend.publishResult = {
+      ...base,
+      route: "live-reload",
+      editor: "open",
+      reloadedReferencers: ["/TestMod/A/BP_Ref"],
+      compileErrorsAfter: [{ asset: "/TestMod/A/BP_Ref", message: "cannot connect to the new class" }],
+    };
+    const x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /BP_Ref/);
+    assert.match(x.out, /ABFC7013/);
+    assert.match(x.out, /compile them again, or restart the Mod Editor/);
+    assert.match(x.out, /cannot connect to the new class/);
+  });
+});
+
+test("(f16) a live-reload publish names the referencers left unreloaded and the published assets whose edits were discarded", async () => {
+  await withRig({ handMadeEvent: false, stageAudit: true }, async (r) => {
+    const base = r.backend.publishResult;
+    r.backend.publishResult = {
+      ...base,
+      route: "live-reload",
+      editor: "open",
+      skippedDirty: ["/TestMod/A/BP_Edited"],
+      dirtyPublished: ["/TestMod/A/BP_Lost"],
+    };
+    const x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /NOT reloaded/);
+    assert.match(x.out, /BP_Edited/);
+    assert.match(x.out, /unsaved edits were discarded/);
+    assert.match(x.out, /BP_Lost/);
   });
 });
 
@@ -527,6 +753,29 @@ test("(g) a stage resync replays the adoption: the hand-made nodes are removed a
     assert.equal(r.backend.tools().filter((t) => t === "staging_sync").length, 2);
     assert.equal(readManifest(r.dir, RELAY_ASSET)!.units[0]!.stageSyncedAt, "sync-2");
     assert.equal(r.backend.nodeNames(RELAY_ASSET).filter((n) => n.startsWith("K2Node_CustomEvent_")).length, 2, "OtherEvent and the new UpdateTarget");
+  });
+});
+
+test("(g2) a stage re-synced from a published mod that holds the built graphs: resync applies nothing, the manifests take the new sync time, status is clean", async () => {
+  await withRig({}, async (r) => {
+    assert.equal((await r.run(["adopt", RELAY_ASSET, "UpdateTarget", "--yes"])).code, 0);
+    assert.equal((await r.run(["build"])).code, 0);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.units[0]!.stageSyncedAt, "sync-1");
+    const first = r.backend.applyLabels().length;
+    const nodesBefore = r.backend.nodeNames(RELAY_ASSET).join(",");
+
+    r.backend.keepAssetsOnSync = true;
+    const x = await r.run(["build", "--resync"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /up to date/);
+    assert.equal(r.backend.applyLabels().length, first, "nothing is re-applied");
+    assert.equal(r.backend.nodeNames(RELAY_ASSET).join(","), nodesBefore);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.units[0]!.stageSyncedAt, "sync-2");
+
+    const st = await r.run(["status"]);
+    assert.equal(st.code, 0, st.out);
+    assert.match(st.out, /UpdateTarget clean/);
+    assert.doesNotMatch(st.out, /ABFC50/);
   });
 });
 
@@ -784,5 +1033,149 @@ test("phase 2: several adoptions (event, override, --remove-node), a delegate cr
     const full = appliedUnits(r.backend, third);
     assert.deepEqual(full.events, ["OtherEvent", "Scan", "Start", "UpdateTarget"]);
     assert.equal(full.overrides, 1);
+  });
+});
+
+// ---- Renaming an owned event and calling it from another event in the same build ----
+
+const KICK = ["", "  @event", "  Kick(): void {", "    this.UpdateTargetNew();", "  }"];
+
+/** Renames the owned event `UpdateTarget` and adds an event that calls it; returns the 1-based line of the call. */
+function renameEvent(dir: string): number {
+  const src = join(dir, "src", "Relay.ts");
+  const text = readFileSync(src, "utf8").replace("UpdateTarget(): void {", "UpdateTargetNew(): void {");
+  const spec = join(dir, "src", "Relay.test.ts");
+  writeFileSync(spec, readFileSync(spec, "utf8").replace('"UpdateTarget"', '"UpdateTargetNew"'), "utf8");
+  const lines = text.replace(/\s+$/, "").split("\n");
+  assert.equal(lines[lines.length - 1], "}");
+  lines.splice(lines.length - 1, 0, ...KICK);
+  writeFileSync(src, lines.join("\n") + "\n", "utf8");
+  return lines.indexOf(KICK[3]!) + 1;
+}
+
+test("(r1) renaming an owned event and calling it from a new event: the old unit is removed from the stage and the manifest", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    const old = readManifest(r.dir, RELAY_ASSET)!.units.find((u) => u.id === "event:UpdateTarget")!;
+    assert.ok(old.nodes.length > 0 && old.tag !== null);
+    const gone = [...old.nodes, old.tag!];
+    for (const n of gone) assert.ok(r.backend.nodeNames(RELAY_ASSET).includes(n), `${n} is on the stage`);
+
+    renameEvent(r.dir);
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /applied .*UpdateTargetNew/);
+    assert.match(x.out, /removed .*UpdateTarget\b/);
+    assert.deepEqual(readManifest(r.dir, RELAY_ASSET)!.units.map((u) => u.id).sort(), ["event:Kick", "event:UpdateTargetNew"]);
+    const names = r.backend.nodeNames(RELAY_ASSET);
+    for (const n of gone) assert.ok(!names.includes(n), `${n} is gone from the stage`);
+    assert.equal(names.filter((n) => n.startsWith("EdGraphNode_Comment")).length, 2, "one tag per remaining unit");
+
+    // the same state again is up to date
+    const before = r.backend.applyLabels().length;
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /up to date/);
+    assert.equal(r.backend.applyLabels().length, before);
+  });
+});
+
+test("(r2) without the self_event_calls feature the call to the new event is ABFC4013 at the call; nothing is applied", async () => {
+  await withRig({ handMadeEvent: false, selfEventCalls: false }, async (r) => {
+    assert.equal((await r.run(["build"])).code, 0);
+    const before = r.backend.applyLabels().length;
+    const line = renameEvent(r.dir);
+    const x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, new RegExp(String.raw`Relay\.ts:${line}:\d+: error ABFC4013: calling UpdateTargetNew needs`));
+    assert.equal(r.backend.applyLabels().length, before, "nothing is applied");
+    assert.deepEqual(readManifest(r.dir, RELAY_ASSET)!.units.map((u) => u.id), ["event:UpdateTarget"], "the manifest is untouched");
+  });
+});
+
+test("(r3) an apply that fails on the call is reported once, at the call's TS line", async () => {
+  await withRig({ handMadeEvent: false, selfEventCalls: false, advertiseSelfEventCalls: true }, async (r) => {
+    assert.equal((await r.run(["build"])).code, 0);
+    const line = renameEvent(r.dir);
+    const x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    const errors = x.out.split("\n").filter((l) => /error ABFC\d+/.test(l));
+    assert.equal(errors.length, 1, x.out);
+    assert.match(errors[0]!, new RegExp(String.raw`Relay\.ts:${line}:\d+: error ABFC6001: \[Unreal\] no pin 'execute'`));
+    assert.doesNotMatch(x.out, /\[spec:/);
+    assert.deepEqual(readManifest(r.dir, RELAY_ASSET)!.units.map((u) => u.id), ["event:UpdateTarget"], "the manifest is untouched");
+  });
+});
+
+test("(r4) a compile error 'Could not find a function' for a call in TS is reported at the call", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    assert.equal((await r.run(["build"])).code, 0);
+    const line = renameEvent(r.dir);
+    r.backend.reportMessages = [{ severity: "error", asset: RELAY_ASSET, message: `Could not find a function named "UpdateTargetNew" in 'BP_Relay_C'.` }];
+    const x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, new RegExp(String.raw`Relay\.ts:${line}:\d+: error ABFC6001: \[Unreal\] Could not find a function named "UpdateTargetNew"`));
+  });
+});
+
+// ---- One ownership tag comment per unit: re-planning replaces the tag, orphans of older builds are cleaned ----
+
+const isTag = (r: Rig, n: string): boolean => /^NodeComment="abfc:owned unit=/.test(r.backend.nodeHead(RELAY_ASSET, n).find((h) => h.startsWith("NodeComment=")) ?? "");
+const tagNames = (r: Rig): string[] => r.backend.nodeNames(RELAY_ASSET).filter((n) => isTag(r, n));
+
+function setVisible(dir: string, value: boolean): void {
+  const src = join(dir, "src", "Relay.ts");
+  const text = readFileSync(src, "utf8");
+  const next = text.replace(/this.Visible = (true|false);/, `this.Visible = ${value};`);
+  assert.notEqual(next, text);
+  writeFileSync(src, next, "utf8");
+}
+
+test("(t1) re-planning a unit replaces its tag comment: exactly one tag per unit after every build", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    assert.equal((await r.run(["build"])).code, 0);
+    const units = readManifest(r.dir, RELAY_ASSET)!.units;
+    assert.equal(tagNames(r).length, units.length);
+    const first = readManifest(r.dir, RELAY_ASSET)!.units.find((u) => u.id === "event:UpdateTarget")!.tag!;
+
+    for (const visible of [false, true]) {
+      setVisible(r.dir, visible);
+      const x = await r.run(["build"]);
+      assert.equal(x.code, 0, x.out);
+      assert.match(x.out, /applied UpdateTarget/);
+      const m = readManifest(r.dir, RELAY_ASSET)!;
+      assert.equal(m.units.length, units.length);
+      const tags = tagNames(r);
+      assert.equal(tags.length, m.units.length, `one tag per unit: ${tags.join(", ")}`);
+      assert.deepEqual([...tags].sort(), m.units.map((u) => u.tag!).sort(), "the manifest records the tag that is on the stage");
+    }
+    assert.ok(!r.backend.nodeNames(RELAY_ASSET).includes(first), "the first tag comment is gone");
+  });
+});
+
+test("(t2) orphan tag comments of an unchanged unit are removed once its asset is read (build --resync, publish); a plain build leaves them", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    assert.equal((await r.run(["build"])).code, 0);
+    const m = readManifest(r.dir, RELAY_ASSET)!;
+    const unit = m.units.find((u) => u.id === "event:UpdateTarget")!;
+    const orphans = [r.backend.addOrphanTag(RELAY_ASSET, unit.tag!, "92f777f3"), r.backend.addOrphanTag(RELAY_ASSET, unit.tag!, "de5b7500")];
+    assert.equal(tagNames(r).length, m.units.length + 2);
+
+    // nothing changed: a plain build does not read the asset and does not touch the stage
+    const before = r.backend.applyLabels().length;
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /up to date/);
+    assert.equal(r.backend.applyLabels().length, before);
+
+    // build --resync reads every owned asset (the stage is copied from the published mod again): the orphans go
+    r.backend.keepAssetsOnSync = true;
+    x = await r.run(["build", "--resync"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /orphan tag comment/);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.units.length, m.units.length);
+    assert.deepEqual(tagNames(r).sort(), m.units.map((u) => u.tag!).sort(), "only the recorded tags remain");
+    for (const o of orphans) assert.ok(!r.backend.nodeNames(RELAY_ASSET).includes(o));
   });
 });

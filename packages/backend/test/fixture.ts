@@ -74,6 +74,7 @@ export class FakeBackend implements Backend {
   reflect(): Promise<never> { return this.no(); }
   gameTest(): Promise<never> { return this.no(); }
   audit(): Promise<never> { return this.no(); }
+  publish(): Promise<never> { return this.no(); }
   async close(): Promise<void> {}
 }
 

@@ -6,6 +6,7 @@ import type { BackendInfo } from "@abfc/ir";
 import { capabilitiesFrom } from "./capabilities.js";
 import type { RawBackendInfo } from "./capabilities.js";
 import { McpStdioClient, spawnBackendServer } from "./mcp.js";
+import type { PublishGrant } from "./safety.js";
 import type {
   AssetSnapshot,
   AuditReport,
@@ -14,6 +15,7 @@ import type {
   CompileMessage,
   CompileReport,
   GameTestReport,
+  PublishResult,
   ReflectData,
   ReflectRequest,
   ReflectResult,
@@ -58,6 +60,45 @@ function num(v: unknown, fallback = 0): number {
 
 function strList(v: unknown): string[] {
   return Array.isArray(v) ? v.map((x) => (typeof x === "string" ? x : JSON.stringify(x))) : [];
+}
+
+/** Maps the raw `bp_publish` JSON (a success, "Nothing to publish", or a refusal with its extras) to a {@link PublishResult}. */
+export function publishResultFrom(json: Record<string, unknown>): PublishResult {
+  const published = strList(json.published);
+  const refused = str(json.refused);
+  const message = str(json.message) ?? str(json.error) ?? "";
+  const compileErrors = (Array.isArray(json.compile_errors) ? json.compile_errors : []).map((item: unknown) => {
+    const o = isObject(item) ? item : {};
+    return { asset: str(o.asset), message: str(o.message) ?? JSON.stringify(item) };
+  });
+  const conflicts = (Array.isArray(json.conflicts) ? json.conflicts : []).map((item: unknown) => {
+    if (typeof item === "string") return item;
+    const o = isObject(item) ? item : {};
+    return `${str(o.path) ?? JSON.stringify(item)}: ${str(o.reason) ?? "changed"}`;
+  });
+  return {
+    ok: refused === null && (published.length > 0 || message.startsWith("Nothing to publish")),
+    published,
+    refused,
+    message,
+    backup: str(json.backup),
+    route: str(json.route),
+    compileErrors,
+    conflicts,
+    restored: typeof json.restored === "boolean" ? json.restored : null,
+    editor: str(json.editor),
+    editorReason: isObject(json.editor_result) ? str(json.editor_result.reason) : null,
+    reloadedInPlace: strList(json.reloaded_in_place),
+    dirtyAfter: strList(json.dirty_after),
+    reloadedReferencers: strList(json.reloaded_referencers),
+    skippedDirty: strList(json.skipped_dirty),
+    dirtyPublished: strList(json.dirty_published),
+    compileErrorsAfter: (Array.isArray(json.compile_errors_after) ? json.compile_errors_after : []).map((item: unknown) => {
+      const o = isObject(item) ? item : {};
+      return { asset: str(o.asset), message: str(o.message) ?? JSON.stringify(item) };
+    }),
+    raw: json,
+  };
 }
 
 function stamp(d: Date): string {
@@ -339,6 +380,17 @@ export class BpApplyBackend implements Backend {
     return { ok: json.ok === true, raw: json, seconds: num(json.seconds) };
   }
 
+  async publish(mod: string, assets: string[], grant: PublishGrant): Promise<PublishResult> {
+    // bp_publish's compile check runs on the warm session when one runs; the publish does not stop it, so close() still stops it
+    this.lastWarm = false;
+    const { json } = await this.call(
+      "bp_publish",
+      { mod, assets },
+      { timeoutMs: 900_000, publishGrant: grant, tolerate: (j) => Array.isArray(j.published) },
+    );
+    return publishResultFrom(json);
+  }
+
   async close(): Promise<void> {
     if (this.warmStarted) {
       this.warmStarted = false;
@@ -371,9 +423,12 @@ export class BpApplyBackend implements Backend {
   private async call(
     tool: string,
     args: Record<string, unknown>,
-    o?: { timeoutMs?: number; tolerate?: (j: Json) => boolean },
+    o?: { timeoutMs?: number; tolerate?: (j: Json) => boolean; publishGrant?: PublishGrant },
   ): Promise<{ json: Json; text: string; wallSeconds: number }> {
-    const res = await this.client.callTool(tool, args, o?.timeoutMs !== undefined ? { timeoutMs: o.timeoutMs } : undefined);
+    const callOpts: { timeoutMs?: number; publishGrant?: PublishGrant } = {};
+    if (o?.timeoutMs !== undefined) callOpts.timeoutMs = o.timeoutMs;
+    if (o?.publishGrant !== undefined) callOpts.publishGrant = o.publishGrant;
+    const res = await this.client.callTool(tool, args, callOpts);
     const json = isObject(res.json) ? res.json : null;
     if (res.isError && !(json !== null && o?.tolerate?.(json) === true)) {
       const message = (json !== null ? str(json.error) : null) ?? res.text.trim().split(/\r?\n/).slice(-3).join(" | ");

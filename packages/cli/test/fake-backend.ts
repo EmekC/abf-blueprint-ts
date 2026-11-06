@@ -12,6 +12,8 @@ import type {
   CompileMessage,
   CompileReport,
   GameTestReport,
+  PublishGrant,
+  PublishResult,
   RawBackendInfo,
   ReflectResult,
   StageReport,
@@ -105,6 +107,13 @@ export interface FakeBackendOptions {
   overrideEvent?: boolean;
   /** The initial asset also holds the unlinked node `SPARE_NODE` (to be removed with `--remove-node`). */
   spareNode?: boolean;
+  /**
+   * The backend has the bp_apply feature `self_event_calls` (default true). Without it the fake fails like the old real one: a call
+   * to a custom event added in the same apply has no pins, so the apply fails with a `[spec:<id>]` error and rolls back.
+   */
+  selfEventCalls?: boolean;
+  /** With `selfEventCalls: false`, still advertise the feature (a backend that lies), so the apply failure itself can be tested. */
+  advertiseSelfEventCalls?: boolean;
 }
 
 /** Name of the unlinked node that `spareNode` adds. */
@@ -306,6 +315,33 @@ export class FakeBackend implements Backend {
   auditOk = true;
   /** Extra staged files that `staging_status` lists as changed (files no unit of the project owns). */
   extraChanged: string[] = [];
+  /** `staging_status` lists no changed files at all (nothing is staged to publish). */
+  hideChanged = false;
+  /** A resync keeps the assets as they are (simulates re-syncing from a published mod that holds the built graphs). */
+  keepAssetsOnSync = false;
+  /** What `publish` returns; a test sets it to script a refusal. */
+  publishResult: PublishResult = {
+    ok: true,
+    published: ["Content/Relay/BP_Relay.uasset"],
+    refused: null,
+    message: "published",
+    backup: "backups/fake",
+    route: "file-copy",
+    compileErrors: [],
+    conflicts: [],
+    restored: null,
+    editor: "closed",
+    editorReason: null,
+    reloadedInPlace: [],
+    dirtyAfter: [],
+    reloadedReferencers: [],
+    skippedDirty: [],
+    dirtyPublished: [],
+    compileErrorsAfter: [],
+    raw: {},
+  };
+  /** The arguments of every `publish` call (the `bp_publish` calls also appear in `calls`). */
+  readonly publishCalls: Array<{ mod: string; assets: string[]; grant: PublishGrant }> = [];
   /** The raw JSON of the audit result. */
   auditRaw: unknown = { audited_copy: "stage" };
   /** Pretend the server runs a warm session: read, apply and compile results say `warm: true` (`lastWarm`). */
@@ -330,6 +366,7 @@ export class FakeBackend implements Backend {
     const tools = withInfo ? ALL_TOOLS : ALL_TOOLS.filter((t) => t !== "backend_info");
     const capabilities = capabilitiesFrom(tools, withInfo ? (fixInfo() as RawBackendInfo) : null, { features: EXT_FEATURES });
     capabilities.stageAudit = o.stageAudit === true;
+    capabilities.selfEventCalls = o.selfEventCalls !== false || o.advertiseSelfEventCalls === true;
     this.infoValue = {
       id: "bp_apply",
       serverVersion: "fake-1",
@@ -361,6 +398,24 @@ export class FakeBackend implements Backend {
     p.def = value;
   }
 
+  /**
+   * Adds a copy of the comment node `tag` with another `ir=` hash, as an older build left behind when it re-planned a unit.
+   * Returns the new node's name.
+   */
+  addOrphanTag(asset: string, tag: string, ir: string): string {
+    const stage = this.assets.get(asset);
+    const src = stage?.nodes.find((x) => x.name === tag);
+    if (stage === undefined || src === undefined) throw new Error(`fake stage: no node ${tag} in ${asset}`);
+    const copy: FNode = { ...src, name: `${shortOf(src.cls)}_${++this.counter}`, head: src.head.map((h) => h.replace(/ ir=[0-9a-f]+/, ` ir=${ir}`)), pins: [] };
+    stage.nodes.push(copy);
+    return copy.name;
+  }
+
+  /** The raw body lines of a node of the stage (position, references, comment text). */
+  nodeHead(asset: string, node: string): string[] {
+    return this.assets.get(asset)?.nodes.find((x) => x.name === node)?.head ?? [];
+  }
+
   /** Real names of the nodes of an asset, in the stage. */
   nodeNames(asset: string): string[] {
     return (this.assets.get(asset)?.nodes ?? []).map((n) => n.name);
@@ -377,7 +432,7 @@ export class FakeBackend implements Backend {
 
   async stage(_modDir: string, o: { discardChanges: boolean }): Promise<StageReport> {
     this.calls.push({ tool: "staging_sync" });
-    if (!this.staged || o.discardChanges) {
+    if (!this.staged || (o.discardChanges && !this.keepAssetsOnSync)) {
       this.assets = new Map([[RELAY_ASSET, initialAsset(this.withUpdateTarget, this.options)]]);
       this.changed.clear();
     }
@@ -393,7 +448,7 @@ export class FakeBackend implements Backend {
       mod,
       stagingPath: join(this.root, "stage"),
       syncedAt: `sync-${this.syncs}`,
-      changed: [...this.changed, ...this.extraChanged],
+      changed: this.hideChanged ? [] : [...this.changed, ...this.extraChanged],
       added: ["Content/_McpTmp/Scratch.uasset"],
       removed: [],
       conflicts: [],
@@ -419,6 +474,7 @@ export class FakeBackend implements Backend {
     const undetermined: CompileMessage[] = [];
     const assets: NonNullable<BpApplyResult["assets"]> = [];
     const castTyped = this.infoValue.capabilities.castObjectPin;
+    let specError: string | null = null;
 
     (specs as Spec[]).forEach((spec, i) => {
       const a = work.get(spec.asset);
@@ -431,6 +487,7 @@ export class FakeBackend implements Backend {
         if (!a.variables.some((x) => x.name === v.name)) a.variables.push({ name: v.name, type: v.type });
       }
       const nodeIds: Record<string, Record<string, string>> = {};
+      if (this.options.selfEventCalls === false && specError === null) specError = this.zeroPinSelfCall(a, spec);
       (spec.graphs ?? []).forEach((g, k) => {
         nodeIds[`graph:${k}`] = this.applyGraph(a, g, castTyped, scripted);
       });
@@ -463,8 +520,9 @@ export class FakeBackend implements Backend {
       writeFileSync(join(run, `final_${i}.t3d`), renderAsset(a), "utf8");
     });
 
-    const errors = [...undetermined, ...scripted];
-    const ok = errors.length === 0;
+    // a spec error aborts the real apply before anything is compiled, so it comes with no compile messages
+    const errors = specError === null ? [...undetermined, ...scripted] : [];
+    const ok = errors.length === 0 && specError === null;
     if (ok) {
       this.assets = work;
       for (const a of (specs as Spec[]).map((s) => s.asset)) {
@@ -478,7 +536,22 @@ export class FakeBackend implements Backend {
       seconds: 0.5,
       assets,
       compile: { errors, warnings: [] },
+      // like the real backend, a failed apply always carries `error`: the spec error, else a summary of the compile errors
+      ...(ok ? {} : { error: specError ?? `${errors.length} compile error(s) in the edited assets` }),
     };
+  }
+
+  /** The old backend templated a self call before the graph edit: for an event this spec adds the template had no pins. */
+  private zeroPinSelfCall(a: FAsset, spec: Spec): string | null {
+    for (const g of spec.graphs ?? []) {
+      const added = new Set(g.add.filter((n) => n.k === "event" && n.name !== undefined).map((n) => n.name!));
+      for (const n of g.add) {
+        if (n.k !== "call" || n.class !== undefined || n.function === undefined || !added.has(n.function)) continue;
+        const exists = a.nodes.some((x) => x.cls === CLS.customEvent && x.head.some((h) => h === `CustomFunctionName="${n.function}"`));
+        if (!exists) return `[spec:${n.id}] no pin 'execute' on K2Node_CallFunction_9027`;
+      }
+    }
+    return null;
   }
 
   async compile(_mod: string, _assets: string[]): Promise<CompileReport> {
@@ -516,6 +589,13 @@ export class FakeBackend implements Backend {
     this.calls.push({ tool: "mod_audit" });
     this.lastWarm = false; // the audit always runs cold, on the staged copy
     return { ok: this.auditOk, raw: this.auditRaw, seconds: 0.2 };
+  }
+
+  async publish(mod: string, assets: string[], grant: PublishGrant): Promise<PublishResult> {
+    this.calls.push({ tool: "bp_publish" });
+    this.publishCalls.push({ mod, assets, grant });
+    this.lastWarm = false;
+    return this.publishResult;
   }
 
   async close(): Promise<void> {
