@@ -266,3 +266,50 @@ test("bp_publish is never callable through the backend client (allowlist), even 
     assert.ok(!calls().some((c) => c.tool === "bp_publish"));
   });
 });
+
+test("warm session: started once before the first commandlet op, results say warm, staging_sync restarts it, close stops it", async () => {
+  await withBackend({}, async ({ backend, calls }) => {
+    // not wanted (cold): never started
+    const cold = await backend.info();
+    assert.equal(cold.capabilities.warmSession, true);
+    assert.equal(cold.capabilities.stageAudit, true);
+    const snap0 = await backend.read("TestMod", "/TestMod/A");
+    assert.equal(snap0.warm, false);
+    assert.equal(backend.lastWarm, false);
+    assert.equal(calls().filter((c) => c.tool === "warm_session").length, 0);
+  });
+  const dir = mkdtempSync(join(tmpdir(), "abfc-backend-warm-"));
+  const logFile = join(dir, "calls.log");
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
+  const client = await McpStdioClient.start({
+    command: process.execPath,
+    args: [FIXTURE],
+    cwd: dir,
+    env: { ...env, FAKE_LOG: logFile, FAKE_CONFIG: "{}", FAKE_DIR: dir },
+    requestTimeoutMs: 10_000,
+    closeGraceMs: 5000,
+  });
+  const backend = new BpApplyBackend(client, { serverDir: "C:\\fake\\server", warm: true });
+  const log = (): Call[] => readFileSync(logFile, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as Call);
+  const warmCalls = (): string[] => log().filter((c) => c.tool === "warm_session").map((c) => String(c.args.action));
+  try {
+    await backend.info();
+    assert.deepEqual(warmCalls(), [], "not started before the first operation");
+    const snap = await backend.read("TestMod", "/TestMod/A");
+    assert.deepEqual(warmCalls(), ["start"]);
+    assert.equal(snap.warm, true);
+    assert.equal(backend.lastWarm, true);
+    const report = await backend.compile("TestMod", ["/TestMod/A"]);
+    assert.equal(report.warm, true);
+    assert.deepEqual(warmCalls(), ["start"], "started once");
+    await backend.stage("C:\\mods\\TestMod", { discardChanges: false });
+    await backend.read("TestMod", "/TestMod/A");
+    assert.deepEqual(warmCalls(), ["start", "start"], "restarted after staging_sync");
+    await backend.close();
+    assert.deepEqual(warmCalls(), ["start", "start", "stop"], "stopped on close");
+  } finally {
+    await backend.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

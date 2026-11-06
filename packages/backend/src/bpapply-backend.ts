@@ -40,6 +40,8 @@ export interface BpApplyBackendOptions {
   /** Folder of the abf-mod-editor-mcp checkout (named in ABFC4001). */
   serverDir?: string;
   now?: () => Date;
+  /** The server was started with ABF_WARM_SESSION=1: start the warm session lazily before the first commandlet operation. */
+  warm?: boolean;
 }
 
 function isObject(v: unknown): v is Json {
@@ -81,8 +83,15 @@ export class BpApplyBackend implements Backend {
   private readonly client: McpStdioClient;
   private readonly serverDir: string;
   private readonly now: () => Date;
+  private readonly warmWanted: boolean;
+  private warmAvailable = false;
+  private warmStarted = false;
+  private warmFailed = false;
+  /** True when the most recent commandlet operation ran on the warm session. */
+  lastWarm = false;
 
   constructor(client: McpStdioClient, o: BpApplyBackendOptions = {}) {
+    this.warmWanted = o.warm === true;
     this.client = client;
     this.serverDir = o.serverDir ?? "<unknown>";
     this.now = o.now ?? ((): Date => new Date());
@@ -113,6 +122,7 @@ export class BpApplyBackend implements Backend {
       extServerVersion = str(r.json.serverVersion);
     }
     const capabilities = capabilitiesFrom(tools, raw, ext);
+    this.warmAvailable = capabilities.warmSession;
     const headlessDir = str(raw?.headlessDir);
     return {
       id: "bp_apply",
@@ -130,6 +140,7 @@ export class BpApplyBackend implements Backend {
 
   async stage(modDir: string, o: { discardChanges: boolean }): Promise<StageReport> {
     const { json } = await this.call("staging_sync", { mod_dir: modDir, discard_changes: o.discardChanges });
+    this.warmStarted = false; // staging_sync stops the warm session; the next commandlet operation starts a new one
     return {
       mod: str(json.mod) ?? "",
       files: num(json.files),
@@ -157,14 +168,17 @@ export class BpApplyBackend implements Backend {
   }
 
   async read(mod: string, asset: string): Promise<AssetSnapshot> {
+    await this.ensureWarm(mod);
     const { json } = await this.call("bp_read", { mod, asset_path: asset, include_pins: false, timeout_seconds: 300 });
     const run = str(json.run) ?? "";
+    this.lastWarm = json.warm === true;
     return {
       asset,
       run,
       exportPath: join(run, "export.t3d"),
       structure: json,
       seconds: typeof json.seconds === "number" ? json.seconds : null,
+      warm: this.lastWarm,
     };
   }
 
@@ -177,13 +191,16 @@ export class BpApplyBackend implements Backend {
     const safeLabel = o.label.replace(/[^A-Za-z0-9_.-]+/g, "_");
     const specFile = join(o.cacheDir, `apply-${stamp(this.now())}-${safeLabel}.json`);
     writeFileSync(specFile, JSON.stringify(specs, null, 2), "utf8");
+    await this.ensureWarm(mod);
     const { json } = await this.call(
       "bp_apply",
       { mod, spec_file: specFile, timeout_seconds: 600, keep_on_error: o.keepOnError === true },
       { tolerate: (j) => typeof j.ok === "boolean" },
     );
     const compile = isObject(json.compile) ? json.compile : {};
+    this.lastWarm = json.warm === true;
     const result: BpApplyResult = {
+      warm: this.lastWarm,
       ok: json.ok === true,
       rolledBack: json.rolled_back === true,
       run: str(json.run) ?? "",
@@ -221,7 +238,9 @@ export class BpApplyBackend implements Backend {
   }
 
   async compile(mod: string, assets: string[]): Promise<CompileReport> {
+    await this.ensureWarm(mod);
     const { json } = await this.call("bp_compile_report", { mod, asset_paths: assets, timeout_seconds: 600 });
+    this.lastWarm = json.warm === true;
     const messages: CompileReport["messages"] = [];
     if (Array.isArray(json.messages)) {
       for (const m of json.messages) {
@@ -229,15 +248,17 @@ export class BpApplyBackend implements Backend {
         messages.push({ ...compileMessage(o), severity: o.severity === "warning" ? "warning" : "error" });
       }
     }
-    return { clean: json.clean === true, messages, run: str(json.run) ?? "", seconds: num(json.seconds) };
+    return { clean: json.clean === true, messages, run: str(json.run) ?? "", seconds: num(json.seconds), warm: this.lastWarm };
   }
 
   async reflect(r: ReflectRequest): Promise<ReflectResult> {
+    await this.ensureWarm(r.mod);
     const { json } = await this.call(
       "reflect",
       { mod: r.mod, classes: r.classes, structs: r.structs, cast_targets: r.castTargets, timeout_seconds: 900 },
       { timeoutMs: 960_000 },
     );
+    this.lastWarm = json.warm === true;
     const file = str(json.file);
     if (file === null) {
       throw new AbfcError({
@@ -270,6 +291,8 @@ export class BpApplyBackend implements Backend {
   }
 
   async gameTest(mod: string, steps: unknown[], o: { timeoutSeconds: number }): Promise<GameTestReport> {
+    this.warmStarted = false; // the game test runs cold and stops a running warm session first
+    this.lastWarm = false;
     const { json } = await this.call(
       "bp_game_test",
       { mod, steps, timeout_seconds: o.timeoutSeconds },
@@ -306,6 +329,8 @@ export class BpApplyBackend implements Backend {
   }
 
   async audit(mod: string): Promise<AuditReport> {
+    this.warmStarted = false; // the audit runs cold and stops a running warm session first
+    this.lastWarm = false;
     const { json } = await this.call(
       "mod_audit",
       { mod, timeout_seconds: 420 },
@@ -315,10 +340,29 @@ export class BpApplyBackend implements Backend {
   }
 
   async close(): Promise<void> {
+    if (this.warmStarted) {
+      this.warmStarted = false;
+      try {
+        await this.call("warm_session", { action: "stop" });
+      } catch {
+        // the server stops its warm session when it exits anyway
+      }
+    }
     await this.client.close();
   }
 
   // ------------------------------------------------------------ internals
+
+  /** Starts the warm session before the first commandlet operation (once; a failed start means every operation runs cold). */
+  private async ensureWarm(mod: string): Promise<void> {
+    if (!this.warmWanted || !this.warmAvailable || this.warmStarted || this.warmFailed) return;
+    try {
+      await this.call("warm_session", { action: "start", mod }, { timeoutMs: 300_000 });
+      this.warmStarted = true;
+    } catch {
+      this.warmFailed = true;
+    }
+  }
 
   /**
    * Calls one tool and returns its JSON object. A tool-level error becomes ABFC4002 (or ABFC4100 for memory-swap refusals)
@@ -360,7 +404,7 @@ export class BpApplyBackend implements Backend {
 }
 
 /** Spawns the backend server for `env` and wraps it. Needs python, backend dir and headless dir to be resolved. */
-export async function startBackend(env: Environment): Promise<BpApplyBackend> {
+export async function startBackend(env: Environment, o?: { cold: boolean }): Promise<BpApplyBackend> {
   const python = env.python.value;
   const backendDir = env.backendDir.value;
   const headlessDir = env.headlessDir.value;
@@ -373,6 +417,7 @@ export async function startBackend(env: Environment): Promise<BpApplyBackend> {
       "run abfc doctor and fix the errors it lists first.",
     );
   }
-  const client = await spawnBackendServer({ python, backendDir, headlessDir, editorRoot: env.editorRoot.value });
-  return new BpApplyBackend(client, { serverDir: backendDir });
+  const warm = o?.cold !== true;
+  const client = await spawnBackendServer({ python, backendDir, headlessDir, editorRoot: env.editorRoot.value, warm });
+  return new BpApplyBackend(client, { serverDir: backendDir, warm });
 }

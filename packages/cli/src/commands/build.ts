@@ -1,6 +1,7 @@
 import { applyPlan, nodeKey } from "@abfc/backend";
 import type { AssetApplyOutcome } from "@abfc/backend";
 import {
+  assetsNeedingRead,
   fingerprintUnit,
   mapCompileMessages,
   planBuild,
@@ -11,8 +12,12 @@ import {
 } from "@abfc/compiler";
 import type { Manifest, ManifestUnit, SourceMapFile } from "@abfc/compiler";
 import { parseExport, sha256 } from "@abfc/ir";
-import type { AssetPlan, Diagnostic, IrAsset, T3dNode } from "@abfc/ir";
+import type { AssetPlan, Diagnostic, IrAsset, IrModule, T3dNode } from "@abfc/ir";
+import { readLock } from "@abfc/stubgen";
+import { win32 } from "node:path";
 import type { CliContext } from "../context.js";
+import { readUnitCache, stubLockHashOf, writeUnitCache } from "../unitcache.js";
+import type { UnitCache } from "../unitcache.js";
 import {
   BackendSession,
   COMPILER_ID,
@@ -26,6 +31,17 @@ import {
   since,
 } from "./common.js";
 import { ensureStage } from "./stage.js";
+
+/** Records every unit of the owned assets as built with the current compiler and stub lock (read by the next build). */
+function writeCache(ctx: CliContext, owned: IrAsset[], cache: UnitCache, stubLockHash: string): void {
+  const next: UnitCache = { ...cache };
+  for (const a of owned) {
+    const units: UnitCache[string] = {};
+    for (const u of a.units) units[u.id] = { irHash: u.hash, stubLockHash, compilerVersion: COMPILER_ID };
+    next[a.path] = units;
+  }
+  writeUnitCache(win32.join(ctx.paths.cacheDir, "units.json"), next);
+}
 
 /** real node name -> `<unit id>/<IR node id>` */
 function invert(nodeIds: Record<string, string>): Record<string, string> {
@@ -65,20 +81,21 @@ function errorDiagnostics(
 
 /**
  * The build logic shared by `abfc build`, `abfc test` and `abfc publish`. Returns true when the stage holds the compiled
- * units (or already did) and Unreal compiled them without errors.
+ * units (or already did) and Unreal compiled them without errors. `readAll` reads every owned asset (the publish gate does this
+ * so editor drift in an unchanged asset is found); by default assets with nothing to plan are not read.
  */
-export async function runBuild(ctx: CliContext, session: BackendSession, rec: Recorder): Promise<boolean> {
+export async function runBuild(ctx: CliContext, session: BackendSession, rec: Recorder, opts: { readAll?: boolean } = {}): Promise<boolean> {
   const t0 = performance.now();
   let ok = false;
   try {
-    ok = await buildInner(ctx, session, rec);
+    ok = await buildInner(ctx, session, rec, opts.readAll === true);
     return ok;
   } finally {
     rec.record("build.total", since(t0), ok);
   }
 }
 
-async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorder): Promise<boolean> {
+async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorder, readAll: boolean): Promise<boolean> {
   const { output, config, env, args, projectDir, paths } = ctx;
   const mod = config.mod.name;
   const profile = env.profile;
@@ -90,7 +107,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   rec.record("build.frontend", since(tFront), fe.ir !== null, fe.ir === null ? 0 : countUnits(fe.ir));
   if (fe.ir === null) return false;
   const ir = fe.ir;
-  const owned = ir.assets.filter((a) => a.units.length > 0);
+  const owned = ir.assets.filter((a) => a.units.length > 0 || a.classDefaults !== undefined || a.classManagerRow !== undefined);
 
   const { backend, info } = await session.open();
   const caps = info.capabilities;
@@ -99,28 +116,48 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   const stage = await ensureStage(backend, env, config, { resync: args.flags.resync });
   rec.record("build.stage", since(tStage));
 
-  const tRead = performance.now();
+  // Units built with another compiler or stub lock, or whose cached IR hash differs from the current one (an earlier build did not
+  // finish: the cache is written last), are re-planned although the manifest's IR hash is equal.
+  const stubLockHash = stubLockHashOf(readLock(win32.join(ctx.paths.stubsDir, profile.id)));
+  const cache = readUnitCache(win32.join(ctx.paths.cacheDir, "units.json"));
+  const forceReplan = new Set<string>();
   const manifests = new Map<string, Manifest | null>();
+  for (const a of owned) {
+    manifests.set(a.path, readManifest(projectDir, a.path));
+    for (const u of a.units) {
+      const c = cache[a.path]?.[u.id];
+      if (c !== undefined && (c.stubLockHash !== stubLockHash || c.compilerVersion !== COMPILER_ID || c.irHash !== u.hash)) forceReplan.add(`${a.path} ${u.id}`);
+    }
+  }
+
+  // Assets that cannot have anything to plan are not read (no drift check there; `abfc status` still reads everything), unless `readAll`.
+  const tRead = performance.now();
+  const toRead = readAll ? new Set(owned.map((a) => a.path)) : assetsNeedingRead({ ...ir, assets: owned }, { manifests, stage, forceReplan });
+  const readAssets = owned.filter((a) => toRead.has(a.path));
+  const skipped = owned.filter((a) => !toRead.has(a.path));
   const snapshots = new Map<string, Map<string, T3dNode>>();
   const snapshotVariables = new Map<string, string[]>();
-  for (const a of owned) {
+  for (const a of readAssets) {
     const { parsed } = await readAsset(ctx, backend, a.path);
     snapshots.set(a.path, parsed.nodes);
     snapshotVariables.set(a.path, parsed.variables.map((v) => v.name));
-    manifests.set(a.path, readManifest(projectDir, a.path));
   }
-  rec.record("build.read", since(tRead), true, owned.length);
+  rec.record("build.read", since(tRead), true, readAssets.length);
 
-  const planned = planBuild(ir, {
+  const planIr: IrModule = { ...ir, assets: readAssets };
+  const planned = planBuild(planIr, {
     manifests,
     snapshots,
     stage,
     handMadeUnits: new Map(fe.hir.classes.map((c) => [c.path, c.manualUnits])),
     snapshotVariables,
+    forceReplan,
   });
   if (emitAll(ctx, planned.diagnostics)) return false;
+  for (const a of skipped) for (const u of a.units) planned.upToDate.push(`${a.path} ${u.id}`);
 
   if (planned.plan.assets.length === 0) {
+    writeCache(ctx, owned, cache, stubLockHash);
     output.info(`up to date (${planned.upToDate.length} unit(s) unchanged)`);
     output.json({ applied: [], upToDate: planned.upToDate });
     return true;
@@ -158,7 +195,10 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     return false;
   }
 
-  // Success: record the manifest and the source map of every touched asset.
+  // Success: record the manifest and the source map of every touched asset. The manifest keeps what is on the stage (nodes, hashes)
+  // but takes the IR hash of the applied units and the class defaults hash only after Unreal's compile passed: until then the
+  // applied units count as changed, so a failed compile is repeated (and reported) by the next build instead of passing as up to date.
+  const finals: Manifest[] = [];
   const stagedUnits: string[] = [];
   const appliedAssets: string[] = [];
   for (let i = 0; i < planned.plan.assets.length; i++) {
@@ -166,6 +206,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     const outcome = applied.perAsset[i]!;
     const irAsset = irByPath.get(a.asset)!;
     if (outcome.tagWarning) output.diag(outcome.tagWarning);
+    for (const d of outcome.defaultsWarnings) output.diag(d);
     const nodes = parseExport(outcome.finalText ?? (await readAsset(ctx, backend, a.asset)).text).nodes;
 
     const old = manifests.get(a.asset) ?? null;
@@ -203,7 +244,30 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
       if (at >= 0) variables[at] = entry;
       else variables.push(entry);
     }
-    writeManifest(projectDir, { asset: a.asset, compiler: COMPILER_ID, profile: profile.id, units, variables });
+    // Class defaults: the hash is recorded only when pass 5 succeeded, so a failed pass is repeated by the next build.
+    const defaultsDone = a.defaults !== undefined && outcome.defaultsApplied;
+    const classDefaultsHash = defaultsDone ? a.defaults!.hash : old?.classDefaultsHash;
+    const classDefaultsStageSyncedAt = defaultsDone ? stage.syncedAt : old?.classDefaultsStageSyncedAt;
+    const appliedIds = new Set(a.units.map((p) => p.unit.id));
+    const finalManifest: Manifest = {
+      asset: a.asset,
+      compiler: COMPILER_ID,
+      profile: profile.id,
+      units,
+      variables,
+      ...(classDefaultsHash !== undefined ? { classDefaultsHash } : {}),
+      ...(classDefaultsStageSyncedAt !== undefined ? { classDefaultsStageSyncedAt } : {}),
+    };
+    finals.push(finalManifest);
+    writeManifest(projectDir, {
+      asset: a.asset,
+      compiler: COMPILER_ID,
+      profile: profile.id,
+      variables,
+      units: units.map((u) => (appliedIds.has(u.id) ? { ...u, irHash: "" } : u)),
+      ...(old?.classDefaultsHash !== undefined ? { classDefaultsHash: old.classDefaultsHash } : {}),
+      ...(old?.classDefaultsStageSyncedAt !== undefined ? { classDefaultsStageSyncedAt: old.classDefaultsStageSyncedAt } : {}),
+    });
     writeSourceMap(projectDir, sourceMapOf(irAsset, { ...previousNames(old), ...outcome.nodeIds }));
     appliedAssets.push(a.asset);
   }
@@ -229,8 +293,10 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     }
     return false;
   }
+  for (const m of finals) writeManifest(projectDir, m);
   for (const m of report.messages) if (m.severity === "warning" && args.flags.verbose) output.info(`[Unreal warning] ${m.message}`);
 
+  writeCache(ctx, owned, cache, stubLockHash);
   output.info(`applied ${stagedUnits.join(", ")} in ${appliedAssets.join(", ")} (route: ${route})`);
   output.json({ applied: stagedUnits, assets: appliedAssets, route, upToDate: planned.upToDate });
   return true;

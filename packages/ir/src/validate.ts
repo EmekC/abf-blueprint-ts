@@ -10,6 +10,7 @@ export function validateIrModule(m: IrModule): string[] {
   const problems: string[] = [];
   for (const asset of m.assets) {
     if (!asset.path.startsWith(`/${m.mod}/`)) problems.push(`asset ${asset.path}: path must start with /${m.mod}/`);
+    const unitIds = new Map(asset.units.map((u) => [u.id, new Set(u.nodes.map((n) => n.id))]));
     for (const unit of asset.units) {
       const where = `${asset.path} ${unit.id}`;
       const ids = new Set<string>();
@@ -25,6 +26,12 @@ export function validateIrModule(m: IrModule): string[] {
             problems.push(`${where}: node ${n.id} pinTypes.${pin}: ${(e as Error).message}`);
           }
         }
+      }
+      for (const cw of unit.crossWires ?? []) {
+        const other = unitIds.get(cw.toUnit);
+        if (!other) problems.push(`${where}: cross wire to unknown unit "${cw.toUnit}"`);
+        else if (!other.has(cw.from.slice(0, cw.from.indexOf(".")))) problems.push(`${where}: cross wire source "${cw.from}" names an undeclared node of ${cw.toUnit}`);
+        if (!ids.has(cw.to.slice(0, cw.to.indexOf(".")))) problems.push(`${where}: cross wire target "${cw.to}" names an undeclared node`);
       }
       for (const wire of unit.wires) {
         for (const end of wire) {

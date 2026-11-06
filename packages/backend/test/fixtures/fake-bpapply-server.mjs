@@ -20,7 +20,7 @@ const BACKEND_INFO = {
   editorRoot: null,
   headlessDir: "C:\\fake-headless",
   documentsDir: "C:\\fake-docs",
-  capabilities: { pinTypes: true, containerTypes: { array: true, map: true, set: false } },
+  capabilities: { pinTypes: true, containerTypes: { array: true, map: true, set: false }, warmSession: true, stageAudit: true },
   bpApply: { features: ["cast_object_pin", "map_types", "pin_types"], nodeKinds: ["call", "cast", "event"] },
 };
 const EXTENSIONS = {
@@ -41,8 +41,10 @@ const ALL = [
   "bp_compile_report",
   "bp_game_test",
   "mod_audit",
+  "warm_session",
   "bp_publish",
 ];
+let warmRunning = false;
 const listed = config.tools ?? ALL;
 const backendInfo = "backendInfo" in config ? config.backendInfo : BACKEND_INFO;
 const extensions = "extensions" in config ? config.extensions : EXTENSIONS;
@@ -57,7 +59,11 @@ function callTool(name, args) {
       return backendInfo === null ? text("Unknown tool backend_info", true) : json(backendInfo);
     case "abfc_extensions":
       return extensions === null ? text("Unknown tool abfc_extensions", true) : json(extensions);
+    case "warm_session":
+      warmRunning = args.action === "start";
+      return json({ running: warmRunning });
     case "staging_sync":
+      warmRunning = false;
       return json({ mod: "TestMod", files: 7, staging_path: "C:\\fake\\stage\\TestMod", message: "Staged TestMod." });
     case "staging_status":
       if (args.mod === "ghost") return text("mod ghost is not staged: run staging_sync first", true);
@@ -113,9 +119,10 @@ function callTool(name, args) {
       });
     }
     case "bp_read":
-      return json({ blueprint: "BP_A", graphs: {}, asset: args.asset_path, run: "C:\\fake\\runs\\read-1", seconds: 4.2 });
+      return json({ blueprint: "BP_A", graphs: {}, asset: args.asset_path, run: "C:\\fake\\runs\\read-1", seconds: 4.2, warm: warmRunning });
     case "bp_compile_report":
       return json({
+        warm: warmRunning,
         clean: false,
         unchecked: [],
         error_count: 1,
