@@ -1,7 +1,6 @@
 node_modules/
 .abfc/cache/
 *.log
-spike/out/
 dist/
 *.tsbuildinfo
 .plans/

@@ -8,13 +8,13 @@ export type IrType = string; // bp_apply type grammar: "int", "object:/Script/En
 export interface IrModule {
   irVersion: 1;
   profile: string; // "ue5.4.4-1050002"
-  mod: string; // "goodsoupWagdD"
+  mod: string; // "ExampleMod"
   assets: IrAsset[];
   /** class path -> meta class path (WidgetBlueprintGeneratedClass vs BlueprintGeneratedClass) used for pin object text. */
   classMeta: Record<string, string>;
 }
 export interface IrAsset {
-  path: string; // "/goodsoupWagdD/SoupInfo/BP_SoupInfoRelay" (always under /<mod>/)
+  path: string; // "/ExampleMod/PotInfo/BP_PotInfoRelay" (always under /<mod>/)
   create?: { kind: "Blueprint" | "WidgetBlueprint" | "BlueprintInterface" | "UserDefinedStruct"; parent: string };
   classDefaults?: Record<string, string>; // property -> T3D value text
   /** Row asset path whose class reference is verified (read-only) by the class-defaults pass. */

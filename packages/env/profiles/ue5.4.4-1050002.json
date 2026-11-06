@@ -66,9 +66,9 @@
   "castObjectPinType": "object:/Script/CoreUObject.Object",
   "variableFlags": { "base": 4, "transient": 8192 },
   "filterOverrides": [
-    { "parent": "/Script/Engine.Controller", "member": "K2_GetPawn", "reason": "mod_audit passed Good Soup" },
-    { "parent": "/Script/Engine.Controller", "member": "IsLocalController", "reason": "mod_audit passed Good Soup" },
-    { "cast": "/Script/Engine.PlayerController", "reason": "mod_audit passed Good Soup" }
+    { "parent": "/Script/Engine.Controller", "member": "K2_GetPawn", "reason": "passed mod_audit on a published mod" },
+    { "parent": "/Script/Engine.Controller", "member": "IsLocalController", "reason": "passed mod_audit on a published mod" },
+    { "cast": "/Script/Engine.PlayerController", "reason": "passed mod_audit on a published mod" }
   ],
   "knownLimits": ["PrintString is not logged", "no live HUD in hidden runs", "user pure functions rejected"]
 }

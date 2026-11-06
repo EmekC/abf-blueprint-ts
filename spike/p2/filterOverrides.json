@@ -1,8 +1,0 @@
-{
-  "profile": "ue5.4.4-1050002",
-  "filterOverrides": [
-    { "parent": "/Script/Engine.Controller", "member": "K2_GetPawn", "reason": "mod_audit passed Good Soup" },
-    { "parent": "/Script/Engine.Controller", "member": "IsLocalController", "reason": "mod_audit passed Good Soup" },
-    { "cast": "/Script/Engine.PlayerController", "reason": "mod_audit passed Good Soup" }
-  ]
-}

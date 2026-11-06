@@ -1,6 +1,6 @@
 # abfc: TypeScript to Blueprint compiler for Abiotic Factor mods (design, phase 1)
 
-Status: draft for review. Phase 0 ran on 2026-11-05 and its results are in `docs/spike-results.md`. Facts marked **(verified in Phase 0, P<n>)** were confirmed on the cooked Mod Editor. Facts still marked **(unverified)** were not settled by a probe and are listed in the "Remaining (unverified)" section of the results.
+Status: draft for review. Phase 0 (2026-11-05) ran probes P1 to P9 (listed in docs/roadmap.md) on the cooked Mod Editor. Facts marked **(verified in Phase 0, P<n>)** were confirmed by probe P<n>. Facts still marked **(unverified)** were not settled by a probe.
 
 Target: Mod Editor 1.5.0, engine `5.4.4-1050002+++DF+ABF`, Windows only. MIT, public, published as npm packages. The only supported backend is `https://github.com/EmekC/abf-mod-editor-mcp`. abfc depends on no other backend repository.
 
@@ -29,15 +29,15 @@ Non-goals (phase 1)
 The mod project (the `.uplugin` folder, usually `<Documents>\Abiotic Factor Mods\<Mod>`) and the TS project are separate folders. `abfc init` refuses to create a TS project inside a mod folder: it walks up from the target and fails if any ancestor holds a `.uplugin`.
 
 ```
-goodsoup-ts/                      # TS project, its own git repo
+example-mod-ts/                   # TS project, its own git repo
   abf.config.json                 # project config, committed, no machine paths
   package.json                    # devDependencies: @abfc/cli, typescript (exact), engines.node
   .nvmrc                          # 24
   tsconfig.json                   # strict, paths -> .abfc/stubs, plugin @abfc/ts-plugin
   eslint.config.js                # @abfc/eslint-plugin recommended
   src/
-    SoupInfoRelay.ts              # @blueprint classes
-    SoupInfoRelay.test.ts         # compiled to bp_game_test steps
+    PotInfoRelay.ts               # @blueprint classes
+    PotInfoRelay.test.ts          # compiled to bp_game_test steps
   .abfc/                          # gitignored except manifest/
     stubs/<profileId>/...         # generated per machine (never committed)
     manifest/<asset>.json         # ownership + hashes (committed)
@@ -54,7 +54,7 @@ goodsoup-ts/                      # TS project, its own git repo
 ```json
 {
   "$schema": "./node_modules/@abfc/cli/schema/abf.config.schema.json",
-  "mod": { "name": "goodsoupWagdD" },
+  "mod": { "name": "ExampleMod" },
   "sources": ["src/**/*.ts"],
   "stubs": {
     "classes": [
@@ -161,9 +161,9 @@ Type-checker isolation: `packages/compiler/src/frontend/` is the only code that 
 
 `tsconfig` is generated strict: `strict`, `strictNullChecks`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `noImplicitOverride`, `useDefineForClassFields`, with TS standard decorators (not `experimentalDecorators`). Decorators never run: the compiler reads them statically.
 
-### 4.3 Example: Good Soup relay, `UpdateTarget`
+### 4.3 Example: an info relay, `UpdateTarget`
 
-The hand-made graph, read from the staged copy on 2026-11-05 (41 nodes in `EventGraph`, `K2Node_CustomEvent_3`), does this: `OwnerPC.K2_GetPawn` -> cast to `Abiotic_PlayerCharacter_C` -> read `BestInteractable_InteractA` -> cast to `Deployed_PotOfSoup_C` -> IsValid macro -> branch on `CanFillSoupBowl` -> compare with `LastTarget`/`LastRowName` (BooleanAND) -> set both -> `GetGlobalItemRow` (Valid/NotValid) -> break `AbioticInventoryItem` -> `AbioticConsumable` -> skip when hunger, thirst and buff count are all zero -> `ForEachLoop` over `Infos` -> `ShowSoup` -> `bLastVisible = true`. Every failure path calls `HideAll`. The first ones also clear `LastTarget`.
+In the example mod `ExampleMod`, the relay actor `BP_PotInfoRelay` has a hand-made event `UpdateTarget` (about 41 nodes in `EventGraph`) that does this: `OwnerPC.K2_GetPawn` -> cast to `Abiotic_PlayerCharacter_C` -> read `BestInteractable_InteractA` -> cast to `Deployed_PotOfSoup_C` -> IsValid macro -> branch on `CanFillSoupBowl` -> compare with `LastTarget`/`LastRowName` (BooleanAND) -> set both -> `GetGlobalItemRow` (Valid/NotValid) -> break `AbioticInventoryItem` -> `AbioticConsumable` -> skip when hunger, thirst and buff count are all zero -> `ForEachLoop` over `Infos` -> `ShowInfo` -> `bLastVisible = true`. Every failure path calls `HideAll`. The first ones also clear `LastTarget`.
 
 ```ts
 import { blueprint, event, cast, isValid } from "@abfc/runtime";
@@ -171,12 +171,12 @@ import { Actor } from "/Script/Engine";
 import { GlobalItemHandleFunctionLibrary as Items } from "/Script/AbioticFactor";
 import { Abiotic_PlayerCharacter_C } from "/Game/Blueprints/Characters/Abiotic_PlayerCharacter";
 import { Deployed_PotOfSoup_C } from "/Game/Blueprints/DeployedObjects/Furniture/Deployed_PotOfSoup";
-import type { BP_SoupInfoRelay_Manual } from "/goodsoupWagdD/SoupInfo/BP_SoupInfoRelay";
+import type { BP_PotInfoRelay_Manual } from "/ExampleMod/PotInfo/BP_PotInfoRelay";
 
-export interface BP_SoupInfoRelay extends BP_SoupInfoRelay_Manual {} // OwnerPC, LastTarget, Infos, HideAll...
+export interface BP_PotInfoRelay extends BP_PotInfoRelay_Manual {} // OwnerPC, LastTarget, Infos, HideAll...
 
-@blueprint({ path: "/goodsoupWagdD/SoupInfo/BP_SoupInfoRelay" })
-export class BP_SoupInfoRelay extends Actor {
+@blueprint({ path: "/ExampleMod/PotInfo/BP_PotInfoRelay" })
+export class BP_PotInfoRelay extends Actor {
   @event
   UpdateTarget(): void {
     const player = cast(this.OwnerPC?.K2_GetPawn(), Abiotic_PlayerCharacter_C);
@@ -195,7 +195,7 @@ export class BP_SoupInfoRelay extends Actor {
     const c = row.Data.ConsumableData;
     if (c.HungerFill === 0 && c.ThirstFill === 0 && c.BuffsToAdd.length === 0) { this.HideAll(); return; }
     for (const info of this.Infos) {
-      if (isValid(info)) info.ShowSoup(c.HungerFill, c.ThirstFill, c.BuffsToAdd, c.BuffsToRemove, true);
+      if (isValid(info)) info.ShowInfo(c.HungerFill, c.ThirstFill, c.BuffsToAdd, c.BuffsToRemove, true);
     }
     this.bLastVisible = true;
   }
@@ -219,12 +219,12 @@ n0   CallFunction Items.Conv_GlobalItemToName(ItemRow)  ; 2 consumers -> cached:
 s0   VariableSet abfc_UpdateTarget_t0 = n0
 e0   EqualEqual_ObjectObject(c1.As..., LastTarget) ; b2 Branch(e0) -> then: e1 EqualEqual_NameName(t0, LastRowName); b3 Branch(e1) then -> return
 ...  VariableSet LastTarget, VariableSet LastRowName(t0), CallFunction GetGlobalItemRow (Valid / NotValid exec pins)
-...  BreakStruct AbioticInventoryItem -> BreakStruct AbioticConsumable (cached: used by compare and by ShowSoup)
+...  BreakStruct AbioticInventoryItem -> BreakStruct AbioticConsumable (cached: used by compare and by ShowInfo)
 ...  3 chained Branches for the && chain, loop (counter var abfc_UpdateTarget_i0, Array_Length, Array_Get, back-edge)
 F1   CallFunction HideAll -> VariableSet LastTarget = None
 ```
 
-Behavior matches the original, except for the extra IsValid on `OwnerPC`, which removes an "Accessed None" on unowned relays. The `&&` chains become Branch chains instead of BooleanAND. The existing caller (`K2Node_CallFunction_9` in RelayTick, which calls `UpdateTarget` by name) keeps working because the event name does not change. Pin names here (`CastFailed`, `ReturnValue`, `Valid`, `NotValid`, `Data`, `InHandle`, `RowHandle`) are the ones in today's export, and the stubs reproduce them byte-for-byte (verified in Phase 0, P1). Phase 0 also built and ran this slice against a staged copy (P3): the original unit is 41 nodes, the lowered one 51, and it compiled clean with the existing Verify 2 results unchanged and the `RelayTick` call still linked. The caller's `MemberGuid` stays stale after the event is replaced and still resolves by name. The real graph differs in detail from this example (no `OwnerPC` `IsValid`, a `StandardMacros` `IsValid` on the pot, and `Double` zero checks plus `Array_Length` ANDed); the spike followed the original data flow. The slice built only after the wildcard pins of the array and cast nodes were resolved (7.3).
+Behavior matches the original, except for the extra IsValid on `OwnerPC`, which removes an "Accessed None" on unowned relays. The `&&` chains become Branch chains instead of BooleanAND. A hand-made caller that calls `UpdateTarget` by name (for example in `RelayTick`) keeps working because the event name does not change. Pin names here (`CastFailed`, `ReturnValue`, `Valid`, `NotValid`, `Data`, `InHandle`, `RowHandle`) are the ones in today's export, and the stubs reproduce them byte-for-byte (verified in Phase 0, P1). Phase 0 built and ran an equivalent slice of a real mod against a staged copy (P3): the original unit was 41 nodes, the lowered one 51, it compiled clean, the mod's existing game test still passed and the caller still linked. The caller's `MemberGuid` stays stale after the event is replaced and still resolves by name. The real graph differed in detail from this example (no `OwnerPC` `IsValid`, a `StandardMacros` `IsValid` on the pot, and `Double` zero checks plus `Array_Length` ANDed); the probe followed the original data flow. The slice built only after the wildcard pins of the array and cast nodes were resolved (7.3).
 
 ## 5. Stubs: generation and versioning
 
@@ -277,11 +277,11 @@ Every `abfc check` and `abfc build` compares the lock with the current editor fi
 export interface IrModule {
   irVersion: 1;
   profile: string;                      // "ue5.4.4-1050002"
-  mod: string;                          // "goodsoupWagdD"
+  mod: string;                          // "ExampleMod"
   assets: IrAsset[];
 }
 export interface IrAsset {
-  path: string;                         // "/goodsoupWagdD/SoupInfo/BP_SoupInfoRelay" (always under /<mod>/)
+  path: string;                         // "/ExampleMod/PotInfo/BP_PotInfoRelay" (always under /<mod>/)
   create?: { kind: "Blueprint" | "WidgetBlueprint" | "BlueprintInterface" | "UserDefinedStruct"; parent: string };
   classDefaults?: Record<string, string>;      // property -> T3D value text (True/False, %f floats)
   classManagerRow?: string;                    // row asset path, verified read-only in pass 5
@@ -427,7 +427,7 @@ Node classes that bp_apply's `k` kinds do not express and that go through `k: "n
 
 Other mappings:
 - `multiPassPerAsset`: whether one bp_apply batch may list the same asset several times is **unverified**. If it may not, the adapter issues one bp_apply call per pass. bp_apply then rolls back only the failing call, so `transactional` is false and the CLI re-runs `staging_sync` with `discard_changes` on failure. That is safe because staging is abfc's build area and the real mod stays untouched until publish.
-- Capabilities today: `headless`, `rawNodes`, `classDefaults`, `nodeNameMap` (`node_ids`), `gameTest`, `audit`, `publish` are true. `nativeNodeKinds` (native array, struct and cast kinds with explicit pin types; the capability name is a proposal for Phase 6), `containerTypes.map/set` (map: capability false until a stage audit passes; compile and game test passed; it needs the local patch `spike/backend-p6-map.patch` to land upstream), `userPureFunctions`, `functionLocals`, `compileErrorNodeRefs` (the parser drops the `from Source:` node path) and `warmSession` are false. Each false one is a small, separate backend extension (section 14).
+- Capabilities today: `headless`, `rawNodes`, `classDefaults`, `nodeNameMap` (`node_ids`), `gameTest`, `audit`, `publish` are true. `nativeNodeKinds` (native array, struct and cast kinds with explicit pin types; the capability name is a proposal for Phase 6), `containerTypes.map/set` (map: capability false until a stage audit passes; compile and game test passed; it needs the Phase 0 map patch (section 14) to land upstream), `userPureFunctions`, `functionLocals`, `compileErrorNodeRefs` (the parser drops the `from Source:` node path) and `warmSession` are false. Each false one is a small, separate backend extension (section 14).
 - The memory-swap approach discovers offsets per build and refuses rather than guess. abfc shows that refusal as `ABFC4100: the bp_apply backend refused (<reason>) — this editor build may need a backend update.` It never retries with other settings.
 
 ### 7.4 Adapter (b): `import_nodes` (future)
@@ -446,12 +446,12 @@ Owned: the units (functions, custom events, overrides) and the variables (includ
 
 ### 8.2 Tags inside the asset
 
-Each owned unit gets one `EdGraphNode_Comment` around its region: `abfc:owned unit=event:UpdateTarget src=src/SoupInfoRelay.ts ir=<sha8> — generated by abfc, edit the .ts file`. The tag is visible to anyone who opens the graph, survives in the asset, and lets `abfc status` rebuild ownership if the manifest is lost (it then asks the user to confirm). Comment nodes do not affect compile or audit (the existing Good Soup comments passed the audit).
+Each owned unit gets one `EdGraphNode_Comment` around its region: `abfc:owned unit=event:UpdateTarget src=src/PotInfoRelay.ts ir=<sha8> — generated by abfc, edit the .ts file`. The tag is visible to anyone who opens the graph, survives in the asset, and lets `abfc status` rebuild ownership if the manifest is lost (it then asks the user to confirm). Comment nodes do not affect compile or audit (comment boxes in a published mod passed the audit).
 
 ### 8.3 Manifest (`.abfc/manifest/<asset>.json`, committed)
 
 ```json
-{ "asset": "/goodsoupWagdD/SoupInfo/BP_SoupInfoRelay", "compiler": "0.1.0", "profile": "ue5.4.4-1050002",
+{ "asset": "/ExampleMod/PotInfo/BP_PotInfoRelay", "compiler": "0.1.0", "profile": "ue5.4.4-1050002",
   "units": [{ "id": "event:UpdateTarget", "graph": "EventGraph", "irHash": "sha256:...", "assetHash": "sha256:...",
               "nodes": ["K2Node_CustomEvent_12", "K2Node_CallFunction_77", "..."], "tag": "EdGraphNode_Comment_31" }],
   "variables": [{ "name": "abfc_UpdateTarget_t0", "type": "name", "hash": "sha256:..." }] }
@@ -461,7 +461,7 @@ Each owned unit gets one `EdGraphNode_Comment` around its region: `abfc:owned un
 
 Drift check (every build, before apply): `read()` each asset with owned units, recompute `assetHash`, and compare.
 - Equal: the unit is safe to replace.
-- Different: `ABFC5001: BP_SoupInfoRelay event UpdateTarget was edited in the editor since the last build (3 nodes changed, 1 link added). abfc will not overwrite it. Undo the edit in the editor, or move it into src/SoupInfoRelay.ts and run "abfc adopt ... --discard-editor-changes".` There is no silent force flag.
+- Different: `ABFC5001: BP_PotInfoRelay event UpdateTarget was edited in the editor since the last build (3 nodes changed, 1 link added). abfc will not overwrite it. Undo the edit in the editor, or move it into src/PotInfoRelay.ts and run "abfc adopt ... --discard-editor-changes".` There is no silent force flag.
 - An owned node is missing: same error (`ABFC5002`).
 - A foreign node links into an owned unit (for example a hand-made call to `UpdateTarget`): allowed, and recorded so the link is restored after replacement. The call references the event by name, so recreating it keeps the link valid.
 
@@ -477,7 +477,7 @@ Drift check (every build, before apply): `read()` each asset with owned units, r
 - Without a node reference, it maps to the unit's span, with the message prefixed `(node not identified)`.
 - A runtime error in a test (`Accessed None ... Node: <title> Graph: <graph> Function: <fn>`) maps to the unit, and to the node when the title is unique in the unit (unverified log format: Phase 0 captured no sample, because the harness logged no "Accessed None" line even for the original graph's null `OwnerPC` path).
 
-Printed as `src/SoupInfoRelay.ts:14:5: error ABFC6001: [Unreal] <message>`.
+Printed as `src/PotInfoRelay.ts:14:5: error ABFC6001: [Unreal] <message>`.
 
 ## 9. Environment discovery and config
 
@@ -525,9 +525,9 @@ Code ranges: 1xxx environment, 2xxx TS subset and lowering, 3xxx stubs and profi
 ## 10. Incremental build and warm editor
 
 - Unit-level incrementality: `cache/units.json` (`{asset: {unit id: {irHash, stubLockHash, compilerVersion}}}`) holds `irHash + stubLockHash + compilerVersion` per unit. A unit whose stubLockHash or compilerVersion differs, or whose cached irHash differs from the current IR hash (an earlier build did not finish), is re-planned even when the manifest's irHash is equal. Only changed units, plus the shells of new units and the owners of delegate wires to a planned unit, go into the ApplyPlan. An asset with no planned unit and no class-defaults change is not read at all (no drift check there; `abfc status` still reads every asset), so a stage edit of an owned node in an untouched asset is found by `abfc status`, by the publish gate (which reads every owned asset) or when that unit is next re-planned. A change to a signature also re-plans that unit's callers in owned code (hand-made callers are recompiled by the engine).
-- `abfc check` never launches the editor. In watch mode it reruns the frontend and lowering on change (target under 1 s for a mod the size of Good Soup).
+- `abfc check` never launches the editor. In watch mode it reruns the frontend and lowering on change (target under 1 s for a small mod (a few Blueprint assets)).
 - Staging: abfc runs `staging_sync` when `staging_status` shows conflicts or a real-mod change, and otherwise reuses the stage, so successive builds stack on it. A failure inside `bp_apply` rolls back that call on the backend (verified live in Phase 2: stage bytes identical after a failed apply). Open gap: the passes are not one transaction. When the post-apply `bp_compile_report` finds errors, the build fails but the applied passes stay on the stage (the manifests are written with what is on the stage, but without the IR hash of the applied units and without the new class defaults hash, and the unit cache is not written, so the next build re-applies those units, reports the error again and a publish gate 3 on it fails; the hashes are recorded only after the compile passed); the stage is only discarded by `abfc build --resync` or `staging_sync` with `discard_changes`. A backend restore tool for this case is a follow-up.
-- Cold cost today: each bp_apply, compile report or reflect call launches its own commandlet (about 10 s of launch overhead per the server's notes, plus the work). `bp_game_test` launches a `-game` process, and `mod_audit` a hidden editor. Measured in Phase 0 (P8): one asset cold apply + compile report + game test took 58.6 s as built today (20.5 failed first apply + 11.9 + 11.6 + 14.6; 38.1 s once pin types are resolved up front), the full Good Soup Verify 2 run 38.8 s, and `mod_audit` 44.5 s. A cold reflect of the relay's classes took about 60 to 70 s (estimate) and happens once per game version. A failed first apply (wildcard pins) adds 10 to 20 s, so the adapter resolves pin types before the first apply. The warm editor (below) is the Phase 2 answer.
+- Cold cost today: each bp_apply, compile report or reflect call launches its own commandlet (about 10 s of launch overhead per the server's notes, plus the work). `bp_game_test` launches a `-game` process, and `mod_audit` a hidden editor. Measured in Phase 0 (P8): one asset cold apply + compile report + game test took 58.6 s as built today (20.5 failed first apply + 11.9 + 11.6 + 14.6; 38.1 s once pin types are resolved up front), a full multi-step game test of the real mod 38.8 s, and `mod_audit` 44.5 s. A cold reflect of the relay's classes took about 60 to 70 s (estimate) and happens once per game version. A failed first apply (wildcard pins) adds 10 to 20 s, so the adapter resolves pin types before the first apply. The warm editor (below) is the Phase 2 answer.
 - Warm editor (Phase 2, backend extension `warmSession`, implemented): the server (opt-in with `ABF_WARM_SESSION=1`, tool `warm_session {action: start|stop|status}`) keeps one hidden `-run=pythonscript` commandlet alive. Its loop script polls `<root>/warm/<session>/queue/*.json`, reloads the staged mod's packages (`EditorLoadingAndSavingUtils.reload_packages`) before each job, runs the job through the same dispatcher as cold jobs, writes `result.json` into the job's run folder and deletes the queue file. It exits on `stop.json` or after an idle timeout (`ABF_WARM_IDLE_SECONDS`, default 600). Same `-userdir`, one lock, so all operations are serialized. On any warm failure (dead process, timeout) the server kills the process tree (Job Object) and reruns the job cold; results carry `warm: bool` and `seconds`. The reload phase logs stale-class compile errors for cross-asset references; the server cuts the job log at the reload marker (reload-phase lines go to `reload.log`), so they do not count as compile errors of the job. `staging_sync`, `bp_game_test` and `mod_audit` stop or bypass the session. The warm editor lives only as long as the server process, so every abfc command that touches the editor pays one editor start (about 10 s); `abfc test` gets no warm benefit (each test is its own `-game` process). `--cold` clears an inherited `ABF_WARM_SESSION`. abfc starts the server with the opt-in unless `--cold`, calls `warm_session start` lazily before the first commandlet operation (a failed start means cold for the rest of the run), restarts after a stage sync and stops it on close.
 - Every step's duration goes to `.abfc/runs.jsonl` (`{step, seconds, units, mode: "cold"|"warm"}`), and `abfc build --timings` prints them.
 
@@ -537,10 +537,10 @@ Test files run in Node, not in the game. `@abfc/testkit` records a step list: ha
 
 ```ts
 import { test } from "@abfc/testkit";
-import { BP_SoupInfoRelay } from "./SoupInfoRelay";
+import { BP_PotInfoRelay } from "./PotInfoRelay";
 
 test("unowned relay stops ticking and never builds UI", async (t) => {
-  const relay = t.spawn(BP_SoupInfoRelay);
+  const relay = t.spawn(BP_PotInfoRelay);
   t.expect(relay.call("GetActorTickInterval")).approx(0.1, 0.001);
   t.wait(1);
   t.expect(relay.call("IsActorTickEnabled")).equals(true);
@@ -553,10 +553,10 @@ test("unowned relay stops ticking and never builds UI", async (t) => {
 ```
 
 - Steps map 1:1 to bp_game_test ops (`new`, `spawn`, `widget`, `call`, `get`, `set`, `find`, `wait`, `assert`, `python`). Member names are checked against the stubs, so a typo is a TS error. `call` uses the Python-side name (`get_actor_tick_interval`), which testkit derives from the stub's real name using the profile's naming rule (unverified for every case; `t.raw.call("snake_name")` is the escape hatch).
-- Each step keeps the `Span` of its `t.*` call, so a failed assert prints `src/SoupInfoRelay.test.ts:9:3: error ABFC6101: expected false, got true (step 7)`.
+- Each step keeps the `Span` of its `t.*` call, so a failed assert prints `src/PotInfoRelay.test.ts:9:3: error ABFC6101: expected false, got true (step 7)`.
 - `test.liveHud(...)` marks tests that need `W_PlayerHUD_Main`. The hidden game has no live HUD, so these are skipped hidden with a warning and listed in a "manual checks" report. Widget injection into `W_PlayerHUD_InteractionPrompt_C` cannot be tested hidden. A PIE-based runner through the open editor is a later optional extra.
 - `PrintString` is not logged in this build, so tests read state back with `get`, never from logs.
-- The public repo's own tests use synthetic fixtures (made-up classes and reflection JSON) and no Deep Field content. The Good Soup end-to-end test runs only on a machine that has the mod, and lives in the Good Soup TS project.
+- The public repo's own tests use synthetic fixtures (made-up classes and reflection JSON) and no Deep Field content. The end-to-end test against a real mod runs only on a machine that has that mod, and lives in that mod's TS project.
 
 ## 12. Release gate (`abfc publish`)
 
@@ -582,7 +582,7 @@ All items land in `EmekC/abf-mod-editor-mcp`. Each item is small and gated by a 
 2. `reflect` op for stubs (required for `abfc stubs`).
 3. Compile messages keep the `from Source:` node path (`compileErrorNodeRefs`).
 4. Required for Phase 1 (from Phase 0 probes P5, P3, P6): native node kinds `array_call`, `break_struct`, `make_struct`, with pin-type resolution for every wildcard-capable node (array functions, `GetArrayItem`, `cast`, `Map_*`, and untested `Select`, `MakeArray`, macros). Gated by a capability.
-5. Optional: map types in the type grammar (`map:<K>:<V>`, patch `spike/backend-p6-map.patch`, `set:` still refused), UserDefinedStruct creation and field authoring (Python can create the struct but not set its fields in this build, and mod struct types need the full object path), function local variables, `warmSession`.
+5. Optional: map types in the type grammar (`map:<K>:<V>`, prototyped as a patch in Phase 0; recover it from git history at commit `8278ba6`, path `spike/backend-p6-map.patch`, `set:` still refused), UserDefinedStruct creation and field authoring (Python can create the struct but not set its fields in this build, and mod struct types need the full object path), function local variables, `warmSession`.
 6. `mod_audit` must audit the staged copy (in Phase 0 it mounted the real mod folder, so the P3, P6 and P7 audit results are not verified), and `bp_read` and reflect runs should return `seconds`.
 7. Single backend: the headless tools (bpkit, staging, headless runs) already live in `EmekC/abf-mod-editor-mcp`, which is the one supported backend. abfc checks `protocol` through `backend_info`, and server version numbers are owned only by that repository.
 
@@ -593,7 +593,7 @@ All items land in `EmekC/abf-mod-editor-mcp`. Each item is small and gated by a 
 - Nothing is published without the gate, and nothing is ever uploaded.
 - No silent overwrite of manual edits (ABFC5001). No force flags in phase 1.
 - Pass-5 class-default Python is generated from a fixed template with validated property names and values. User text never becomes Python code.
-- Nothing derived from Deep Field content is committed or published: stubs, the filter list and reflection caches are per machine and gitignored, and the public repo uses synthetic fixtures only. Docs may name classes and members (Good Soup example).
+- Nothing derived from Deep Field content is committed or published: stubs, the filter list and reflection caches are per machine and gitignored, and the public repo uses synthetic fixtures only. Docs may name base-game classes and members (as in the example in 4.3).
 - Run folders and logs can hold tokens (per the server README). abfc never copies them into the project, and prints paths, not contents.
 - Hidden processes are owned by the server (Job Object). abfc closes the server's stdin on exit and kills its process tree on Ctrl+C.
 
@@ -612,7 +612,7 @@ All items land in `EmekC/abf-mod-editor-mcp`. Each item is small and gated by a 
 | No live HUD in hidden runs | Widget injection untested | `liveHud` tests skipped with a manual checklist. Optional PIE runner later. |
 | `mod_audit` depends on a fragile Mod Browser tile click | Gate cannot run | Fails closed with the reason. `ABF_PICKER_TILE` override documented. |
 | Branch-only lowering makes graphs larger than hand-made ones | Readability, tiny perf cost | Layout regions, comment tags. Later the pure-operand optimization. |
-| Temps as member variables in event graphs | Asset clutter | Owned, prefixed, transient. Later `K2Node_TemporaryVariable` (already used by the Good Soup plans). |
+| Temps as member variables in event graphs | Asset clutter | Owned, prefixed, transient. Later `K2Node_TemporaryVariable` (already used in hand-made mod graphs). |
 | Same asset listed several times in one bp_apply batch (unverified) | Atomicity | One call per pass plus a resync on failure. |
 | Replacing an owned function whose signature changed: hand-made callers may break between passes (unverified) | Callers lose links | Keep the graph and replace the body when the signature is unchanged. On a signature change, warn and re-check foreign callers after compile. |
 | Backend extensions (section 14) are late | Optional features and stubs missing | They are all in `EmekC/abf-mod-editor-mcp`, under the same owner. abfc gates each one by capability and checks `protocol`. |

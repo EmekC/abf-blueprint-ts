@@ -1,5 +1,0 @@
-{
-  "extends": "../tsconfig.base.json",
-  "compilerOptions": { "rootDir": ".", "outDir": "dist", "tsBuildInfoFile": "dist/.tsbuildinfo", "noEmit": false, "emitDeclarationOnly": true, "experimentalDecorators": false },
-  "include": ["*.ts", "../runtime/index.d.ts"]
-}

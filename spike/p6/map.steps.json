@@ -1,8 +1,0 @@
-[
- {"op":"spawn","class":"/goodsoupWagdD/_abfcSpike/BP_MapProbe.BP_MapProbe_C","as":"m"},
- {"op":"python","as":"r","code":"res=ctx['m'].call_method('AddAndFind',('Apple',7))\nresult=str(res)"},
- {"op":"python","as":"c","code":"result=str(dict(ctx['m'].get_editor_property('Counts')))"},
- {"op":"assert","value":"$r","contains":"7"},
- {"op":"assert","value":"$r","contains":"True"},
- {"op":"assert","value":"$c","contains":"Apple"}
-]

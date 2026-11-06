@@ -6,12 +6,10 @@ Repository: https://github.com/EmekC/abf-blueprint-ts
 
 ## Status
 
-Phase 1 (one real mod slice, Good Soup `UpdateTarget`) is in progress. The offline parts are implemented and tested against a fake backend; the live run is not done yet.
+Phases 0 to 2 are done: abfc builds, tests and gates the full Blueprint logic (actors and components) of a real mod from TypeScript. Phase 3 (widgets) is next; see the roadmap.
 
 - [docs/design.md](docs/design.md): goals, workflow, compiler architecture, backend interface, safety rules and open questions.
 - [docs/roadmap.md](docs/roadmap.md): the phased plan.
-- [docs/spike-results.md](docs/spike-results.md): Phase 0 results.
-- [docs/phase1-results.md](docs/phase1-results.md): Phase 1 exit criteria, timings, design deltas and backend work (skeleton until the live run).
 
 ### Packages
 

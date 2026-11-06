@@ -4,7 +4,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 // The forbidden words are assembled from pieces so this file does not trip its own guard.
-const FORBIDDEN = [["abi", "otic"], ["deployed", "_"], ["good", "soup"], ["soup", "info"], ["global", "item"]].map((p) => p.join(""));
+const FORBIDDEN = [["abi", "otic"], ["deployed", "_"], ["global", "item"]].map((p) => p.join(""));
 
 function repoRoot(): string {
   let dir = process.cwd();

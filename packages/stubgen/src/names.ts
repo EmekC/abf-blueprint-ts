@@ -10,7 +10,7 @@ export const IDENT_RE = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 export const UOBJECT_PATH = "/Script/CoreUObject.Object";
 
-/** Valid TypeScript identifier from arbitrary text (sanitized like the Phase 0 spike generator). */
+/** Valid TypeScript identifier from arbitrary text: characters outside [A-Za-z0-9_$] become "_", empty becomes "_", a leading digit gets a "_" prefix, reserved words get a "_" suffix. */
 export function ident(s: string): string {
   let r = s.replace(/[^A-Za-z0-9_$]/g, "_");
   if (r === "") r = "_";
