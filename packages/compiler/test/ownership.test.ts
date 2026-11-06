@@ -206,7 +206,7 @@ test("manifest and source map files", () => {
     assert.ok(text.endsWith("}\n"));
     assert.ok(text.indexOf('"asset"') < text.indexOf('"compiler"') && text.indexOf('"compiler"') < text.indexOf('"profile"'));
     assert.deepEqual(readManifest(dir, asset), JSON.parse(JSON.stringify(m)));
-    assert.deepEqual(ownedSets(dir), { [asset]: { units: ["A"], variables: ["abfc_A_t0"] } });
+    assert.deepEqual(ownedSets(dir), { [asset]: { units: ["event:A"], variables: ["abfc_A_t0"] } });
 
     const sm: SourceMapFile = { asset, units: { "event:A": { span: { file: "src/H.ts", line: 1, col: 1, endLine: 2, endCol: 1 }, nodes: {} } } };
     writeSourceMap(dir, sm);
