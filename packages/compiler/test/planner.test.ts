@@ -377,6 +377,45 @@ test("an edited removed unit is ABFC5001 and nothing is removed", () => {
   assert.deepEqual(r.plan.assets[0]?.forgetUnits ?? [], []);
 });
 
+const callsA = ["FunctionReference=(MemberName=\"A\",bSelfContext=True)"];
+
+test("a removed event still called by a unit that stays up to date is refused before the apply, naming node, graph and unit", () => {
+  const caller = node("C_1", CALL, callsA);
+  const snapshot = snapshotOf(node("A_1", CALL, []), node("A_2", CALL, []), tagNode("CMT_A", "event:A"), caller);
+  const manifest = renameManifest(snapshot);
+  manifest.units[1]!.irHash = "sha256:caller";
+  const r = planBuild(irRenamed, renameInput(manifest, snapshot));
+  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5009"]);
+  assert.match(r.diagnostics[0]!.message, /A is no longer declared in TypeScript, but C_1 in graph EventGraph \(unit event:Caller\) still calls it/);
+  assert.deepEqual(r.diagnostics[0]!.span, callerOfB.origin);
+});
+
+test("a removed event still called by a hand-made node is refused and the node is named", () => {
+  const hand = node("H_1", CALL, callsA);
+  const snapshot = snapshotOf(node("A_1", CALL, []), node("A_2", CALL, []), tagNode("CMT_A", "event:A"), node("C_1", CALL, []), hand);
+  const r = planBuild(irRenamed, renameInput(renameManifest(snapshot), snapshot));
+  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5009"]);
+  assert.match(r.diagnostics[0]!.message, /the hand-made node H_1 in graph EventGraph still calls it/);
+  assert.match(r.diagnostics[0]!.fix ?? "", /abfc build --resync/);
+});
+
+test("a removed event whose caller is replanned in the same build is fine", () => {
+  const snapshot = snapshotOf(node("A_1", CALL, []), node("A_2", CALL, []), tagNode("CMT_A", "event:A"), node("C_1", CALL, callsA));
+  const r = planBuild(irRenamed, renameInput(renameManifest(snapshot), snapshot));
+  assert.deepEqual(r.diagnostics, []);
+  assert.deepEqual(r.plan.assets[0]!.units[1]!.removeNodes, ["C_1"]);
+});
+
+test("a removed event declared again as another unit of the same name does not refuse its unchanged caller", () => {
+  const caller = node("C_1", CALL, callsA);
+  const snapshot = snapshotOf(node("A_1", CALL, []), node("A_2", CALL, []), tagNode("CMT_A", "event:A"), caller);
+  const manifest = renameManifest(snapshot);
+  manifest.units[1]!.irHash = "sha256:caller";
+  const asFunction: IrUnit = { ...renamedB, id: "function:A", kind: "function", name: "A" };
+  const r = planBuild({ ...ir, assets: [{ ...ir.assets[0]!, units: [asFunction, callerOfB] }] }, renameInput(manifest, snapshot));
+  assert.deepEqual(r.diagnostics, []);
+});
+
 test("a removed unit that was never applied is only forgotten", () => {
   const snapshot = renameSnapshot();
   const r = planBuild(irRenamed, renameInput(renameManifest(snapshot, { assetHash: null, nodes: [], tag: null }), snapshot));

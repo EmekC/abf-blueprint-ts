@@ -9,7 +9,7 @@ export { analyzeAdoption, adoptionDiagnostics, AdoptionError } from "./ownership
 export type { AdoptionAnalysis, AdoptOptions } from "./ownership/adopt.js";
 export { builtGraphMatches, driftDiagnostics, fingerprintUnit, rebaseStaleUnits, unitState } from "./ownership/drift.js";
 export type { StageInfo, UnitFingerprint, UnitState } from "./ownership/drift.js";
-export { assetFileStem, manifestPath, ownedSets, readManifest, stringifySorted, writeManifest } from "./ownership/manifest.js";
+export { assetFileStem, manifestPath, ownedSets, readManifest, readRetired, stringifySorted, writeManifest, writeRetired } from "./ownership/manifest.js";
 export type { Manifest, ManifestUnit } from "./ownership/manifest.js";
 export { mapCompileMessages, readSourceMap, sourceMapPath, writeSourceMap } from "./ownership/sourcemap.js";
 export type { CompileMessageLike, SourceMapFile } from "./ownership/sourcemap.js";
