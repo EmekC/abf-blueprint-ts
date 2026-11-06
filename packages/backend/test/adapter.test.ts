@@ -168,3 +168,67 @@ test("applyPlan with no assets does nothing", async () => {
   assert.deepEqual(out, { ok: true, perAsset: [] });
   assert.equal(backend.calls.length, 0);
 });
+
+test("removeUnits: their nodes join the graph's remove list (a graph entry is created when only a removal touches it)", () => {
+  const p = planOf(ir);
+  const a = p.assets[0]!;
+  a.units[0]!.removeNodes = ["K2Node_A"];
+  a.removeUnits = [
+    { id: "event:Old", graph: a.units[0]!.unit.graph, nodes: ["K2Node_A", "K2Node_B", "EdGraphNode_Comment_3"] },
+    { id: "function:Gone", graph: "Gone", nodes: ["K2Node_F"] },
+  ];
+  const graphs = renderMainSpec(a, caps(true, true), profile).graphs!;
+  assert.deepEqual(graphs[0]!.remove, ["K2Node_A", "K2Node_B", "EdGraphNode_Comment_3"]);
+  const gone = graphs.find((g) => g.graph === "Gone")!;
+  assert.deepEqual(gone, { graph: "Gone", remove: ["K2Node_F"], add: [], wires: [] });
+});
+
+test("applyPlan: an asset with only removals is applied (no units, so no tag pass); a spec error stands in when no real compile error is left", async () => {
+  const c = caps(true, true);
+  const only = { mod: "TestMod", assets: [{ ...planOf(ir).assets[0]!, units: [], variables: [], removeUnits: [{ id: "event:Old", graph: "EventGraph", nodes: ["K2Node_A", "EdGraphNode_Comment_3"] }] }] };
+  const ok = new FakeBackend(() => result({ assets: [{ asset: only.assets[0]!.asset, node_ids: {} }] }));
+  const out = await applyPlan(ok, only, c, profile, { cacheDir: "cache", record: () => {} });
+  assert.equal(out.ok, true);
+  assert.deepEqual(ok.calls.map((x) => x.label), ["main"], "no tag pass for an asset without units");
+  assert.deepEqual(ok.calls[0]!.specs[0]!.graphs[0].remove, ["K2Node_A", "EdGraphNode_Comment_3"]);
+
+  const failing = new FakeBackend(() =>
+    result({
+      ok: false,
+      rolledBack: true,
+      compile: { errors: [{ asset: "/TestMod/_McpTmp/BP_BkScratch1", message: "scratch" }, { asset: only.assets[0]!.asset, message: "real" }], warnings: [] },
+      error: "[spec:Caller_call1] no pin 'execute'",
+    }),
+  );
+  const bad = await applyPlan(failing, only, c, profile, { cacheDir: "cache", record: () => {} });
+  assert.equal(bad.ok, false);
+  assert.deepEqual(bad.perAsset[0]!.compile.map((m) => m.message), ["real"], "the apply error is only a summary next to real compile errors");
+
+  const specOnly = new FakeBackend(() =>
+    result({
+      ok: false,
+      rolledBack: true,
+      compile: { errors: [{ asset: "/TestMod/_McpTmp/BP_BkScratch1", message: "scratch" }], warnings: [] },
+      error: "[spec:Caller_call1] no pin 'execute'",
+    }),
+  );
+  const spec = await applyPlan(specOnly, only, c, profile, { cacheDir: "cache", record: () => {} });
+  assert.deepEqual(spec.perAsset[0]!.compile.map((m) => m.message), ["[spec:Caller_call1] no pin 'execute'"], "scratch messages are dropped, the apply error stands in");
+});
+
+test("removeTags: orphan tag comments join the graph's remove list; an asset with only orphans is applied without a tag pass", async () => {
+  const c = caps(true, true);
+  const a = planOf(ir).assets[0]!;
+  a.units[0]!.removeNodes = ["K2Node_A", "EdGraphNode_Comment_1"];
+  a.removeTags = [{ graph: a.units[0]!.unit.graph, nodes: ["EdGraphNode_Comment_1", "EdGraphNode_Comment_2"] }, { graph: "Other", nodes: ["EdGraphNode_Comment_9"] }];
+  const graphs = renderMainSpec(a, c, profile).graphs!;
+  assert.deepEqual(graphs[0]!.remove, ["K2Node_A", "EdGraphNode_Comment_1", "EdGraphNode_Comment_2"]);
+  assert.deepEqual(graphs.find((g) => g.graph === "Other"), { graph: "Other", remove: ["EdGraphNode_Comment_9"], add: [], wires: [] });
+
+  const only = { mod: "TestMod", assets: [{ ...planOf(ir).assets[0]!, units: [], variables: [], removeTags: [{ graph: "EventGraph", nodes: ["EdGraphNode_Comment_2"] }] }] };
+  const ok = new FakeBackend(() => result({ assets: [{ asset: only.assets[0]!.asset, node_ids: {} }] }));
+  const out = await applyPlan(ok, only, c, profile, { cacheDir: "cache", record: () => {} });
+  assert.equal(out.ok, true);
+  assert.deepEqual(ok.calls.map((x) => x.label), ["main"]);
+  assert.deepEqual(ok.calls[0]!.specs[0]!.graphs[0].remove, ["EdGraphNode_Comment_2"]);
+});

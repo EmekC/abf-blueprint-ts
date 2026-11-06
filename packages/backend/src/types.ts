@@ -1,4 +1,5 @@
 import type { BackendInfo } from "@abfc/ir";
+import type { PublishGrant } from "./safety.js";
 
 export interface StageReport {
   mod: string;
@@ -127,6 +128,34 @@ export interface AuditReport {
   seconds: number;
 }
 
+export interface PublishResult {
+  ok: boolean;
+  published: string[];
+  refused: string | null;
+  message: string;
+  backup: string | null;
+  route: string | null;
+  compileErrors: Array<{ asset: string | null; message: string }>;
+  conflicts: string[];
+  restored: boolean | null;
+  editor: string | null;
+  /** The open editor's refusal reason (`editor_result.reason`), when it refused. */
+  editorReason: string | null;
+  /** Packages the open editor reloaded in place (still referenced, not unloaded). */
+  reloadedInPlace: string[];
+  /** Mod packages that show unsaved changes after the reload. */
+  dirtyAfter: string[];
+  /** Loaded packages of the same mod that reference the published ones; the open editor reloaded them from their unchanged files. */
+  reloadedReferencers: string[];
+  /** Referencers the open editor did NOT reload because they were edited during the publish and have unsaved changes (their edits were kept). */
+  skippedDirty: string[];
+  /** Published packages that were edited in the open editor during the publish; they were reloaded from the new files, so those edits are gone. */
+  dirtyPublished: string[];
+  /** Blueprint compile errors the open editor logged for the reloaded packages while it reloaded (the files on disk are fine). */
+  compileErrorsAfter: Array<{ asset: string | null; message: string }>;
+  raw: unknown;
+}
+
 export interface Backend {
   /** True when the most recent commandlet operation (read, apply, compile, reflect) ran on the warm session. */
   readonly lastWarm?: boolean;
@@ -143,5 +172,7 @@ export interface Backend {
   reflect(r: ReflectRequest): Promise<ReflectResult>;
   gameTest(mod: string, steps: unknown[], o: { timeoutSeconds: number }): Promise<GameTestReport>;
   audit(mod: string): Promise<AuditReport>;
+  /** `bp_publish` for exactly `mod`, only with a {@link PublishGrant} from `grantPublish` (sent only by `abfc publish`). */
+  publish(mod: string, assets: string[], grant: PublishGrant): Promise<PublishResult>;
   close(): Promise<void>;
 }

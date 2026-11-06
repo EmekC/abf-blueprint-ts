@@ -4,6 +4,7 @@ import { createInterface } from "node:readline";
 import { join } from "node:path";
 import { AbfcError } from "@abfc/env";
 import { assertToolAllowed } from "./safety.js";
+import type { PublishGrant } from "./safety.js";
 
 export interface McpStartOptions {
   command: string;
@@ -100,8 +101,12 @@ export class McpStdioClient {
     return names;
   }
 
-  async callTool(name: string, args: Record<string, unknown>, o?: { timeoutMs?: number }): Promise<McpToolResult> {
-    assertToolAllowed(name);
+  async callTool(
+    name: string,
+    args: Record<string, unknown>,
+    o?: { timeoutMs?: number; publishGrant?: PublishGrant },
+  ): Promise<McpToolResult> {
+    assertToolAllowed(name, o?.publishGrant === undefined ? { args } : { grant: o.publishGrant, args });
     const secs = typeof args.timeout_seconds === "number" ? args.timeout_seconds : 600;
     const timeoutMs = o?.timeoutMs ?? (secs + 60) * 1000;
     const t0 = Date.now();
