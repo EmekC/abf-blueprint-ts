@@ -9,6 +9,7 @@ import {
   readSourceMap,
   rebaseStaleUnits,
   writeManifest,
+  writeRetired,
   writeSourceMap,
 } from "@abfc/compiler";
 import type { Manifest, ManifestUnit, SourceMapFile } from "@abfc/compiler";
@@ -244,6 +245,10 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     // nodes would make the next build report them as missing (ABFC5002).
     const dropIds = new Set([...(a.removeUnits ?? []).map((r) => r.id), ...(a.forgetUnits ?? [])]);
     for (const r of a.removeUnits ?? []) removedUnits.push(r.id.slice(r.id.indexOf(":") + 1));
+    // The stubs still list a removed event as a hand-made member: hide it until `abfc stubs` reads the stage again.
+    // Only units whose nodes were really deleted: a forgotten unit (never applied, or adopted hand-made nodes) left them on the stage.
+    const retired = (a.removeUnits ?? []).map((r) => r.id);
+    writeRetired(win32.join(paths.stubsDir, profile.id), a.asset, retired);
     for (const r of a.removeTags ?? []) removedOrphanTags += r.nodes.length;
     const units: ManifestUnit[] = (old?.units ?? []).filter((u) => !dropIds.has(u.id));
     for (const p of a.units) {
