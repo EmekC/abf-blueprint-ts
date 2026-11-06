@@ -82,7 +82,7 @@ export async function applyTwoPhase(
       return { kind: "graph" as const, graph: g.graph, text: res.text };
     });
     if (patched !== x.patches.length) {
-      throw fail("ABFC4004", `patched ${patched} of ${x.patches.length} wildcard pins in ${x.spec.asset}.`, "the editor export format may have changed; see docs/spike-results.md (P5).");
+      throw fail("ABFC4004", `patched ${patched} of ${x.patches.length} wildcard pins in ${x.spec.asset}.`, "the editor export format may have changed, so the two-phase wildcard-pin route could not match every pin; resolve the pin types in the backend (native node kinds) or update the patcher.");
     }
     const spec: BpApplyAssetSpec = { asset: x.spec.asset, raw };
     if (x.spec.variables) spec.variables = x.spec.variables;
