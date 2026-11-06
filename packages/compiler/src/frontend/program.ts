@@ -1,8 +1,10 @@
 // Loads the user's TypeScript project (tsconfig + stubs) and reports TypeScript's own diagnostics as ABFC2000.
-import { resolve } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 import ts from "typescript";
 import type { Diagnostic } from "@abfc/ir";
+import { ownedSets, readRetired } from "../ownership/manifest.js";
 import { relFile, spanOfRange } from "./diag.js";
+import { filterOwnedManual } from "./manualfilter.js";
 
 export interface LoadedProgram {
   /** Absolute project directory. */
@@ -52,9 +54,35 @@ export function loadProgram(projectDir: string): LoadedProgram {
     const x = fromTs(d, root);
     if (x) diagnostics.push(x);
   }
+  // Stubs are generated before abfc owns a unit; what the manifests say abfc owns now is hidden from their `_Manual` interfaces.
+  const owned = ownedSets(root);
+  // The active profile is not known here, so every profile's retired.json is read; an unreadable one is ignored with a warning.
+  const retiredByAsset = readRetired(root, undefined, (file, why) =>
+    diagnostics.push({ severity: "warning", code: "ABFC2000", message: `ignoring unreadable ${file}: ${why}; run abfc stubs to rewrite it` }),
+  );
+  for (const [asset, ids] of Object.entries(retiredByAsset)) {
+    const cur = owned[asset] ?? { units: [], variables: [] };
+    owned[asset] = { units: [...cur.units, ...ids], variables: cur.variables };
+  }
+  const stubsRoot = resolve(root, ".abfc", "stubs");
+  const underStubs = (file: string): boolean => {
+    const rel = relative(stubsRoot, resolve(file));
+    return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  };
+  const host = ts.createCompilerHost(parsed.options);
+  if (Object.keys(owned).length > 0) {
+    const getSourceFile = host.getSourceFile.bind(host);
+    host.getSourceFile = (fileName, languageVersionOrOptions, onError, shouldCreate) => {
+      const sf = getSourceFile(fileName, languageVersionOrOptions, onError, shouldCreate);
+      if (sf === undefined || !fileName.endsWith(".d.ts") || !underStubs(fileName) || !sf.text.includes("@bpHandMade")) return sf;
+      const text = filterOwnedManual(fileName, sf.text, owned);
+      return text === sf.text ? sf : ts.createSourceFile(fileName, text, languageVersionOrOptions, true);
+    };
+  }
   const program = ts.createProgram({
     rootNames: parsed.fileNames,
     options: parsed.options,
+    host,
     ...(parsed.projectReferences ? { projectReferences: parsed.projectReferences } : {}),
   });
   for (const d of ts.getPreEmitDiagnostics(program)) {

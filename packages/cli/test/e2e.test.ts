@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildHir, compileTests, loadProgram, lower, readManifest, readSourceMap } from "@abfc/compiler";
+import { buildHir, compileTests, loadProgram, lower, readManifest, readRetired, readSourceMap } from "@abfc/compiler";
 import { loadProfile, realHost, resolveEnvironment } from "@abfc/env";
 import type { Host } from "@abfc/env";
 import type { IrModule, IrNode } from "@abfc/ir";
@@ -1177,5 +1177,68 @@ test("(t2) orphan tag comments of an unchanged unit are removed once its asset i
     assert.equal(readManifest(r.dir, RELAY_ASSET)!.units.length, m.units.length);
     assert.deepEqual(tagNames(r).sort(), m.units.map((u) => u.tag!).sort(), "only the recorded tags remain");
     for (const o of orphans) assert.ok(!r.backend.nodeNames(RELAY_ASSET).includes(o));
+  });
+});
+
+test("(r5) a stale stub that still lists an owned event as hand-made is not a way to call it: the removed event is a TS error at the call, before any backend work", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    assert.equal((await r.run(["build"])).code, 0);
+    // the stubs were written before abfc owned UpdateTarget, so they still list it as a hand-made member
+    const stub = join(r.dir, ".abfc", "stubs", "test", "Mod", "TestMod", "Relay", "BP_Relay.d.ts");
+    const stale = readFileSync(stub, "utf8").replace(
+      "  HideAll(): void;\n",
+      "  HideAll(): void;\n  /**\n   * @bpPath /TestMod/Relay/BP_Relay.BP_Relay_C:UpdateTarget\n   * @bpHandMade\n   */\n  UpdateTarget(): void;\n",
+    );
+    assert.notEqual(stale, readFileSync(stub, "utf8"));
+    writeFileSync(stub, stale, "utf8");
+
+    const line = renameEvent(r.dir);
+    const src = join(r.dir, "src", "Relay.ts");
+    writeFileSync(src, readFileSync(src, "utf8").replace("this.UpdateTargetNew();", "this.UpdateTarget();"), "utf8");
+    const before = r.backend.applyLabels().length;
+    const x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, new RegExp(String.raw`Relay\.ts:${line}:\d+: error ABFC2000: \[TS\d+\] Property 'UpdateTarget' does not exist`));
+    assert.equal(r.backend.applyLabels().length, before, "nothing is applied");
+    assert.deepEqual(readManifest(r.dir, RELAY_ASSET)!.units.map((u) => u.id), ["event:UpdateTarget"], "the manifest is untouched");
+
+    // members abfc does not own stay reachable
+    writeFileSync(src, readFileSync(src, "utf8").replace("this.UpdateTarget();", "this.HideAll();"), "utf8");
+    const ok = await r.run(["check"]);
+    assert.equal(ok.code, 0, ok.out);
+  });
+});
+
+test("(r6) an event the build removed stays hidden in the stale stub: calling it afterwards is a TS error", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    assert.equal((await r.run(["build"])).code, 0);
+    const stub = join(r.dir, ".abfc", "stubs", "test", "Mod", "TestMod", "Relay", "BP_Relay.d.ts");
+    const text = readFileSync(stub, "utf8");
+    writeFileSync(
+      stub,
+      text.replace("  HideAll(): void;\n", "  HideAll(): void;\n  /**\n   * @bpPath /TestMod/Relay/BP_Relay.BP_Relay_C:UpdateTarget\n   * @bpHandMade\n   */\n  UpdateTarget(): void;\n"),
+      "utf8",
+    );
+    renameEvent(r.dir);
+    const x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /removed .*UpdateTarget\b/);
+    assert.deepEqual(readRetired(r.dir), { [RELAY_ASSET]: ["event:UpdateTarget"] });
+
+    const src = join(r.dir, "src", "Relay.ts");
+    writeFileSync(src, readFileSync(src, "utf8").replace("this.UpdateTargetNew();", "this.UpdateTarget();"), "utf8");
+    const bad = await r.run(["check"]);
+    assert.notEqual(bad.code, 0, bad.out);
+    assert.match(bad.out, /error ABFC2000: \[TS\d+\] Property 'UpdateTarget' does not exist/);
+  });
+});
+
+test("(r7) forgetting a never-synced adoption does not retire the unit: the hand-made member stays visible", async () => {
+  await withRig({ handMadeEvent: true }, async (r) => {
+    assert.equal((await r.run(["adopt", RELAY_ASSET, "UpdateTarget", "--yes"])).code, 0);
+    renameEvent(r.dir);
+    const x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.deepEqual(readRetired(r.dir), {}, "nothing of the forgotten unit was deleted from the stage");
   });
 });

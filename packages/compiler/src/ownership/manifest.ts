@@ -84,7 +84,7 @@ export function writeManifest(dir: string, m: Manifest): string {
   return file;
 }
 
-/** Owned unit names and variable names per asset, for stub generation. */
+/** Owned unit ids (`event:Name`) and variable names per asset, for stub generation and the frontend. */
 export function ownedSets(dir: string): Record<string, { units: string[]; variables: string[] }> {
   const folder = join(dir, ".abfc", "manifest");
   const out: Record<string, { units: string[]; variables: string[] }> = {};
@@ -92,9 +92,48 @@ export function ownedSets(dir: string): Record<string, { units: string[]; variab
   for (const f of readdirSync(folder).filter((x) => x.endsWith(".json")).sort()) {
     const m = JSON.parse(readFileSync(join(folder, f), "utf8").replace(/^﻿/, "")) as Manifest;
     out[m.asset] = {
-      units: m.units.map((u) => u.id.slice(u.id.indexOf(":") + 1)),
+      units: m.units.map((u) => u.id),
       variables: m.variables.map((v) => v.name),
     };
   }
   return out;
+}
+
+const RETIRED_FILE = "retired.json";
+
+/**
+ * Units abfc removed from an asset after the stubs were generated, per asset: `<stubs>/<profile>/retired.json`. The stubs still list
+ * them as hand-made members; they are hidden like owned ones until `abfc stubs` rewrites the folder (which deletes this file) from the stage.
+ */
+export function readRetired(dir: string, profileId?: string, onCorrupt?: (file: string, why: string) => void): Record<string, string[]> {
+  const root = join(dir, ".abfc", "stubs");
+  const out: Record<string, string[]> = {};
+  if (!existsSync(root)) return out;
+  for (const profile of profileId !== undefined ? [profileId] : readdirSync(root).sort()) {
+    const file = join(root, profile, RETIRED_FILE);
+    if (!existsSync(file)) continue;
+    let parsed: Record<string, string[]>;
+    try {
+      parsed = JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, "")) as Record<string, string[]>;
+    } catch (e) {
+      onCorrupt?.(file, e instanceof Error ? e.message : String(e));
+      continue;
+    }
+    for (const [asset, ids] of Object.entries(parsed)) out[asset] = [...new Set([...(out[asset] ?? []), ...ids])].sort();
+  }
+  return out;
+}
+
+/** Records that these unit ids were removed from `asset` (merged into what the profile's folder already holds). No-op without a stub folder. */
+export function writeRetired(stubsProfileDir: string, asset: string, ids: string[]): void {
+  if (ids.length === 0 || !existsSync(stubsProfileDir)) return;
+  const file = join(stubsProfileDir, RETIRED_FILE);
+  let all: Record<string, string[]> = {};
+  try {
+    if (existsSync(file)) all = JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, "")) as Record<string, string[]>;
+  } catch {
+    all = {}; // unreadable: rewritten from what this build retires
+  }
+  all[asset] = [...new Set([...(all[asset] ?? []), ...ids])].sort();
+  writeFileSync(file, stringifySorted(all), "utf8");
 }

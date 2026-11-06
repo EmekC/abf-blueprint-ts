@@ -49,6 +49,11 @@ function hasHandMadeEvent(snapshot: Map<string, T3dNode>, name: string, kind: Ir
   return false;
 }
 
+/** A call node whose function is `name` of the asset's own class (self context). */
+function callsOwnFunction(n: T3dNode, name: string): boolean {
+  return n.head.some((h) => h.startsWith("FunctionReference=") && h.includes(`MemberName="${name}"`) && h.includes("bSelfContext=True"));
+}
+
 /** Unit id of an abfc ownership tag comment (the format `renderTagSpec` writes), or null for any other node. */
 function tagUnitOf(n: T3dNode): string | null {
   if (!n.cls.endsWith("EdGraphNode_Comment")) return null;
@@ -197,6 +202,38 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
         pickedIds.add(unit.id);
         upToDate.splice(upToDate.indexOf(`${asset.path} ${unit.id}`), 1);
         grew = true;
+      }
+    }
+
+    // A removed or renamed event that a node staying on the stage still calls. Unreal's compile would refuse that graph with a message
+    // that names no TS line and the apply would be rolled back, so refuse before the apply and name the node, its graph and its owner.
+    const leaving = new Set<string>([...removeUnits.flatMap((r) => r.nodes), ...picked.flatMap((p) => p.removeNodes)]);
+    for (const r of removeUnits) {
+      if (!r.id.startsWith("event:")) continue;
+      const name = r.id.slice("event:".length);
+      if (asset.units.some((u) => u.name === name)) continue; // declared again as another unit of the same name: the calls still resolve
+      for (const n of snapshot.values()) {
+        if (leaving.has(n.name) || !n.cls.includes("K2Node_Call") || !callsOwnFunction(n, name)) continue;
+        const owner = manifest?.units.find((m) => m.nodes.includes(n.name));
+        const where = `${n.name} in graph ${n.graph ?? "?"}`;
+        if (owner !== undefined) {
+          diagnostics.push({
+            severity: "error",
+            code: "ABFC5009",
+            asset: asset.path,
+            ...(spans.get(owner.id) !== undefined ? { span: spans.get(owner.id)! } : {}),
+            message: `${name} is no longer declared in TypeScript, but ${where} (unit ${owner.id}) still calls it.`,
+            fix: `change the call in the TypeScript of ${owner.id}, or declare ${name} again.`,
+          });
+        } else {
+          diagnostics.push({
+            severity: "error",
+            code: "ABFC5009",
+            asset: asset.path,
+            message: `${name} is no longer declared in TypeScript, but the hand-made node ${where} still calls it.`,
+            fix: `point that node at another function or delete it in the Mod Editor, then run abfc build --resync; or declare ${name} again.`,
+          });
+        }
       }
     }
 
