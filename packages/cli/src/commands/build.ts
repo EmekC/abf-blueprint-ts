@@ -1,4 +1,4 @@
-import { applyPlan, nodeKey } from "@abfc/backend";
+import { applyPlan, nodeKey, specNodeId } from "@abfc/backend";
 import type { AssetApplyOutcome } from "@abfc/backend";
 import {
   assetsNeedingRead,
@@ -7,12 +7,13 @@ import {
   planBuild,
   readManifest,
   readSourceMap,
+  rebaseStaleUnits,
   writeManifest,
   writeSourceMap,
 } from "@abfc/compiler";
 import type { Manifest, ManifestUnit, SourceMapFile } from "@abfc/compiler";
 import { parseExport, sha256 } from "@abfc/ir";
-import type { AssetPlan, Diagnostic, IrAsset, IrModule, T3dNode } from "@abfc/ir";
+import type { AssetPlan, Diagnostic, IrAsset, IrModule, Span, T3dNode } from "@abfc/ir";
 import { readLock } from "@abfc/stubgen";
 import { win32 } from "node:path";
 import type { CliContext } from "../context.js";
@@ -70,13 +71,27 @@ function previousNames(manifest: Manifest | null): Record<string, string> {
   return out;
 }
 
+/** What maps an apply or compile message back to a call: spec node id -> `<unit id>/<IR node id>`, and the TS spans of calls to owned functions. */
+function callMaps(asset: IrAsset): { specIds: Record<string, string>; ownCalls: Record<string, Span[]> } {
+  const specIds: Record<string, string> = {};
+  const ownCalls: Record<string, Span[]> = {};
+  for (const u of asset.units) {
+    for (const n of u.nodes) {
+      specIds[specNodeId(u, n.id)] ??= nodeKey(u, n.id);
+      if (n.sem?.k === "call" && n.sem.class === undefined) (ownCalls[n.sem.function] ??= []).push(n.origin);
+    }
+  }
+  return { specIds, ownCalls };
+}
+
 function errorDiagnostics(
   asset: AssetPlan,
   irAsset: IrAsset,
   outcome: AssetApplyOutcome,
 ): Diagnostic[] {
   const sm = sourceMapOf(irAsset, outcome.nodeIds);
-  return mapCompileMessages(asset.asset, outcome.compile, sm, invert(outcome.nodeIds));
+  const { specIds, ownCalls } = callMaps(irAsset);
+  return mapCompileMessages(asset.asset, outcome.compile, sm, invert(outcome.nodeIds), specIds, ownCalls);
 }
 
 /**
@@ -144,6 +159,17 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   }
   rec.record("build.read", since(tRead), true, readAssets.length);
 
+  // A stage re-synced from a published mod that holds the abfc-built graphs: record the new sync time in the manifests of those units.
+  for (const a of readAssets) {
+    const m = manifests.get(a.path) ?? null;
+    const snap = snapshots.get(a.path);
+    if (m === null || snap === undefined) continue;
+    const rebased = rebaseStaleUnits(m, snap, stage);
+    if (!rebased.changed) continue;
+    manifests.set(a.path, rebased.manifest);
+    writeManifest(projectDir, rebased.manifest);
+  }
+
   const planIr: IrModule = { ...ir, assets: readAssets };
   const planned = planBuild(planIr, {
     manifests,
@@ -152,6 +178,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     handMadeUnits: new Map(fe.hir.classes.map((c) => [c.path, c.manualUnits])),
     snapshotVariables,
     forceReplan,
+    selfEventCalls: caps.selfEventCalls,
   });
   if (emitAll(ctx, planned.diagnostics)) return false;
   for (const a of skipped) for (const u of a.units) planned.upToDate.push(`${a.path} ${u.id}`);
@@ -201,6 +228,8 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   const finals: Manifest[] = [];
   const stagedUnits: string[] = [];
   const appliedAssets: string[] = [];
+  const removedUnits: string[] = [];
+  let removedOrphanTags = 0;
   for (let i = 0; i < planned.plan.assets.length; i++) {
     const a = planned.plan.assets[i]!;
     const outcome = applied.perAsset[i]!;
@@ -210,7 +239,13 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     const nodes = parseExport(outcome.finalText ?? (await readAsset(ctx, backend, a.asset)).text).nodes;
 
     const old = manifests.get(a.asset) ?? null;
-    const units: ManifestUnit[] = [...(old?.units ?? [])];
+    // Units that left the TS are gone from the stage now (or were never there): drop them from the manifest. This is not held back
+    // until Unreal's compile passes: a failed compile does not roll the removal back, and a manifest that still listed the removed
+    // nodes would make the next build report them as missing (ABFC5002).
+    const dropIds = new Set([...(a.removeUnits ?? []).map((r) => r.id), ...(a.forgetUnits ?? [])]);
+    for (const r of a.removeUnits ?? []) removedUnits.push(r.id.slice(r.id.indexOf(":") + 1));
+    for (const r of a.removeTags ?? []) removedOrphanTags += r.nodes.length;
+    const units: ManifestUnit[] = (old?.units ?? []).filter((u) => !dropIds.has(u.id));
     for (const p of a.units) {
       const nodeIds: Record<string, string> = {};
       for (const n of p.unit.nodes) {
@@ -286,7 +321,9 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
       for (const [unitId, u] of Object.entries(sm.units)) {
         for (const [irId, n] of Object.entries(u.nodes)) if (n.real !== null) names[n.real] = `${unitId}/${irId}`;
       }
-      for (const d of mapCompileMessages(asset, messages, sm, names)) output.diag(d);
+      const irAsset = ir.assets.find((a) => a.path === asset);
+      const { specIds, ownCalls } = irAsset ? callMaps(irAsset) : { specIds: {}, ownCalls: {} };
+      for (const d of mapCompileMessages(asset, messages, sm, names, specIds, ownCalls)) output.diag(d);
     }
     if (!hasError(output.diagnostics)) {
       output.diag({ severity: "error", code: "ABFC6002", message: "[Unreal] the compile report lists errors that could not be mapped." });
@@ -297,8 +334,8 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   for (const m of report.messages) if (m.severity === "warning" && args.flags.verbose) output.info(`[Unreal warning] ${m.message}`);
 
   writeCache(ctx, owned, cache, stubLockHash);
-  output.info(`applied ${stagedUnits.join(", ")} in ${appliedAssets.join(", ")} (route: ${route})`);
-  output.json({ applied: stagedUnits, assets: appliedAssets, route, upToDate: planned.upToDate });
+  output.info(`applied ${stagedUnits.length > 0 ? stagedUnits.join(", ") : "no units"} in ${appliedAssets.join(", ")} (route: ${route})${removedUnits.length > 0 ? `, removed ${removedUnits.join(", ")}` : ""}${removedOrphanTags > 0 ? `, removed ${removedOrphanTags} orphan tag comment(s)` : ""}`);
+  output.json({ applied: stagedUnits, assets: appliedAssets, route, upToDate: planned.upToDate, ...(removedUnits.length > 0 ? { removed: removedUnits } : {}), ...(removedOrphanTags > 0 ? { removedOrphanTags } : {}) });
   return true;
 }
 

@@ -1,7 +1,7 @@
 // Build planner: IR + manifests + stage snapshots -> the units to (re)apply, and the diagnostics that block others.
 import { classDefaultsHash } from "@abfc/ir";
 import type { ApplyPlan, AssetPlan, Diagnostic, IrModule, IrUnit, IrVariable, Span, T3dNode } from "@abfc/ir";
-import { driftDiagnostics, unitState } from "../ownership/drift.js";
+import { builtGraphMatches, driftDiagnostics, unitState } from "../ownership/drift.js";
 import type { StageInfo } from "../ownership/drift.js";
 import type { Manifest, ManifestUnit } from "../ownership/manifest.js";
 
@@ -16,6 +16,8 @@ export interface PlanInput {
   snapshotVariables?: Map<string, string[]>;
   /** `<asset path> <unit id>` of units to re-plan although their IR hash is unchanged (compiler or stub lock changed). */
   forceReplan?: Set<string>;
+  /** The backend's bp_apply feature `self_event_calls` (default true). Without it a self call to an event added in the same build cannot be applied. */
+  selfEventCalls?: boolean;
 }
 
 export interface PlanResult {
@@ -45,6 +47,23 @@ function hasHandMadeEvent(snapshot: Map<string, T3dNode>, name: string, kind: Ir
     } else if (n.cls.endsWith("K2Node_CustomEvent") && n.head.includes(`CustomFunctionName="${name}"`)) return true;
   }
   return false;
+}
+
+/** Unit id of an abfc ownership tag comment (the format `renderTagSpec` writes), or null for any other node. */
+function tagUnitOf(n: T3dNode): string | null {
+  if (!n.cls.endsWith("EdGraphNode_Comment")) return null;
+  for (const h of n.head) {
+    const m = /^NodeComment="abfc:owned unit=(\S+) src=/.exec(h);
+    if (m?.[1] !== undefined) return m[1];
+  }
+  return null;
+}
+
+/** Names of the abfc tag comments of one unit in one graph of the snapshot (a comment that is not provably that unit's tag is never listed). */
+function tagsOf(snapshot: Map<string, T3dNode>, unitId: string, graph: string): string[] {
+  const out: string[] = [];
+  for (const n of snapshot.values()) if (n.graph === graph && tagUnitOf(n) === unitId) out.push(n.name);
+  return out;
 }
 
 /** Does the asset's class defaults pass need to run (hash or stage changed)? */
@@ -78,7 +97,10 @@ export function assetsNeedingRead(
           mu.assetHash === null ||
           mu.nodes.length === 0
         );
-      }) || defaultsStale(asset, manifest, input.stage);
+      }) ||
+      // a unit that is no longer in the TS: its stage nodes are removed (or its manifest entry dropped)
+      (manifest?.units.some((mu) => !asset.units.some((unit) => unit.id === mu.id)) ?? false) ||
+      defaultsStale(asset, manifest, input.stage);
     if (need) out.add(asset.path);
   }
   return out;
@@ -101,9 +123,13 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
     const spans = new Map<string, Span>(asset.units.map((u) => [u.id, u.origin]));
 
     const picked: Array<{ unit: IrUnit; removeNodes: string[] }> = [];
+    /** Names of events that this build adds (no custom event in the stage yet). */
+    const newEvents = new Set<string>();
     for (const unit of asset.units) {
       const mu: ManifestUnit | undefined = manifest?.units.find((m) => m.id === unit.id);
-      const state = mu ? unitState(mu, snapshot, input.stage) : null;
+      let state = mu ? unitState(mu, snapshot, input.stage) : null;
+      // A stage re-synced from a published mod that holds the abfc-built graph: the unit is as clean as before the resync.
+      if (mu && state === "staleStage" && builtGraphMatches(mu, snapshot)) state = "clean";
 
       if (!mu || state === "pendingApply") {
         if (!(mu?.adopt) && (handMade.includes(unit.name) || hasHandMadeEvent(snapshot, unit.name, unit.kind))) {
@@ -117,7 +143,9 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
           });
           continue;
         }
-        picked.push({ unit, removeNodes: [] });
+        if (unit.kind === "event" && !hasHandMadeEvent(snapshot, unit.name)) newEvents.add(unit.name);
+        // a manifest unit that was never applied records no tag, but may still have left some
+        picked.push({ unit, removeNodes: mu ? tagsOf(snapshot, mu.id, mu.graph) : [] });
         continue;
       }
 
@@ -127,11 +155,33 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
         continue;
       }
       if (state === "pendingAdoption" || state === "staleStage") {
-        picked.push({ unit, removeNodes: [...(mu.adopt?.nodes ?? [])] });
+        picked.push({ unit, removeNodes: [...(mu.adopt?.nodes ?? []), ...tagsOf(snapshot, mu.id, mu.graph)] });
       } else if (mu.irHash !== unit.hash || input.forceReplan?.has(`${asset.path} ${unit.id}`) === true) {
-        picked.push({ unit, removeNodes: [...mu.nodes] });
+        // the old tag comment (and any orphan of it) goes with the unit's nodes; the tag pass writes the new one
+        picked.push({ unit, removeNodes: [...mu.nodes, ...tagsOf(snapshot, mu.id, mu.graph)] });
       } else {
         upToDate.push(`${asset.path} ${unit.id}`);
+      }
+    }
+
+    // Manifest units that are no longer in the TS (event removed or renamed).
+    const removeUnits: NonNullable<AssetPlan["removeUnits"]> = [];
+    const forgetUnits: string[] = [];
+    const leftoverTags: Array<{ graph: string; nodes: string[] }> = []; // abfc tag comments a never-applied unit left on the stage
+    for (const mu of manifest?.units ?? []) {
+      if (asset.units.some((u) => u.id === mu.id)) continue;
+      let state = unitState(mu, snapshot, input.stage);
+      if (state === "staleStage" && builtGraphMatches(mu, snapshot)) state = "clean";
+      if (state === "clean") {
+        removeUnits.push({ id: mu.id, graph: mu.graph, nodes: [...mu.nodes, ...tagsOf(snapshot, mu.id, mu.graph)] });
+      } else if (state === "pendingApply" || state === "pendingAdoption") {
+        forgetUnits.push(mu.id);
+        const left = tagsOf(snapshot, mu.id, mu.graph);
+        if (left.length > 0) leftoverTags.push({ graph: mu.graph, nodes: left });
+      } else {
+        const drift = driftDiagnostics(asset.path, [mu], snapshot, input.stage, new Map<string, Span>());
+        if (drift.length > 0) diagnostics.push(...drift);
+        else forgetUnits.push(mu.id); // adopted hand-made nodes of a stale stage: nothing of abfc's to remove
       }
     }
 
@@ -143,10 +193,47 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
         if (pickedIds.has(unit.id) || !(unit.crossWires ?? []).some((w) => pickedIds.has(w.toUnit))) continue;
         const mu = manifest?.units.find((m) => m.id === unit.id);
         if (!mu || !upToDate.includes(`${asset.path} ${unit.id}`)) continue; // blocked by a diagnostic, or not applied yet (then it is picked anyway)
-        picked.push({ unit, removeNodes: [...mu.nodes] });
+        picked.push({ unit, removeNodes: [...mu.nodes, ...tagsOf(snapshot, mu.id, mu.graph)] });
         pickedIds.add(unit.id);
         upToDate.splice(upToDate.indexOf(`${asset.path} ${unit.id}`), 1);
         grew = true;
+      }
+    }
+
+    // Orphan tags: abfc tag comments of a unit that stays as it is, other than the one the manifest records (an earlier re-plan left them).
+    // Only provable tags of a unit the manifest owns are removed, and only when the recorded tag is itself on the stage, so the unit keeps one.
+    const removeTags: NonNullable<AssetPlan["removeTags"]> = [];
+    for (const lt of leftoverTags) {
+      const entry = removeTags.find((r) => r.graph === lt.graph);
+      if (entry) entry.nodes.push(...lt.nodes);
+      else removeTags.push({ graph: lt.graph, nodes: [...lt.nodes] });
+    }
+    for (const mu of manifest?.units ?? []) {
+      if (pickedIds.has(mu.id) || !asset.units.some((u) => u.id === mu.id) || mu.tag === null) continue;
+      const tags = tagsOf(snapshot, mu.id, mu.graph);
+      if (!tags.includes(mu.tag)) continue;
+      const orphans = tags.filter((t) => t !== mu.tag);
+      if (orphans.length === 0) continue;
+      const entry = removeTags.find((r) => r.graph === mu.graph);
+      if (entry) entry.nodes.push(...orphans);
+      else removeTags.push({ graph: mu.graph, nodes: orphans });
+    }
+
+    // Backends without `self_event_calls` cannot template a call to an event added in this very apply.
+    if (input.selfEventCalls === false && newEvents.size > 0) {
+      for (const p of picked) {
+        for (const n of p.unit.nodes) {
+          const sem = n.sem;
+          if (sem?.k !== "call" || sem.class !== undefined || !newEvents.has(sem.function)) continue;
+          diagnostics.push({
+            severity: "error",
+            code: "ABFC4013",
+            asset: asset.path,
+            span: n.origin,
+            message: `calling ${sem.function} needs a backend with bp_apply feature self_event_calls (the event is new in this build)`,
+            fix: "update abf-mod-editor-mcp, or build once without the call and add it in a second build",
+          });
+        }
       }
     }
 
@@ -163,9 +250,19 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
         };
       }
     }
-    if (picked.length === 0 && defaults === undefined) continue;
+    if (picked.length === 0 && defaults === undefined && removeUnits.length === 0 && forgetUnits.length === 0 && removeTags.length === 0) continue;
 
     const removedByGraph = new Map<string, Set<string>>();
+    for (const r of removeUnits) {
+      const set = removedByGraph.get(r.graph) ?? new Set<string>();
+      for (const name of r.nodes) set.add(name);
+      removedByGraph.set(r.graph, set);
+    }
+    for (const r of removeTags) {
+      const set = removedByGraph.get(r.graph) ?? new Set<string>();
+      for (const name of r.nodes) set.add(name);
+      removedByGraph.set(r.graph, set);
+    }
     for (const p of picked) {
       const set = removedByGraph.get(p.unit.graph) ?? new Set<string>();
       for (const r of p.removeNodes) set.add(r);
@@ -209,6 +306,9 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
       classMeta: ir.classMeta,
       ...(Object.keys(entryNames).length > 0 ? { entryNames } : {}),
       ...(defaults !== undefined ? { defaults } : {}),
+      ...(removeUnits.length > 0 ? { removeUnits } : {}),
+      ...(forgetUnits.length > 0 ? { forgetUnits } : {}),
+      ...(removeTags.length > 0 ? { removeTags } : {}),
     });
   }
 

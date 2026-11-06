@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AbfcError } from "@abfc/env";
-import { BpApplyBackend, McpStdioClient } from "../src/index.js";
+import { BpApplyBackend, McpStdioClient, publishResultFrom } from "../src/index.js";
 
 const FIXTURE = fileURLToPath(new URL("../../test/fixtures/fake-bpapply-server.mjs", import.meta.url));
 
@@ -312,4 +312,86 @@ test("warm session: started once before the first commandlet op, results say war
     await backend.close();
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("publishResultFrom maps bp_publish results", () => {
+  const a = publishResultFrom({
+    published: ["Content/A.uasset"],
+    route: "file-copy",
+    backup: "B",
+    editor: "closed",
+    message: "Copied 1",
+  });
+  assert.equal(a.ok, true);
+  assert.equal(a.route, "file-copy");
+  assert.deepEqual(a.published, ["Content/A.uasset"]);
+  assert.equal(a.editorReason, null);
+  assert.deepEqual(a.reloadedInPlace, []);
+  assert.deepEqual(a.dirtyAfter, []);
+
+  assert.equal(publishResultFrom({ published: [], message: "Nothing to publish: no changes" }).ok, true);
+
+  const c = publishResultFrom({
+    published: [],
+    refused: "compile errors",
+    error: "Refused: 1",
+    message: "Refused: 1",
+    compile_errors: [{ asset: "/M/A", message: "bad pin" }],
+  });
+  assert.equal(c.ok, false);
+  assert.deepEqual(c.compileErrors[0], { asset: "/M/A", message: "bad pin" });
+
+  assert.deepEqual(
+    publishResultFrom({ published: [], refused: "conflicts", conflicts: [{ path: "Content/A.uasset", reason: "changed" }] })
+      .conflicts,
+    ["Content/A.uasset: changed"],
+  );
+  assert.deepEqual(
+    publishResultFrom({ published: [], refused: "conflicts", conflicts: ["Content/A.uasset (deleted in the real mod)"] })
+      .conflicts,
+    ["Content/A.uasset (deleted in the real mod)"],
+  );
+
+  const e = publishResultFrom({ published: [], refused: "copy failed", restored: false, backup: "B", message: "x" });
+  assert.equal(e.ok, false);
+  assert.equal(e.restored, false);
+  assert.equal(e.backup, "B");
+  assert.equal(e.editorReason, null);
+
+  const f = publishResultFrom({
+    published: [],
+    refused: "editor refused",
+    message: "m",
+    editor: "open",
+    editor_result: { refused: ["/M/A"], reason: "Play In Editor is running" },
+  });
+  assert.equal(f.editorReason, "Play In Editor is running");
+  assert.equal(f.editor, "open");
+
+  const g = publishResultFrom({
+    published: ["Content/A.uasset"],
+    route: "live-reload",
+    editor: "open",
+    message: "ok",
+    reloaded_in_place: ["/M/A"],
+    dirty_after: ["/M/B"],
+    reloaded_referencers: ["/M/C"],
+    skipped_dirty: ["/M/D"],
+    dirty_published: ["/M/A"],
+    compile_errors_after: [{ asset: "/M/C", message: "cannot connect" }, "plain"],
+  });
+  assert.deepEqual(g.reloadedInPlace, ["/M/A"]);
+  assert.deepEqual(g.dirtyAfter, ["/M/B"]);
+  assert.equal(g.editorReason, null);
+  assert.deepEqual(g.reloadedReferencers, ["/M/C"]);
+  assert.deepEqual(g.skippedDirty, ["/M/D"]);
+  assert.deepEqual(g.dirtyPublished, ["/M/A"]);
+  assert.deepEqual(g.compileErrorsAfter, [
+    { asset: "/M/C", message: "cannot connect" },
+    { asset: null, message: '"plain"' },
+  ]);
+  assert.deepEqual(a.reloadedReferencers, []);
+  assert.deepEqual(a.skippedDirty, []);
+  assert.deepEqual(a.dirtyPublished, []);
+  assert.deepEqual(a.compileErrorsAfter, []);
 });

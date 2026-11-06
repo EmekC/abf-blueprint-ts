@@ -39,8 +39,14 @@ function fail(code: string, message: string, fix?: string): AbfcError {
   return new AbfcError({ severity: "error", code, message, ...(fix === undefined ? {} : { fix }) });
 }
 
-function errorsOf(r: BpApplyResult, asset: string | null): CompileMessage[] {
-  if (r.compile.errors.length > 0) return r.compile.errors;
+/**
+ * The errors of a failed apply. Messages about the backend's scratch Blueprint (`_McpTmp`) are not about the user's asset. The
+ * real backend always sets `error` when an apply fails (a summary like "1 compile error(s)" next to the compile messages), so
+ * the apply error only stands in when no real compile message is left (e.g. a spec error aborts before anything compiles).
+ */
+export function applyErrors(r: BpApplyResult, asset: string | null = null): CompileMessage[] {
+  const real = r.compile.errors.filter((e) => !(e.asset ?? "").includes("/_McpTmp/"));
+  if (real.length > 0) return real;
   return r.error ? [{ asset, message: r.error }] : [];
 }
 
@@ -56,7 +62,7 @@ export async function applyTwoPhase(
   const nodeIds = assets.map((x, i) => (a.assets?.find((r) => r.asset === x.spec.asset) ?? a.assets?.[i])?.node_ids ?? {});
   if (a.ok) return { ok: true, last: a, nodeIds, errors: [] };
 
-  const errors = errorsOf(a, assets[0]?.spec.asset ?? null);
+  const errors = applyErrors(a);
   const undetermined = errors.filter((e) => /undetermined/i.test(e.message));
   const other = errors.filter((e) => !/undetermined/i.test(e.message));
   if (other.length > 0 || undetermined.length === 0) return { ok: false, last: a, nodeIds, errors: other.length > 0 ? other : errors };
@@ -91,5 +97,5 @@ export async function applyTwoPhase(
 
   const b = await backend.applySpecs(mod, rawSpecs, { label: "main-b", cacheDir: o.cacheDir });
   o.record("apply.phaseB", b.seconds);
-  return { ok: b.ok, last: b, nodeIds, errors: b.ok ? [] : errorsOf(b, assets[0]?.spec.asset ?? null) };
+  return { ok: b.ok, last: b, nodeIds, errors: b.ok ? [] : applyErrors(b) };
 }

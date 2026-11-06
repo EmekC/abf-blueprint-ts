@@ -51,6 +51,27 @@ export function unitState(unit: ManifestUnit, snapshot: Map<string, T3dNode>, st
   return unitStateHash(snapshot, unit.nodes) === unit.assetHash ? "clean" : "edited";
 }
 
+/**
+ * Was the unit applied by abfc and does the stage still hold exactly that applied graph? After a `--resync` from a published mod
+ * the stage timestamp differs from the manifest, but the abfc-built nodes are what the stage holds.
+ */
+export function builtGraphMatches(unit: ManifestUnit, snapshot: Map<string, T3dNode>): boolean {
+  if (unit.assetHash === null || unit.nodes.length === 0) return false;
+  if (unit.nodes.some((n) => !snapshot.has(n))) return false;
+  return unitStateHash(snapshot, unit.nodes) === unit.assetHash;
+}
+
+/** Same manifest units with `stageSyncedAt` moved to the current stage for the stale units whose built graph the stage still holds. */
+export function rebaseStaleUnits<T extends { units: ManifestUnit[] }>(manifest: T, snapshot: Map<string, T3dNode>, stage: StageInfo): { manifest: T; changed: boolean } {
+  let changed = false;
+  const units = manifest.units.map((u) => {
+    if (unitState(u, snapshot, stage) !== "staleStage" || !builtGraphMatches(u, snapshot)) return u;
+    changed = true;
+    return { ...u, stageSyncedAt: stage.syncedAt };
+  });
+  return { manifest: changed ? { ...manifest, units } : manifest, changed };
+}
+
 function unitLabel(asset: string, unitId: string): string {
   const short = asset.slice(asset.lastIndexOf("/") + 1);
   const colon = unitId.indexOf(":");
@@ -100,6 +121,25 @@ export function driftDiagnostics(
         message: `${label} was edited in the editor since the last build${counts}. abfc will not overwrite it.`,
         fix: `undo the edit in the editor, or move it into the .ts file and run: abfc adopt ${asset} ${unit.id} --yes --discard-editor-changes (the next build then replaces the edited nodes)`,
       });
+    } else if (state === "staleStage" && builtGraphMatches(unit, snapshot)) {
+      continue; // re-synced from a published mod that holds the abfc-built graph
+    } else if (state === "staleStage" && unit.adopt === null) {
+      const gone = unit.nodes.filter((n) => !snapshot.has(n));
+      if (gone.length > 0) {
+        out.push({
+          ...base,
+          code: "ABFC5002",
+          message: `${label}: the stage was re-synced and ${plural(gone.length, "owned node")} ${gone.length === 1 ? "is" : "are"} missing in the asset (${gone.slice(0, 5).join(", ")}${gone.length > 5 ? ", ..." : ""}). abfc will not overwrite it.`,
+          fix: "restore the unit in the real mod, or run abfc build --resync after reverting it.",
+        });
+      } else if (unit.assetHash !== null && unit.nodes.length > 0) {
+        out.push({
+          ...base,
+          code: "ABFC5001",
+          message: `${label} differs from what abfc applied (the stage was re-synced from the real mod). abfc will not overwrite it.`,
+          fix: `move the change into the .ts file and run: abfc adopt ${asset} ${unit.id} --yes --discard-editor-changes`,
+        });
+      }
     } else if ((state === "pendingAdoption" || state === "staleStage") && unit.adopt !== null) {
       if (unitStateHash(snapshot, unit.adopt.nodes) !== unit.adopt.hash) {
         out.push({

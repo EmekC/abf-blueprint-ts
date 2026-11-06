@@ -7,6 +7,7 @@ import {
   checkHeadlessDir,
   checkNode,
   editorFingerprint,
+  exitCodeFor,
   findBackendDir,
   findDocuments,
   findEditorRoot,
@@ -289,6 +290,13 @@ test("loadProjectConfig: BOM tolerated, defaults filled, bad key reported with i
     (e: unknown) => e instanceof AbfcError && e.diagnostic.code === "ABFC1021" && /stubs\.classes/.test(e.diagnostic.message),
   );
   assert.throws(() => loadProjectConfig(dir, fakeHost()), (e: unknown) => e instanceof AbfcError && e.diagnostic.code === "ABFC1021");
+});
+
+test("exitCodeFor: publish codes", () => {
+  assert.equal(exitCodeFor("ABFC7004"), 1);
+  assert.equal(exitCodeFor("ABFC7005"), 3);
+  assert.equal(exitCodeFor("ABFC7006"), 2);
+  assert.equal(exitCodeFor("ABFC4090"), 3);
 });
 
 // ------------------------------------------------------------------ resolveEnvironment

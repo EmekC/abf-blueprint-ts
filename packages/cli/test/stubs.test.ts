@@ -89,6 +89,9 @@ async function fakeBackend(withReflect: boolean, calls: ReflectRequest[], reads:
     audit: async () => {
       throw new Error("unused");
     },
+    publish: async () => {
+      throw new Error("unused");
+    },
     close: async () => {},
   };
 }

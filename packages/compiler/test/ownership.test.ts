@@ -7,7 +7,7 @@ import { parseExport } from "@abfc/ir";
 import type { Span, T3dNode } from "@abfc/ir";
 import {
   adoptionDiagnostics, analyzeAdoption, driftDiagnostics, fingerprintUnit, mapCompileMessages, manifestPath, ownedSets,
-  readManifest, readSourceMap, unitState, writeManifest, writeSourceMap,
+  readManifest, readSourceMap, rebaseStaleUnits, unitState, writeManifest, writeSourceMap,
 } from "../src/index.js";
 import type { Manifest, ManifestUnit, SourceMapFile } from "../src/index.js";
 
@@ -159,6 +159,41 @@ test("drift diagnostics: ABFC5001 with counts, ABFC5002, ABFC5004", () => {
   assert.equal(driftDiagnostics(asset, [changed], snapshot(), stage, spans)[0]!.code, "ABFC5004");
 });
 
+test("drift diagnostics after a resync: built graph, hand-made graph, neither", () => {
+  const spans = new Map<string, Span>();
+  const resynced = { syncedAt: "2026-02-02T00:00:00Z" };
+  const handMade = fingerprintUnit(snapshot(), ["Call_3"]);
+  const adoptOf = (hash: string) => ({ entry: "Ev_B", nodes: ["Call_3"], hash, recordedAt: "now", stageSyncedAt: null });
+
+  // The stage holds the abfc-built graph; the adopt hash is the old hand-made graph (no longer in the stage).
+  const built = manifestUnit({ adopt: adoptOf("sha256:old-hand-made") });
+  assert.equal(unitState(built, snapshot(), resynced), "staleStage");
+  assert.deepEqual(driftDiagnostics(asset, [built], snapshot(), resynced, spans), []);
+
+  // The stage was re-synced from a real mod that still holds the hand-made graph: built nodes differ, adopt hash matches.
+  const stillHandMade = manifestUnit({ assetHash: "sha256:built-elsewhere", adopt: adoptOf(handMade.assetHash) });
+  assert.deepEqual(driftDiagnostics(asset, [stillHandMade], snapshot(), resynced, spans), []);
+  const builtGone = manifestUnit({ adopt: adoptOf(handMade.assetHash), nodes: ["Nope_1"] });
+  assert.deepEqual(driftDiagnostics(asset, [builtGone], snapshot(), resynced, spans), []);
+
+  // Neither matches.
+  const neither = manifestUnit({ assetHash: "sha256:built-elsewhere", adopt: adoptOf("sha256:old-hand-made") });
+  assert.equal(driftDiagnostics(asset, [neither], snapshot(), resynced, spans)[0]!.code, "ABFC5004");
+
+  // No adopt record: built graph matches -> fine; edited -> ABFC5001; node missing -> ABFC5002.
+  assert.deepEqual(driftDiagnostics(asset, [manifestUnit()], snapshot(), resynced, spans), []);
+  assert.equal(driftDiagnostics(asset, [manifestUnit()], snapshot({ def: "7" }), resynced, spans)[0]!.code, "ABFC5001");
+  assert.equal(driftDiagnostics(asset, [manifestUnit()], snapshot({ dropPure: true }), resynced, spans)[0]!.code, "ABFC5002");
+
+  // rebaseStaleUnits moves only the matching units to the new sync time.
+  const r = rebaseStaleUnits({ units: [built, neither] }, snapshot(), resynced);
+  assert.equal(r.changed, true);
+  assert.equal(r.manifest.units[0]!.stageSyncedAt, resynced.syncedAt);
+  assert.equal(r.manifest.units[1]!.stageSyncedAt, stage.syncedAt);
+  assert.equal(unitState(r.manifest.units[0]!, snapshot(), resynced), "clean");
+  assert.equal(rebaseStaleUnits({ units: [neither] }, snapshot(), resynced).changed, false);
+});
+
 test("manifest and source map files", () => {
   const dir = mkdtempSync(join(tmpdir(), "abfc-own-"));
   try {
@@ -211,6 +246,55 @@ test("compile messages map to owned nodes, hand-made nodes and units", () => {
   const wide = mapCompileMessages(asset, [{ asset, message: "oops" }, { asset: "/Fake/Mod/Other", message: "skip" }], two, {});
   assert.equal(wide.length, 1);
   assert.equal(wide[0]!.span, undefined);
+});
+
+test("apply spec errors and unknown-function messages map to the call in TS", () => {
+  const span = (line: number): Span => ({ file: "src/H.ts", line, col: 3, endLine: line, endCol: 9 });
+  const sm: SourceMapFile = {
+    asset,
+    units: {
+      "event:Caller": { span: span(1), nodes: { call1: { span: span(7), real: null } } },
+      "event:Other": { span: span(20), nodes: { call1: { span: span(22), real: null } } },
+    },
+  };
+  const specIds = { Caller_call1: "event:Caller/call1", Other_call1: "event:Other/call1" };
+  const ownCalls = { StartNew: [span(7), span(22)] };
+
+  // a SpecError about a planned node: located at that node, the prefix is not shown
+  const spec = mapCompileMessages(asset, [{ asset: null, message: "[spec:Other_call1] no pin 'execute' on K2Node_CallFunction_9027" }], sm, {}, specIds, ownCalls);
+  assert.equal(spec.length, 1);
+  assert.equal(spec[0]!.code, "ABFC6001");
+  assert.equal(spec[0]!.span?.line, 22);
+  assert.equal(spec[0]!.message, "[Unreal] no pin 'execute' on K2Node_CallFunction_9027");
+
+  // the exact unknown-function text of the failing run: one error per call of that function
+  const msg = "Could not find a function named \"StartNew\" in 'BPC_Host_C'.";
+  const calls = mapCompileMessages(asset, [{ asset, message: msg }], sm, {}, specIds, ownCalls);
+  assert.deepEqual(calls.map((d) => [d.code, d.span?.line]), [["ABFC6001", 7], ["ABFC6001", 22]]);
+  assert.equal(calls[0]!.message, "[Unreal] " + msg);
+
+  // a function nobody calls from TS stays an unlocated ABFC6002
+  const unknown = mapCompileMessages(asset, [{ asset, message: "Could not find a function named \"Elsewhere\" in 'BPC_Host_C'." }], sm, {}, specIds, ownCalls);
+  assert.deepEqual(unknown.map((d) => [d.code, d.span]), [["ABFC6002", undefined]]);
+
+  // scratch Blueprint messages of another asset are skipped; the raw apply error next to a located one is not reported twice
+  const both = mapCompileMessages(
+    asset,
+    [
+      { asset: "/Fake/Mod/_McpTmp/BP_BkScratch1", message: msg },
+      { asset: null, message: "[spec:Caller_call1] no pin 'execute' on K2Node_CallFunction_9027" },
+      { asset: null, message: "apply failed" },
+    ],
+    sm,
+    {},
+    specIds,
+    ownCalls,
+  );
+  assert.deepEqual(both.map((d) => [d.code, d.span?.line]), [["ABFC6001", 7]]);
+
+  // without maps the old behaviour stays
+  const plain = mapCompileMessages(asset, [{ asset, message: msg }], sm, {});
+  assert.deepEqual(plain.map((d) => [d.code, d.span]), [["ABFC6002", undefined]]);
 });
 
 // ---- Phase 2: delegate links, overrides, --remove-node ----

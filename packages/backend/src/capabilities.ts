@@ -41,6 +41,7 @@ export const BP_APPLY_P1_BASE: BackendCapabilities = {
   stageAudit: false,
   pinTypes: false,
   castObjectPin: false,
+  selfEventCalls: false,
   bpApplyFeatures: [],
   nodeKinds: [],
   backendContainerTypes: null,
@@ -72,6 +73,7 @@ export function capabilitiesFrom(
     bpApplyFeatures,
     pinTypes: bool(info?.capabilities?.pinTypes) && bpApplyFeatures.includes("pin_types"),
     castObjectPin: bpApplyFeatures.includes("cast_object_pin"),
+    selfEventCalls: bpApplyFeatures.includes("self_event_calls"),
     nodeKinds: strings(info?.bpApply?.nodeKinds),
     backendContainerTypes:
       rawContainers === null

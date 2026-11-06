@@ -16,6 +16,8 @@ export interface CliFlags {
   yes: boolean;
   discardEditorChanges: boolean;
   dryRun: boolean;
+  /** `--full`: `abfc publish` runs the release checks (tests, stage audit, upload file check) before the copy. */
+  full: boolean;
   /** `--cold`: do not use the backend warm session (one editor start per operation). */
   cold: boolean;
   /** `--remove-node <name>` (repeatable): extra nodes `abfc adopt` removes with the unit. */
@@ -61,6 +63,7 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
         yes: { type: "boolean" },
         "discard-editor-changes": { type: "boolean" },
         "dry-run": { type: "boolean" },
+        full: { type: "boolean" },
         cold: { type: "boolean" },
         "remove-node": { type: "string", multiple: true },
       },
@@ -89,6 +92,7 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
       yes: v.yes === true,
       discardEditorChanges: v["discard-editor-changes"] === true,
       dryRun: v["dry-run"] === true,
+      full: v.full === true,
       cold: v.cold === true,
       removeNode: v["remove-node"] ?? [],
     },
