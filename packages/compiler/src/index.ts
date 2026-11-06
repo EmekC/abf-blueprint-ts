@@ -7,7 +7,7 @@ export { blockedMemberHits } from "./frontend/blocked.js";
 export { lower, formatLiteral, assignPositions } from "./lower/index.js";
 export { analyzeAdoption, adoptionDiagnostics, AdoptionError } from "./ownership/adopt.js";
 export type { AdoptionAnalysis, AdoptOptions } from "./ownership/adopt.js";
-export { driftDiagnostics, fingerprintUnit, unitState } from "./ownership/drift.js";
+export { builtGraphMatches, driftDiagnostics, fingerprintUnit, rebaseStaleUnits, unitState } from "./ownership/drift.js";
 export type { StageInfo, UnitFingerprint, UnitState } from "./ownership/drift.js";
 export { assetFileStem, manifestPath, ownedSets, readManifest, stringifySorted, writeManifest } from "./ownership/manifest.js";
 export type { Manifest, ManifestUnit } from "./ownership/manifest.js";

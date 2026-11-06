@@ -5,7 +5,7 @@ import { AbfcError } from "@abfc/env";
 import { parseBpType } from "@abfc/ir";
 import type { ApplyPlan, AssetPlan, BackendCapabilities, Diagnostic, IrNode, IrParam, IrUnit, Profile } from "@abfc/ir";
 import { renderDefaultsCode } from "./defaults-template.js";
-import { applyTwoPhase } from "./fallback.js";
+import { applyErrors, applyTwoPhase } from "./fallback.js";
 import type { FallbackAsset, WildcardPatchRef } from "./fallback.js";
 import type { Backend, BpApplyResult, CompileMessage } from "./types.js";
 
@@ -164,6 +164,18 @@ export function renderMainSpec(a: AssetPlan, caps: BackendCapabilities, profile:
       g.wires!.push([`${entry}${w.from.slice(dotFrom)}`, `${specNodeId(u.unit, w.to.slice(0, dotTo))}${w.to.slice(dotTo)}`]);
     }
   }
+  // Units that are no longer in the TS: their nodes (and tag comment) go away with the same apply.
+  for (const r of a.removeUnits ?? []) {
+    const g = graphs.get(r.graph) ?? { graph: r.graph, remove: [], add: [], wires: [] };
+    graphs.set(r.graph, g);
+    for (const name of r.nodes) if (!g.remove!.includes(name)) g.remove!.push(name);
+  }
+  // Orphan tag comments of units that stay: removed with the same apply.
+  for (const r of a.removeTags ?? []) {
+    const g = graphs.get(r.graph) ?? { graph: r.graph, remove: [], add: [], wires: [] };
+    graphs.set(r.graph, g);
+    for (const name of r.nodes) if (!g.remove!.includes(name)) g.remove!.push(name);
+  }
   spec.graphs = [...graphs.values()];
   return spec;
 }
@@ -286,7 +298,7 @@ export async function applyPlan(
 ): Promise<ApplyOutcome> {
   if (plan.assets.length === 0) return { ok: true, perAsset: [] };
   // Assets that only carry class defaults have no graph work: they take part in pass 5 only.
-  const unitAssets = plan.assets.filter((a) => a.units.length > 0);
+  const unitAssets = plan.assets.filter((a) => a.units.length > 0 || (a.removeUnits?.length ?? 0) > 0 || (a.removeTags?.length ?? 0) > 0);
   if (unitAssets.length === 0) {
     const only: AssetApplyOutcome[] = plan.assets.map((a) => ({ asset: a.asset, nodeIds: {}, finalText: null, compile: [], tagName: null, tagNames: {}, defaultsApplied: false, defaultsWarnings: [] }));
     await applyDefaultsPass(backend, plan, only, o);
@@ -310,7 +322,7 @@ export async function applyPlan(
     o.record("apply.main", last.seconds);
     ok = last.ok;
     nodeIdMaps = unitAssets.map((a, i) => entryFor(last, a.asset, i)?.node_ids ?? {});
-    errors = ok ? [] : last.compile.errors.length > 0 ? last.compile.errors : last.error ? [{ asset: null, message: last.error }] : [];
+    errors = ok ? [] : applyErrors(last);
   }
 
   const perUnitAsset: AssetApplyOutcome[] = unitAssets.map((a, i) => {
@@ -340,31 +352,35 @@ export async function applyPlan(
   );
   if (!ok) return { ok: false, perAsset };
 
-  const tagSpecs = unitAssets.map((a) => renderTagSpec(a, a.units, profile));
-  const tag = await backend.applySpecs(plan.mod, tagSpecs, { label: "tags", cacheDir: o.cacheDir });
-  o.record("apply.tags", tag.seconds);
-  unitAssets.forEach((a, i) => {
-    const out = perUnitAsset[i]!;
-    if (!tag.ok) {
-      out.tagWarning = {
-        severity: "warning",
-        code: "ABFC5101",
-        asset: a.asset,
-        message: `the ownership tag pass failed for ${a.asset}: ${tag.error ?? tag.compile.errors[0]?.message ?? "unknown error"}. The units are applied but carry no comment box.`,
-        fix: "run abfc build again; the tag pass is repeated.",
-      };
-      return;
-    }
-    const entry = entryFor(tag, a.asset, i);
-    const graphs = tagSpecs[i]!.graphs ?? [];
-    for (const u of a.units) {
-      const k = graphs.findIndex((g) => g.graph === u.unit.graph);
-      const real = entry?.node_ids[`graph:${k}`]?.[`cmt_${slug(u.unit.name)}`];
-      if (real !== undefined) out.tagNames[u.unit.id] = real;
-    }
-    out.tagName = Object.values(out.tagNames)[0] ?? null;
-    out.finalText = readFinal(tag.run, i) ?? out.finalText;
-  });
+  // Only assets with units get a comment box (an asset with only removals has nothing to tag).
+  const tagAssets = unitAssets.map((a, i) => ({ a, i })).filter((x) => x.a.units.length > 0);
+  if (tagAssets.length > 0) {
+    const tagSpecs = tagAssets.map((x) => renderTagSpec(x.a, x.a.units, profile));
+    const tag = await backend.applySpecs(plan.mod, tagSpecs, { label: "tags", cacheDir: o.cacheDir });
+    o.record("apply.tags", tag.seconds);
+    tagAssets.forEach(({ a, i: mainIndex }, ti) => {
+      const out = perUnitAsset[mainIndex]!;
+      if (!tag.ok) {
+        out.tagWarning = {
+          severity: "warning",
+          code: "ABFC5101",
+          asset: a.asset,
+          message: `the ownership tag pass failed for ${a.asset}: ${tag.error ?? tag.compile.errors[0]?.message ?? "unknown error"}. The units are applied but carry no comment box.`,
+          fix: "run abfc build again; the tag pass is repeated.",
+        };
+        return;
+      }
+      const entry = entryFor(tag, a.asset, ti);
+      const graphs = tagSpecs[ti]!.graphs ?? [];
+      for (const u of a.units) {
+        const k = graphs.findIndex((g) => g.graph === u.unit.graph);
+        const real = entry?.node_ids[`graph:${k}`]?.[`cmt_${slug(u.unit.name)}`];
+        if (real !== undefined) out.tagNames[u.unit.id] = real;
+      }
+      out.tagName = Object.values(out.tagNames)[0] ?? null;
+      out.finalText = readFinal(tag.run, ti) ?? out.finalText;
+    });
+  }
   await applyDefaultsPass(backend, plan, perAsset, o);
   return { ok: true, perAsset };
 }

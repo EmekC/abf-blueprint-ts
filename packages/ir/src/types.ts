@@ -95,6 +95,8 @@ export interface BackendCapabilities {
   pinTypes: boolean;
   /** The backend types a cast's `Object` input pin itself (`cast_object_pin`). */
   castObjectPin: boolean;
+  /** bp_apply feature `self_event_calls`: a self call to a custom event added in the same apply gets real pins. */
+  selfEventCalls: boolean;
   bpApplyFeatures: string[];
   nodeKinds: string[];
   /** `mod_audit` can audit the stage (false in Phase 1: it audits the real mod). */
@@ -160,6 +162,12 @@ export interface AssetPlan {
   classMeta: Record<string, string>;
   /** Real entry node name of units that are not in this plan but are the target of a cross wire of a planned unit (from the manifest). */
   entryNames?: Record<string, string>;
+  /** Manifest units no longer in the TS whose stage nodes are removed (nodes include the tag comment). */
+  removeUnits?: Array<{ id: string; graph: string; nodes: string[] }>;
+  /** Orphan ownership tag comments of units that stay as they are (left by an earlier re-plan); removed in the main pass. */
+  removeTags?: Array<{ graph: string; nodes: string[] }>;
+  /** Manifest units dropped without touching the stage (never applied, or adopted hand-made nodes). */
+  forgetUnits?: string[];
   /** Class defaults to apply in pass 5 (plan item `defaults`); present only when they changed. */
   defaults?: { classPath: string; values: Record<string, string>; hash: string; classManagerRow?: string };
 }

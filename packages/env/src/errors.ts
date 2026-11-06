@@ -5,7 +5,8 @@ export type ExitCode = 1 | 2 | 3;
 /** Exit code by diagnostic code (see the plan's error table): 0 ok is not an error. */
 export function exitCodeFor(code: string): ExitCode {
   const n = Number(code.replace(/^ABFC/, ""));
-  if (n === 1020 || n === 4090 || (n >= 5001 && n <= 5007) || n === 7001) return 3;
+  if (n === 7006) return 2;
+  if (n === 1020 || n === 4090 || (n >= 5001 && n <= 5007) || n === 7005) return 3;
   if (n >= 2000 && n < 3000) return 1;
   if (n >= 6000 && n < 7000) return 1;
   if (n >= 1000 && n < 5000) return 2;

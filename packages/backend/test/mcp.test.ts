@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AbfcError } from "@abfc/env";
-import { ALLOWED_TOOLS, McpStdioClient, assertToolAllowed, backendServerEnv } from "../src/index.js";
+import { ALLOWED_TOOLS, McpStdioClient, assertToolAllowed, backendServerEnv, grantPublish } from "../src/index.js";
 
 const FIXTURE = fileURLToPath(new URL("../../test/fixtures/fake-server.mjs", import.meta.url));
 
@@ -79,7 +79,7 @@ test("bp_publish and tools off the allowlist are refused before any message is s
     for (const tool of ["bp_publish", "echo"]) {
       await assert.rejects(
         c.callTool(tool, { x: 1 }),
-        (e: unknown) => e instanceof AbfcError && e.diagnostic.code === "ABFC4090" && e.exitCode === 3 && e.diagnostic.message.includes(tool === "bp_publish" ? "publishing" : tool),
+        (e: unknown) => e instanceof AbfcError && e.diagnostic.code === "ABFC4090" && e.exitCode === 3 && e.diagnostic.message.includes(tool),
       );
     }
     assert.equal(received(logFile).filter((r) => r.method === "tools/call").length, 0);
@@ -93,6 +93,44 @@ test("assertToolAllowed accepts exactly the allowlist", () => {
   assert.equal(ALLOWED_TOOLS.length, 11);
   assert.throws(() => assertToolAllowed("bp_publish"), AbfcError);
   assert.throws(() => assertToolAllowed("run_python"), AbfcError);
+});
+
+const is4090 = (e: unknown): boolean => e instanceof AbfcError && e.diagnostic.code === "ABFC4090" && e.exitCode === 3;
+
+test("bp_publish: refused without a grant, with a forged grant, and for a different mod than the grant's (ABFC4090)", () => {
+  assert.throws(() => assertToolAllowed("bp_publish"), is4090);
+  assert.throws(() => assertToolAllowed("bp_publish", { args: { mod: "TestMod" } }), is4090);
+  assert.throws(() => assertToolAllowed("bp_publish", { grant: { mod: "TestMod" }, args: { mod: "TestMod" } }), is4090);
+  const grant = grantPublish("TestMod");
+  assert.throws(() => assertToolAllowed("bp_publish", { grant, args: { mod: "OtherMod" } }), is4090);
+  assert.throws(() => assertToolAllowed("bp_publish", { grant }), is4090);
+  // a grant never opens any other tool that is off the allowlist
+  assert.throws(() => assertToolAllowed("run_python", { grant, args: { mod: "TestMod" } }), is4090);
+});
+
+test("grantPublish mints a grant bound to one mod", () => {
+  const grant = grantPublish("TestMod");
+  assert.equal(grant.mod, "TestMod");
+  assert.ok(Object.isFrozen(grant));
+  assert.doesNotThrow(() => assertToolAllowed("bp_publish", { grant, args: { mod: "TestMod" } }));
+  assert.throws(() => assertToolAllowed("bp_publish", { grant, args: { mod: "testmod" } }), is4090);
+  const other = grantPublish("Other");
+  assert.throws(() => assertToolAllowed("bp_publish", { grant: other, args: { mod: "TestMod" } }), is4090);
+});
+
+test("callTool sends bp_publish only with a valid grant for that mod", async () => {
+  await withClient({}, async (c, logFile) => {
+    await assert.rejects(c.callTool("bp_publish", { mod: "TestMod" }), is4090);
+    const grant = grantPublish("TestMod");
+    await assert.rejects(c.callTool("bp_publish", { mod: "OtherMod" }, { publishGrant: grant }), is4090);
+    assert.equal(received(logFile).filter((r) => r.method === "tools/call").length, 0);
+    // the fake server has no bp_publish handler: an RPC error (ABFC4002) proves the message was sent
+    await assert.rejects(
+      c.callTool("bp_publish", { mod: "TestMod" }, { publishGrant: grant }),
+      (e: unknown) => e instanceof AbfcError && e.diagnostic.code === "ABFC4002",
+    );
+    assert.deepEqual(received(logFile).filter((r) => r.method === "tools/call").map((r) => r.tool), ["bp_publish"]);
+  });
 });
 
 test("a request that gets no reply rejects at the timeout and the client stays usable", async () => {
