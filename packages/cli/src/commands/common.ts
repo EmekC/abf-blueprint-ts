@@ -19,10 +19,18 @@ export const since = (t0: number): number => (performance.now() - t0) / 1000;
 /** Writes timings to `.abfc/runs.jsonl` and keeps them for `--timings`. */
 export class Recorder {
   readonly entries: RunEntry[] = [];
+  /** Says whether the backend ran its last commandlet operation on the warm session (set by {@link BackendSession}). */
+  warmSource: (() => boolean) | null = null;
   constructor(private readonly ctx: CliContext) {}
 
   record(step: string, seconds: number, ok = true, units?: number): void {
-    const entry: RunEntry = { at: this.ctx.deps.now().toISOString(), step, seconds, ok, mode: "cold" };
+    const entry: RunEntry = {
+      at: this.ctx.deps.now().toISOString(),
+      step,
+      seconds,
+      ok,
+      mode: this.warmSource?.() === true ? "warm" : "cold",
+    };
     if (units !== undefined) entry.units = units;
     this.entries.push(entry);
     recordRun(this.ctx.paths.runsFile, entry);
@@ -118,7 +126,8 @@ export class BackendSession {
   async open(step = "build.backendStart"): Promise<{ backend: Backend; info: BackendInfo }> {
     if (this.opened !== null) return this.opened;
     const t0 = performance.now();
-    const backend = await this.ctx.deps.startBackend(this.ctx.env);
+    const backend = await this.ctx.deps.startBackend(this.ctx.env, { cold: this.ctx.args.flags.cold });
+    this.rec.warmSource = () => backend.lastWarm === true;
     try {
       const info = await backend.info();
       checkProtocol(this.ctx, info);

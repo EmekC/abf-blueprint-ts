@@ -23,6 +23,8 @@ export interface AssetSnapshot {
   exportPath: string;
   structure: unknown;
   seconds: number | null;
+  /** The read ran on the warm session. */
+  warm?: boolean;
 }
 
 export interface CompileMessage {
@@ -40,6 +42,8 @@ export interface BpApplyResult {
   seconds: number;
   assets: Array<{ asset: string; node_ids: Record<string, Record<string, string>>; final?: string }> | null;
   compile: { errors: CompileMessage[]; warnings: CompileMessage[] };
+  /** The apply ran on the warm session. */
+  warm?: boolean;
   error?: string;
   logTail?: string;
 }
@@ -49,6 +53,8 @@ export interface CompileReport {
   messages: Array<CompileMessage & { severity: "error" | "warning" }>;
   run: string;
   seconds: number;
+  /** The report ran on the warm session. */
+  warm?: boolean;
 }
 
 export interface ReflectRequest {
@@ -122,6 +128,8 @@ export interface AuditReport {
 }
 
 export interface Backend {
+  /** True when the most recent commandlet operation (read, apply, compile, reflect) ran on the warm session. */
+  readonly lastWarm?: boolean;
   info(): Promise<BackendInfo>;
   stage(modDir: string, o: { discardChanges: boolean }): Promise<StageReport>;
   stageStatus(mod: string): Promise<StageStatus | null>;

@@ -33,7 +33,7 @@ export function buildSignature(ins: SigPin[], outs: SigPin[], extraExec: string[
   const params = ins.map((p) => {
     note(p);
     if (isUnsupported(p.grammar)) unsupported.add(unsupportedLabel(p.grammar));
-    return `${tsName(p.pin)}: ${tsOfGrammar(p.grammar, ctx)}`;
+    return `${tsName(p.pin)}: ${tsOfGrammar(p.grammar, ctx, "param")}`;
   });
   for (const p of ins) tags.push(`@bpParam ${p.pin} ${p.grammar}`);
   const outTs = outs.map((p) => {

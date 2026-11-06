@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { AbfcError } from "@abfc/env";
 import { parseBpType } from "@abfc/ir";
 import type { ApplyPlan, AssetPlan, BackendCapabilities, Diagnostic, IrNode, IrParam, IrUnit, Profile } from "@abfc/ir";
+import { renderDefaultsCode } from "./defaults-template.js";
 import { applyTwoPhase } from "./fallback.js";
 import type { FallbackAsset, WildcardPatchRef } from "./fallback.js";
 import type { Backend, BpApplyResult, CompileMessage } from "./types.js";
@@ -34,7 +35,7 @@ export interface BpApplyAssetSpec {
   asset: string;
   variables?: Array<{ name: string; type: string; flags: number }>;
   graphs?: BpGraphSpec[];
-  raw?: Array<{ kind: "graph"; graph: string; text: string }>;
+  raw?: Array<{ kind: "graph"; graph: string; text: string } | { kind: "python"; code: string }>;
 }
 
 function refused(n: IrNode, what: string): AbfcError {
@@ -145,6 +146,23 @@ export function renderMainSpec(a: AssetPlan, caps: BackendCapabilities, profile:
       };
       g.wires!.push([conv(from), conv(to)]);
     }
+    for (const w of u.unit.crossWires ?? []) {
+      // The target entry is a spec id when its unit is in this plan, else the real node name recorded in the manifest.
+      const target = a.units.find((x) => x.unit.id === w.toUnit);
+      const real = a.entryNames?.[w.toUnit];
+      const dotFrom = w.from.indexOf(".");
+      const dotTo = w.to.indexOf(".");
+      const entry = target ? specNodeId(target.unit, w.from.slice(0, dotFrom)) : real;
+      if (entry === undefined) {
+        throw new AbfcError({
+          severity: "error",
+          code: "ABFC4012",
+          message: `${u.unit.id}: the event ${w.toUnit} that supplies its delegate is neither in this build nor recorded in the manifest.`,
+          span: u.unit.origin,
+        }, 2);
+      }
+      g.wires!.push([`${entry}${w.from.slice(dotFrom)}`, `${specNodeId(u.unit, w.to.slice(0, dotTo))}${w.to.slice(dotTo)}`]);
+    }
   }
   spec.graphs = [...graphs.values()];
   return spec;
@@ -190,6 +208,10 @@ export interface AssetApplyOutcome {
   /** Unit id -> real name of its comment box. */
   tagNames: Record<string, string>;
   tagWarning?: Diagnostic;
+  /** The class-defaults pass (pass 5) ran for this asset and succeeded; false when it was not planned or failed. */
+  defaultsApplied: boolean;
+  /** Warnings of pass 5: ABFC2070 (class manager row), ABFC5102 (the pass failed; it is repeated by the next build). */
+  defaultsWarnings: Diagnostic[];
 }
 
 export interface ApplyOutcome {
@@ -220,7 +242,41 @@ function patchRefs(a: AssetPlan, spec: BpApplyAssetSpec, caps: BackendCapabiliti
   return refs;
 }
 
-/** Applies the plan: one main pass (native pin types, or the two-phase fallback), then the tag pass. */
+/** Spec of the class-defaults pass of one asset: one fixed Python template (see defaults-template.ts). */
+export function renderDefaultsSpec(a: AssetPlan): BpApplyAssetSpec {
+  const d = a.defaults!;
+  return { asset: a.asset, raw: [{ kind: "python", code: renderDefaultsCode(d.classPath, d.values, d.classManagerRow) }] };
+}
+
+/** Pass 5: class defaults of every asset whose plan has a `defaults` item. A failure is a warning (the next build repeats it). */
+async function applyDefaultsPass(backend: Backend, plan: ApplyPlan, perAsset: AssetApplyOutcome[], o: ApplyOptions): Promise<void> {
+  const targets = plan.assets.map((a, i) => ({ a, i })).filter((x) => x.a.defaults !== undefined);
+  if (targets.length === 0) return;
+  const specs = targets.map((x) => renderDefaultsSpec(x.a));
+  const r = await backend.applySpecs(plan.mod, specs, { label: "defaults", cacheDir: o.cacheDir });
+  o.record("apply.defaults", r.seconds);
+  for (const { a, i } of targets) {
+    const out = perAsset[i]!;
+    if (!r.ok) {
+      out.defaultsWarnings.push({
+        severity: "warning",
+        code: "ABFC5102",
+        asset: a.asset,
+        message: `the class-defaults pass failed for ${a.asset}: ${r.error ?? r.compile.errors[0]?.message ?? "unknown error"}. The class defaults are not applied.`,
+        fix: "run abfc build again; the pass is repeated.",
+      });
+      continue;
+    }
+    out.defaultsApplied = true;
+    const text = [r.logTail ?? "", ...r.compile.warnings.map((w) => w.message)].join("\n");
+    for (const line of text.split(/\r?\n/)) {
+      const at = line.indexOf("ABFC2070");
+      if (at >= 0) out.defaultsWarnings.push({ severity: "warning", code: "ABFC2070", asset: a.asset, message: line.slice(at + "ABFC2070".length).trim() });
+    }
+  }
+}
+
+/** Applies the plan: one main pass (native pin types, or the two-phase fallback), then the tag pass, then the class-defaults pass (pass 5). */
 export async function applyPlan(
   backend: Backend,
   plan: ApplyPlan,
@@ -229,8 +285,15 @@ export async function applyPlan(
   o: ApplyOptions,
 ): Promise<ApplyOutcome> {
   if (plan.assets.length === 0) return { ok: true, perAsset: [] };
-  const specs = plan.assets.map((a) => renderMainSpec(a, caps, profile));
-  const refs = plan.assets.map((a, i) => patchRefs(a, specs[i]!, caps, profile));
+  // Assets that only carry class defaults have no graph work: they take part in pass 5 only.
+  const unitAssets = plan.assets.filter((a) => a.units.length > 0);
+  if (unitAssets.length === 0) {
+    const only: AssetApplyOutcome[] = plan.assets.map((a) => ({ asset: a.asset, nodeIds: {}, finalText: null, compile: [], tagName: null, tagNames: {}, defaultsApplied: false, defaultsWarnings: [] }));
+    await applyDefaultsPass(backend, plan, only, o);
+    return { ok: true, perAsset: only };
+  }
+  const specs =unitAssets.map((a) => renderMainSpec(a, caps, profile));
+  const refs = unitAssets.map((a, i) => patchRefs(a, specs[i]!, caps, profile));
   const needsFallback = !caps.pinTypes && refs.some((r) => r.length > 0);
 
   let ok: boolean;
@@ -238,7 +301,7 @@ export async function applyPlan(
   let nodeIdMaps: Array<Record<string, Record<string, string>>>;
   let errors: CompileMessage[];
   if (needsFallback) {
-    const classMeta = Object.assign({}, ...plan.assets.map((a) => a.classMeta)) as Record<string, string>;
+    const classMeta = Object.assign({}, ...unitAssets.map((a) => a.classMeta)) as Record<string, string>;
     const fb: FallbackAsset[] = specs.map((spec, i) => ({ spec, patches: refs[i]! }));
     const r = await applyTwoPhase(backend, plan.mod, fb, classMeta, o);
     ({ ok, last, nodeIds: nodeIdMaps, errors } = r);
@@ -246,11 +309,11 @@ export async function applyPlan(
     last = await backend.applySpecs(plan.mod, specs, { label: "main", cacheDir: o.cacheDir });
     o.record("apply.main", last.seconds);
     ok = last.ok;
-    nodeIdMaps = plan.assets.map((a, i) => entryFor(last, a.asset, i)?.node_ids ?? {});
+    nodeIdMaps = unitAssets.map((a, i) => entryFor(last, a.asset, i)?.node_ids ?? {});
     errors = ok ? [] : last.compile.errors.length > 0 ? last.compile.errors : last.error ? [{ asset: null, message: last.error }] : [];
   }
 
-  const perAsset: AssetApplyOutcome[] = plan.assets.map((a, i) => {
+  const perUnitAsset: AssetApplyOutcome[] = unitAssets.map((a, i) => {
     const specIds = nodeIdMaps[i] ?? {};
     const nodeIds: Record<string, string> = {};
     for (const u of a.units) {
@@ -268,15 +331,20 @@ export async function applyPlan(
       compile: errors.filter((e) => e.asset === null || e.asset === a.asset),
       tagName: null,
       tagNames: {},
+      defaultsApplied: false,
+      defaultsWarnings: [],
     };
   });
+  const perAsset: AssetApplyOutcome[] = plan.assets.map(
+    (a) => perUnitAsset[unitAssets.indexOf(a)] ?? { asset: a.asset, nodeIds: {}, finalText: null, compile: [], tagName: null, tagNames: {}, defaultsApplied: false, defaultsWarnings: [] },
+  );
   if (!ok) return { ok: false, perAsset };
 
-  const tagSpecs = plan.assets.map((a) => renderTagSpec(a, a.units, profile));
+  const tagSpecs = unitAssets.map((a) => renderTagSpec(a, a.units, profile));
   const tag = await backend.applySpecs(plan.mod, tagSpecs, { label: "tags", cacheDir: o.cacheDir });
   o.record("apply.tags", tag.seconds);
-  plan.assets.forEach((a, i) => {
-    const out = perAsset[i]!;
+  unitAssets.forEach((a, i) => {
+    const out = perUnitAsset[i]!;
     if (!tag.ok) {
       out.tagWarning = {
         severity: "warning",
@@ -297,5 +365,6 @@ export async function applyPlan(
     out.tagName = Object.values(out.tagNames)[0] ?? null;
     out.finalText = readFinal(tag.run, i) ?? out.finalText;
   });
+  await applyDefaultsPass(backend, plan, perAsset, o);
   return { ok: true, perAsset };
 }

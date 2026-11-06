@@ -246,6 +246,46 @@ test("structs, enums and opaque types", () => {
   assert.ok(index.members > 10);
 });
 
+test("enum, delegate and class parameters", () => {
+  const TOOLS = "/Script/FakeEngine.Tools";
+  const reflect = reflectData();
+  reflect.classes[TOOLS] = {
+    meta: "/Script/CoreUObject.Class",
+    ancestors: ["/Script/CoreUObject.Object"],
+    castPin: null,
+    properties: [{ name: "Mode", pins: [pin("Mode", "out", "byte", { subCategoryObject: "/Script/FakeEngine.EFakeMode" })] }],
+    functions: [
+      {
+        name: "Schedule",
+        pins: [
+          execIn,
+          selfPin(),
+          execThen,
+          pin("Mode", "in", "byte", { subCategoryObject: "/Script/FakeEngine.EFakeMode" }),
+          pin("Callback", "in", "delegate"),
+          pin("Kind", "in", "class", { subCategoryObject: THING }),
+          pin("Kinds", "in", "class", { subCategoryObject: THING, container: "Array" }),
+          pin("ReturnValue", "out", "byte", { subCategoryObject: "/Script/FakeEngine.EFakeMode" }),
+          pin("WorldContextObject", "in", "object", { subCategoryObject: "/Script/CoreUObject.Object", hidden: true }),
+        ],
+      },
+    ],
+  };
+  const text = emitStubs(input({ reflect })).get("Script/FakeEngine.d.ts") ?? "";
+  const mode = 'EnumText<"/Script/FakeEngine.EFakeMode">';
+  const ctor = "TSubclassOf<Thing> | (abstract new (...a: never[]) => Thing)";
+  assert.ok(/import type \{ DelegateRef, EnumText, TSubclassOf[^}]*\} from "@abfc\/runtime";/.test(text));
+  assert.ok(text.includes(`  Mode: ${mode};\n`));
+  assert.ok(
+    text.includes(`Schedule(Mode: ${mode}, Callback: DelegateRef, Kind: ${ctor} | null, Kinds: (${ctor} | null)[]): ${mode};`),
+    text,
+  );
+  assert.ok(!text.includes("WorldContextObject:"));
+  assert.ok(text.includes("@bpWorldContext"));
+  assert.ok(text.includes("@bpParam Callback unsupported:delegate"));
+  assert.match(text, /^ {2}Mode: EFakeMode;$/m);
+});
+
 test("hand-made asset: variables, functions, events; owned members are left out", () => {
   const manual = {
     asset: "/TestMod/Items/BP_Hand",

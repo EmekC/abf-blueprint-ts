@@ -7,7 +7,8 @@ import { BackendSession, COMPILER_ID, Recorder, readAsset } from "./common.js";
 import { ensureStage } from "./stage.js";
 
 /**
- * `abfc adopt <asset> <unit> [--yes] [--discard-editor-changes]`: records a hand-made event as owned. Never calls `bp_apply`.
+ * `abfc adopt <asset> <unit> [--remove-node <name>]... [--yes] [--discard-editor-changes]`: records a hand-made event or engine
+ * override (`override:ReceiveTick`) as owned; `--remove-node` adds comment boxes and unlinked nodes that go away with it. Never calls `bp_apply`.
  * A unit abfc has already applied is refused unless `--discard-editor-changes` is given; the next build then removes its
  * old nodes and ownership comment as well as the adopted ones.
  */
@@ -15,14 +16,15 @@ export async function adopt(ctx: CliContext): Promise<number> {
   const { output, args, config, env, projectDir } = ctx;
   const [asset, unitArg] = args.positionals;
   if (asset === undefined || unitArg === undefined || args.positionals.length > 2) {
-    throw new UsageError("usage: abfc adopt <asset> <unit> [--yes] [--discard-editor-changes]  (unit: UpdateTarget or event:UpdateTarget)");
+    throw new UsageError("usage: abfc adopt <asset> <unit> [--remove-node <name>]... [--yes] [--discard-editor-changes]  (unit: UpdateTarget, event:UpdateTarget or override:ReceiveTick)");
   }
   const colon = unitArg.indexOf(":");
-  if (colon >= 0 && unitArg.slice(0, colon) !== "event") {
-    throw new UsageError(`only events can be adopted in Phase 1, got "${unitArg}"`);
+  const kind = colon < 0 ? "event" : unitArg.slice(0, colon);
+  if (kind !== "event" && kind !== "override") {
+    throw new UsageError(`only events and overrides can be adopted, got "${unitArg}"`);
   }
   const unitName = colon < 0 ? unitArg : unitArg.slice(colon + 1);
-  const unitId = `event:${unitName}`;
+  const unitId = `${kind}:${unitName}`;
   const graph = "EventGraph";
 
   const existing = readManifest(projectDir, asset);
@@ -48,7 +50,7 @@ export async function adopt(ctx: CliContext): Promise<number> {
 
     let analysis: AdoptionAnalysis;
     try {
-      analysis = analyzeAdoption(parsed.nodes, graph, unitName);
+      analysis = analyzeAdoption(parsed.nodes, graph, unitName, { kind, extraNodes: args.flags.removeNode });
     } catch (e) {
       if (e instanceof AdoptionError) {
         output.diag({ severity: "error", code: e.code, message: e.message.slice(e.code.length + 2), asset });
@@ -56,7 +58,12 @@ export async function adopt(ctx: CliContext): Promise<number> {
       }
       throw e;
     }
-    const problems = adoptionDiagnostics(analysis, asset, unitName);
+    const otherUnitNodes = new Set<string>();
+    for (const u of existing?.units ?? []) {
+      if (u.id === unitId) continue;
+      for (const n of [...u.nodes, ...(u.adopt?.nodes ?? [])]) otherUnitNodes.add(n);
+    }
+    const problems = adoptionDiagnostics(analysis, asset, unitName, otherUnitNodes);
     if (problems.length > 0) {
       for (const d of problems) output.diag(d);
       return output.exitCode();
@@ -65,7 +72,11 @@ export async function adopt(ctx: CliContext): Promise<number> {
     output.info(`adopt ${unitId} in ${asset}`);
     output.info(`  entry: ${analysis.entry}`);
     output.info(`  owned nodes (${analysis.owned.length}): ${analysis.owned.join(", ")}`);
-    output.json({ asset, unit: unitId, entry: analysis.entry, owned: analysis.owned, written: args.flags.yes });
+    if (analysis.extra.length > 0) output.info(`  removed with it (--remove-node): ${analysis.extra.join(", ")}`);
+    for (const c of analysis.crossLinks) {
+      output.info(`  delegate link: ${c.node}.${c.pin} ${c.role === "uses" ? "uses the entry" : "takes this unit as its delegate from"} ${c.entry}`);
+    }
+    output.json({ asset, unit: unitId, entry: analysis.entry, owned: analysis.owned, extra: analysis.extra, crossLinks: analysis.crossLinks, written: args.flags.yes });
 
     if (!args.flags.yes) {
       output.diag({
@@ -99,6 +110,7 @@ export async function adopt(ctx: CliContext): Promise<number> {
         hash: unitStateHash(parsed.nodes, owned),
         recordedAt: ctx.deps.now().toISOString(),
         stageSyncedAt: stage.syncedAt,
+        ...(analysis.crossLinks.length > 0 ? { crossLinks: analysis.crossLinks } : {}),
       },
     };
     const manifest: Manifest = existing ?? { asset, compiler: COMPILER_ID, profile: env.profile.id, units: [], variables: [] };
