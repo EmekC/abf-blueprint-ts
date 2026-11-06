@@ -31,13 +31,13 @@ const USAGE = [
   "usage: abfc <command> [options]",
   "commands: " + Object.keys(COMMANDS).join(", "),
   "options: --json --verbose --project <dir> --editor-root <dir> --mods-dir <dir> --mod-dir <dir>",
-  "         --backend-dir <dir> --python <exe> --headless-dir <dir> --timings --resync --no-build --yes --dry-run --discard-editor-changes",
+  "         --backend-dir <dir> --python <exe> --headless-dir <dir> --timings --resync --no-build --yes --dry-run --discard-editor-changes --cold",
 ];
 
 export function defaultDeps(): CliDeps {
   return {
     host: realHost(),
-    startBackend: (env) => startBackend(env),
+    startBackend: (env, o) => startBackend(env, o),
     now: () => new Date(),
   };
 }

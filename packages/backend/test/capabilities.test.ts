@@ -76,3 +76,15 @@ test("unknown keys are ignored and garbage lists become empty", () => {
   assert.deepEqual(c.bpApplyFeatures, []);
   assert.deepEqual(c.nodeKinds, ["a"]);
 });
+
+test("warmSession needs capabilities.warmSession and the warm_session tool; stageAudit follows backend_info", () => {
+  const info = { protocol: 1, capabilities: { warmSession: true, stageAudit: true } } as RawBackendInfo;
+  const on = capabilitiesFrom(["warm_session"], info, null);
+  assert.equal(on.warmSession, true);
+  assert.equal(on.stageAudit, true);
+  assert.equal(capabilitiesFrom([], info, null).warmSession, false, "the tool is missing");
+  const off = capabilitiesFrom(["warm_session"], { protocol: 1, capabilities: { warmSession: false } } as RawBackendInfo, null);
+  assert.equal(off.warmSession, false);
+  assert.equal(off.stageAudit, false);
+  assert.equal(capabilitiesFrom(["warm_session"], null, null).warmSession, false);
+});

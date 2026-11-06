@@ -202,7 +202,7 @@ function renderStruct(path: string, fields: ReflectPin[] | null, fb: FileBuilder
       const g = grammarOfPin(f);
       const ft = [`@bpType ${g}`];
       if (isUnsupported(g)) ft.push(`@bpUnsupported ${unsupportedLabel(g)}`);
-      return jsdoc(ft, "  ") + `  ${IDENT_RE.test(f.name) ? f.name : JSON.stringify(f.name)}: ${tsOfGrammar(g, fb)};\n`;
+      return jsdoc(ft, "  ") + `  ${IDENT_RE.test(f.name) ? f.name : JSON.stringify(f.name)}: ${tsOfGrammar(g, fb, "struct")};\n`;
     });
   return jsdoc(tags, "") + (body.length === 0 ? `export declare interface ${tsIdent(path)} {}\n` : `export declare interface ${tsIdent(path)} {\n${body.join("")}}\n`);
 }

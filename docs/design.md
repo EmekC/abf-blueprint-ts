@@ -130,10 +130,10 @@ Type-checker isolation: `packages/compiler/src/frontend/` is the only code that 
 
 | TS | Blueprint |
 | --- | --- |
-| `@blueprint({path, parent?, replicates?, alwaysRelevant?, onlyRelevantToOwner?, netUpdateFrequency?, minNetUpdateFrequency?, tickInterval?, tickEnabled?, classManagerRow?}) class X extends Parent` | Blueprint asset at `path` (must be under `/<Mod>/`), parent class, class defaults applied in the class-defaults pass. `classManagerRow` creates or updates the DT_ClassManager mod row asset (Phase 2). |
+| `@blueprint({path, parent?, replicates?, alwaysRelevant?, onlyRelevantToOwner?, netUpdateFrequency?, minNetUpdateFrequency?, tickInterval?, classManagerRow?}) class X extends Parent` | Blueprint asset at `path` (must be under `/<Mod>/`), parent class, class defaults applied in the class-defaults pass. `classManagerRow` names the DT_ClassManager row asset (verify-only: the class-defaults pass checks read-only that the row references this class and reports ABFC2070 as a warning otherwise; abfc does not create or change the row). Option values must be literals (ABFC2061); the actor-only options need an `Actor` parent (ABFC2062). `tickEnabled` is not supported yet: it is ABFC2063, because writing the saved `PrimaryActorTick.bStartWithTickEnabled` (not the CDO tick function's state, which is all `set_actor_tick_enabled` changes) has not been verified in the editor. |
 | Field `Score: int = 10` | Member variable with that default. `@replicated`, `@editable`, `@transient` set flags. |
-| `@override ReceiveTick(dt: double)` | `K2Node_Event` with `bOverrideFunction` (bp_apply `override`). |
-| `@event Foo(a: int)` | `K2Node_CustomEvent` in `EventGraph`. `@event({server|client|multicast, reliable})` sets net flags (raw node props, Phase 2). |
+| `@override ReceiveTick(dt: double)` | `K2Node_Event` with `bOverrideFunction` (bp_apply `override`). The name must exist on a parent stub with `@bpPath`; parameters are typed from the stub; the unit id is `override:<Name>`. `abfc adopt <asset> override:<Name>` takes over a hand-made override event. |
+| `@event Foo(a: int)` | `K2Node_CustomEvent` in `EventGraph`. `@event({server|client|multicast, reliable})` sets net flags (raw node props, Phase 2). An own `@event` or `@override` called as `this.Foo(x)` lowers to a call of that event; a reference to an own `@event` method passed to a delegate-typed parameter becomes a delegate cross wire (section 6.1), anywhere else it is ABFC2054. |
 | Undecorated method | Function graph (entry, result). Getters (`get x()`) become impure functions, or are inlined when they are a single expression with no side effects. |
 | `interface BP_X extends BP_X_Manual {}` | Declaration merging with the stub of the asset's hand-made members, so TS sees members it does not own (section 8.4). |
 
@@ -144,6 +144,11 @@ Type-checker isolation: `packages/compiler/src/frontend/` is the only code that 
 - Numbers: branded `int`, `int64`, `byte`, `float`, `double` (Blueprint `real`/double). Literals are inferred from context. Mixing kinds needs an explicit conversion (`toDouble(i)`, `trunc(d)`). `/` on integer types is error ABFC2010 (use `idiv(a, b)`); `%` on ints maps to `Percent_IntInt`.
 - `cast(x, T)` returns `T | null`. `if (c)`, `if (!c)` and `?.` on the result are wired to the cast node's success and `CastFailed` exec pins, not to an extra IsValid. `?.` on other values lowers to `KismetSystemLibrary.IsValid` plus Branch. A null path through `cast(a?.b, T)` merges into the cast-failed path.
 - `isValid(x)` is a type guard that maps to `IsValid` plus Branch.
+- Enums: an enum-typed pin or parameter is typed `EnumText<"/Script/Module.EEnum">` in the stubs (the reflect data has no value lists, so no literal union). A string literal passed to it becomes a pin default (`enumLit`); the text is checked against the enum only when a literal union is known (ABFC2015). `nameOf("x")` gives a `name` literal.
+- Widgets and spawning: `createWidget(WidgetClass, owningPlayer)` lowers to `K2Node_CreateWidget` (the class as a pin object). `spawnActor(ActorClass, {owner?, instigator?, collisionHandlingOverride?, transformScaleMethod?})` lowers to `K2Node_SpawnActorFromClass` with a `MakeTransform` node (zero location and rotation, unit scale) on `SpawnTransform`; the options must be an object literal with those four optional keys. An imported Blueprint class in an argument position typed as a class lowers to a class pin object.
+- Ternary in assignment: `this.X = c ? a : b` (a statement on a self variable) lowers to Branch plus two variable sets, no Select node (each arm is evaluated only on its own path).
+- Arithmetic and comparison: `+ - *` and `< <= > >=` on `int` or `double` lower to `Add_`/`Subtract_`/`Multiply_`/`Less_`/`LessEqual_`/`Greater_`/`GreaterEqual_` with the `IntInt` or `DoubleDouble` suffix. Mixed kinds are ABFC2012. `&&` and `||` stay condition-only.
+- Counted `for`: `for (let i = init; cond; i++ | i--)` lowers to an owned transient counter `abfc_<unit>_i<n>` plus Branch and a back-edge; the counter is usable as an `int` inside the body only. Array mutation (`push`, `splice(i, 1)`, `length = 0`) needs a self variable as the array (ABFC2041 otherwise); `indexOf` lowers to `Array_Find` and `a[i]` to `K2Node_GetArrayItem`.
 - `===`/`!==` map to the typed `EqualEqual_*`/`NotEqual_*` from stubs (object, name, int, double, bool, enum). `==` is error ABFC2011.
 - Functions with ExpandEnumAsExecs outputs (such as `GetGlobalItemRow`, with `Valid`/`NotValid`) return a discriminated value: `const r = f(); if (r.exec === "Valid") {...}`. The compiler wires the branches to the exec pins. Using `r.exec` in any other way is an error.
 - Loops: `for (const x of arr)`, `for (let i = 0; i < n; i++)`, `while`, with `break` and `continue`. They lower to Branch nodes plus a back-edge and an owned counter variable (a counter plus `Array_Length` and `Array_Get` for `for..of`). That avoids StandardMacros GUIDs and supports break and continue. Exec back-edges are accepted by bp_apply in both a function graph and the event graph, and a counter loop counted to 10 in a game test (verified in Phase 0, P4). The StandardMacros `ForEachLoop`/`ForLoop`/`WhileLoop` instance through a raw node stays a documented fallback, not planned. Loops inside `@override ReceiveTick` get an ESLint warning.
@@ -278,7 +283,8 @@ export interface IrModule {
 export interface IrAsset {
   path: string;                         // "/goodsoupWagdD/SoupInfo/BP_SoupInfoRelay" (always under /<mod>/)
   create?: { kind: "Blueprint" | "WidgetBlueprint" | "BlueprintInterface" | "UserDefinedStruct"; parent: string };
-  classDefaults?: Record<string, string>;      // property -> T3D value text
+  classDefaults?: Record<string, string>;      // property -> T3D value text (True/False, %f floats)
+  classManagerRow?: string;                    // row asset path, verified read-only in pass 5
   variables: IrVariable[];
   units: IrUnit[];                      // owned functions/events/overrides
   structFields?: IrVariable[];          // only for UserDefinedStruct
@@ -294,6 +300,8 @@ export interface IrUnit {
   locals: IrVariable[];                 // honored when the backend has functionLocals; else hoisted by the lowering
   nodes: IrNode[];
   wires: IrWire[];
+  crossWires?: Array<{ toUnit: string; from: string; to: string }>;  // delegate wires to another unit's event node
+  entryNames?: Record<string, string>;  // real entry node names of cross-wire targets that are not in the plan (from the manifest)
   origin: Span;
   hash: string;                         // sha256 of the canonical JSON of signature+nodes+wires (no positions)
 }
@@ -315,6 +323,8 @@ export type IrWire = [from: `${string}.${string}`, to: `${string}.${string}`]; /
 export interface Span { file: string; line: number; col: number; endLine: number; endCol: number }
 ```
 
+`crossWires` connect an owned event's `OutputDelegate` (`from` = `<entry node id>.<pin>`) to a pin of this unit (`to`). The adapter resolves the event node of `toUnit` by IR id when both units are in the plan, otherwise by the real name in the manifest (`entryNames`). When the delegate target is planned, the planner also re-plans the unit that owns the wire, so both hashes are recomputed after apply.
+
 Every node has `t3d` text, so the text-based backends (import_nodes, paste_graph) need nothing else. `sem` exists only so the bp_apply adapter can use its native `k` kinds, which handle class preloading and retargeting. When `sem` is absent, the adapter sends `k: "node"` with `class` and `props`. `renderT3D(node)` in `@abfc/ir` produces the full `Begin Object ... End Object` block (fresh NodeGuid, no pins) for text backends.
 
 ### 6.2 Pass ordering
@@ -328,7 +338,7 @@ The planner turns an `IrModule` plus the manifest into an `ApplyPlan` with order
 | 2 shells | Function signatures (entry and result only), custom event nodes with no body, in all assets | Custom events and functions must exist and compile before callers, or calls are dropped silently (the paste_graph lesson). |
 | 3 bodies | Remove the old nodes of changed owned units (by real name from the manifest), add the new nodes and wires, wire them to the shells | The shells are compiled by now. |
 | 4 retire | Remove owned variables, functions and events no longer in source | A variable can be removed only after its nodes are gone. In bp_apply, `remove_variables` runs before graphs within one asset spec. |
-| 5 defaults | `classDefaults` (tick interval, replication flags) | bp_apply `raw` python on the CDO, as in the Good Soup plans. |
+| 5 defaults | `classDefaults` (tick interval, replication flags) | One bp_apply asset spec with `raw: [{kind: "python", code}]`. The code comes from a fixed template (`defaults-template.ts`): only keys from a validated map and bool/float literals reach it, never user text. It also runs the read-only `classManagerRow` check (ABFC2070 warning). A defaults-only change is its own plan item (`defaults`, hash `classDefaultsHash` in the manifest). |
 | 6 tags | Ownership comment boxes (section 8.2) | Its own pass so a refused comment node cannot roll back logic. |
 
 The backend compiles after every pass. A pass with nothing in it is skipped.
@@ -359,7 +369,8 @@ export interface BackendCapabilities {
   compileErrorNodeRefs: boolean;          // compile errors name the node (needed for line-level mapping)
   nodeNameMap: boolean;                   // returns IR id -> real node name
   reflect: boolean; gameTest: boolean; audit: boolean; publish: boolean;
-  warmSession: boolean;                   // can keep one editor process across operations
+  warmSession: boolean;                   // can keep one editor process across operations (backend_info capabilities.warmSession and the warm_session tool)
+  stageAudit: boolean;                    // mod_audit can audit the staged copy (backend_info capabilities.stageAudit)
 }
 export interface BackendInfo {
   id: "bp_apply" | "import_nodes" | "paste_graph";
@@ -407,7 +418,7 @@ Version check: abfc does not rely on the server's semver alone. The backend expo
 | pass 2 event shells | `graphs: [{graph: "EventGraph", add: [{k:"event", name, params}]}]` |
 | pass 3 bodies | `functions[].nodes/wires` for new functions. Changed functions and events get `graphs: [{graph, remove: [old names], add, wires}]`, addressing the shell by the real name from `node_ids`. |
 | pass 4 retire | `remove_variables`, `remove_functions`, `graphs[].remove` |
-| pass 5 defaults | `raw: [{kind: "python", code}]` with a generated, fixed template (CDO `set_editor_property` / `set_actor_tick_interval`) |
+| pass 5 defaults | `raw: [{kind: "python", code}]` with a generated, fixed template (CDO `set_editor_property` / `set_actor_tick_interval`; `bStartWithTickEnabled` is not in the template until verified) |
 | pass 6 tags | `graphs[].add` of `k:"node"` `EdGraphNode_Comment` |
 | node with `sem` | the matching `k` (`call`, `get`, `set`, `event`, `override`, `branch`, `sequence`, `cast`, `self`, `spawn`, `create_widget`, dispatchers) |
 | node without `sem` | `{k: "node", class, props}` |
@@ -456,13 +467,13 @@ Drift check (every build, before apply): `read()` each asset with owned units, r
 
 ### 8.4 Adoption and hand-made members
 
-- `abfc adopt <asset> <unit>` takes over an existing hand-made unit once. It computes the nodes reachable only from that unit's entry (exec plus the pure nodes feeding them), refuses if any of them is shared with another unit, shows the list, and on confirmation removes them in the same transaction that adds the compiled unit. The real mod keeps its pre-adoption state until publish, and bp_publish backs it up. This is how the Phase 1 slice replaces `UpdateTarget`.
+- `abfc adopt <asset> <unit>` takes over an existing hand-made unit once. It computes the nodes reachable only from that unit's entry (exec plus the pure nodes feeding them), refuses (ABFC5005) if any of them is shared with another unit, if another entry's event parameter pin or a hand-made node outside every owned or adopted unit is linked to them (a node that takes this event as its delegate would silently lose that link when the build replaces the event; a delegate between two owned or adopted units is recorded as a cross link instead), shows the list, and on confirmation removes them in the same transaction that adds the compiled unit. The real mod keeps its pre-adoption state until publish, and bp_publish backs it up. This is how the Phase 1 slice replaces `UpdateTarget`.
 - Hand-made members that TS code uses (`OwnerPC`, `HideAll`, `Infos`) come from the generated `<Asset>_Manual` interface through declaration merging, so they are type-checked and never duplicated by hand.
 
 ### 8.5 Source map (`.abfc/sourcemap/<asset>.json`)
 
 `irNodeId -> Span` from lowering, and `realNodeName -> irNodeId` from `ApplyReport.nodeNames`. Mapping:
-- A compile error with a node reference (needs backend capability `compileErrorNodeRefs`, i.e. returning the `from Source: ...:EventGraph.K2Node_X_N` part that the server parses today but drops) maps to the exact TS span.
+- A compile error with a node reference (needs backend capability `compileErrorNodeRefs`) maps to the exact TS span. The Phase 1 assumption that the compile log carries `:EventGraph.K2Node_X_N` was wrong (the log ends in `from Source: <asset path>`); the backend takes the node from the `ErrorMsg=` the compiler stores on the node in the T3D export of the compiled asset and matches message text to node (the T3D text is escaped, so it is unescaped first). Verified live in Phase 2 (`ABFC6001` at the compared expression).
 - Without a node reference, it maps to the unit's span, with the message prefixed `(node not identified)`.
 - A runtime error in a test (`Accessed None ... Node: <title> Graph: <graph> Function: <fn>`) maps to the unit, and to the node when the title is unique in the unit (unverified log format: Phase 0 captured no sample, because the harness logged no "Accessed None" line even for the original graph's null `OwnerPC` path).
 
@@ -513,12 +524,12 @@ Code ranges: 1xxx environment, 2xxx TS subset and lowering, 3xxx stubs and profi
 
 ## 10. Incremental build and warm editor
 
-- Unit-level incrementality: `cache/units.json` maps unit id to `irHash + stubLockHash + compilerVersion`. Only changed units, plus the shells of new units, go into the ApplyPlan. Unchanged assets are not touched. A change to a signature also re-plans that unit's callers in owned code (hand-made callers are recompiled by the engine).
+- Unit-level incrementality: `cache/units.json` (`{asset: {unit id: {irHash, stubLockHash, compilerVersion}}}`) holds `irHash + stubLockHash + compilerVersion` per unit. A unit whose stubLockHash or compilerVersion differs, or whose cached irHash differs from the current IR hash (an earlier build did not finish), is re-planned even when the manifest's irHash is equal. Only changed units, plus the shells of new units and the owners of delegate wires to a planned unit, go into the ApplyPlan. An asset with no planned unit and no class-defaults change is not read at all (no drift check there; `abfc status` still reads every asset), so a stage edit of an owned node in an untouched asset is found by `abfc status`, by the publish gate (which reads every owned asset) or when that unit is next re-planned. A change to a signature also re-plans that unit's callers in owned code (hand-made callers are recompiled by the engine).
 - `abfc check` never launches the editor. In watch mode it reruns the frontend and lowering on change (target under 1 s for a mod the size of Good Soup).
-- Staging: abfc runs `staging_sync` when `staging_status` shows conflicts or a real-mod change, and otherwise reuses the stage, so successive builds stack on it. A failed non-transactional build discards the stage and resyncs.
-- Cold cost today: each bp_apply, compile report or reflect call launches its own commandlet (about 10 s of launch overhead per the server's notes, plus the work). `bp_game_test` launches a `-game` process, and `mod_audit` a hidden editor. Measured in Phase 0 (P8): one asset cold apply + compile report + game test took 58.6 s as built today (20.5 failed first apply + 11.9 + 11.6 + 14.6; 38.1 s once pin types are resolved up front), the full Good Soup Verify 2 run 38.8 s, and `mod_audit` 44.5 s. A cold reflect of the relay's classes took about 60 to 70 s (estimate) and happens once per game version. A failed first apply (wildcard pins) adds 10 to 20 s, so the adapter resolves pin types before the first apply. Warm editor stays in Phase 2.
-- Warm editor (Phase 2, backend extension `warmSession`): the server keeps one hidden `-run=pythonscript` commandlet alive that loops over job files in a run queue (same job format, same Job Object, same `-userdir`), and reloads packages between jobs. abfc uses it when the capability is present and falls back to cold runs. Hidden runs share one `-userdir`, so all operations are serialized anyway.
-- Every step's duration goes to `.abfc/runs.jsonl` (`{step, seconds, units, cold|warm}`), and `abfc build --timings` prints them.
+- Staging: abfc runs `staging_sync` when `staging_status` shows conflicts or a real-mod change, and otherwise reuses the stage, so successive builds stack on it. A failure inside `bp_apply` rolls back that call on the backend (verified live in Phase 2: stage bytes identical after a failed apply). Open gap: the passes are not one transaction. When the post-apply `bp_compile_report` finds errors, the build fails but the applied passes stay on the stage (the manifests are written with what is on the stage, but without the IR hash of the applied units and without the new class defaults hash, and the unit cache is not written, so the next build re-applies those units, reports the error again and a publish gate 3 on it fails; the hashes are recorded only after the compile passed); the stage is only discarded by `abfc build --resync` or `staging_sync` with `discard_changes`. A backend restore tool for this case is a follow-up.
+- Cold cost today: each bp_apply, compile report or reflect call launches its own commandlet (about 10 s of launch overhead per the server's notes, plus the work). `bp_game_test` launches a `-game` process, and `mod_audit` a hidden editor. Measured in Phase 0 (P8): one asset cold apply + compile report + game test took 58.6 s as built today (20.5 failed first apply + 11.9 + 11.6 + 14.6; 38.1 s once pin types are resolved up front), the full Good Soup Verify 2 run 38.8 s, and `mod_audit` 44.5 s. A cold reflect of the relay's classes took about 60 to 70 s (estimate) and happens once per game version. A failed first apply (wildcard pins) adds 10 to 20 s, so the adapter resolves pin types before the first apply. The warm editor (below) is the Phase 2 answer.
+- Warm editor (Phase 2, backend extension `warmSession`, implemented): the server (opt-in with `ABF_WARM_SESSION=1`, tool `warm_session {action: start|stop|status}`) keeps one hidden `-run=pythonscript` commandlet alive. Its loop script polls `<root>/warm/<session>/queue/*.json`, reloads the staged mod's packages (`EditorLoadingAndSavingUtils.reload_packages`) before each job, runs the job through the same dispatcher as cold jobs, writes `result.json` into the job's run folder and deletes the queue file. It exits on `stop.json` or after an idle timeout (`ABF_WARM_IDLE_SECONDS`, default 600). Same `-userdir`, one lock, so all operations are serialized. On any warm failure (dead process, timeout) the server kills the process tree (Job Object) and reruns the job cold; results carry `warm: bool` and `seconds`. The reload phase logs stale-class compile errors for cross-asset references; the server cuts the job log at the reload marker (reload-phase lines go to `reload.log`), so they do not count as compile errors of the job. `staging_sync`, `bp_game_test` and `mod_audit` stop or bypass the session. The warm editor lives only as long as the server process, so every abfc command that touches the editor pays one editor start (about 10 s); `abfc test` gets no warm benefit (each test is its own `-game` process). `--cold` clears an inherited `ABF_WARM_SESSION`. abfc starts the server with the opt-in unless `--cold`, calls `warm_session start` lazily before the first commandlet operation (a failed start means cold for the rest of the run), restarts after a stage sync and stops it on close.
+- Every step's duration goes to `.abfc/runs.jsonl` (`{step, seconds, units, mode: "cold"|"warm"}`), and `abfc build --timings` prints them.
 
 ## 11. Testing: `*.test.ts` -> bp_game_test
 
@@ -551,12 +562,12 @@ test("unowned relay stops ticking and never builds UI", async (t) => {
 
 In order, stopping at the first failure, and failing closed:
 1. Stubs and profile match the installed editor (no ABFC3001 or 3002).
-2. `abfc check` is clean (warnings allowed, except `@deprecated` filter hits outside `filterOverrides`, which are listed).
-3. `abfc build` is clean: no compile errors in any changed asset, and drift is clean.
-4. `abfc test` passes (all tests not marked `liveHud`).
-5. `mod_audit` passes on the staged copy. If it cannot run (for example the Mod Browser tile click fails), the gate fails and prints the backend's reason. There is no bypass flag in phase 1 (open question 2).
-6. `check_upload` has no errors (for example no `.md` files in the mod folder).
-7. `bp_publish` with `dry_run`: print the exact file list. Then confirm (`--yes` in non-interactive use), then `bp_publish` for real with `assets` limited to assets that hold owned units or were adopted.
+2. `abfc check` is clean (warnings allowed, except `@deprecated` Blueprint filter hits outside `filterOverrides`, which are errors ABFC7011 with their span).
+3. `abfc build` is clean: no compile errors in any changed asset, and drift is clean. The gate's build reads every owned asset (a plain `abfc build` skips assets with nothing to plan), so an editor edit of an owned unit fails it with ABFC5001 even when the TypeScript is unchanged.
+4. `abfc test` passes (all tests; `knownIssue` rules as in section 11; there is no `liveHud` marker in the testkit yet).
+5. `mod_audit` with `stage: true` passes (capability `stageAudit`): the hidden editor is launched with an empty mods folder (redirected `USERPROFILE`, with junctions for `AppData\Local` and `AppData\Roaming` back to the real ones, because the editor hangs during startup without them) and only the staged copy as the recent entry (the tile is then the only one, at a fixed window coordinate tried first), and the backend checks the editor log that it mounted the requested mod (`picker mounted <other>` fails, one retry). Without `stageAudit` the gate prints warning ABFC7003 and audits the real mod folder. A result that is not `ok`, or an audited copy other than the stage under `stageAudit`, fails with ABFC7002 and the backend's reason. There is no bypass flag in phase 1 (open question 2).
+6. abfc's own upload file check, read-only, on the real mod folder and the stage folder (rules copied from the backend's `check_upload`: shippable file types, no `Saved`/`Intermediate`/`Binaries`/`DerivedDataCache`, no `.md` files). ABFC7010 per offending file (error), ABFC7012 for working folders and unknown types (warning). The `/Game` reference check of `check_upload` needs the retail asset list and is not repeated here.
+7. The would-publish list: `staging_status` changed and added files under `Content/` (no `_McpTest`/`_McpTmp`), restricted to assets that hold owned units, class defaults, a class manager row or an adoption. `--dry-run` prints it and exits 0; otherwise the gate stops with ABFC7001 (exit 3). abfc never calls `bp_publish`: the backend tool stays on the refused list of the tool allowlist, and the user publishes from the Mod Editor.
 
 abfc never uploads to mod.io and never offers to.
 
@@ -609,7 +620,7 @@ All items land in `EmekC/abf-mod-editor-mcp`. Each item is small and gated by a 
 ## 17. Open questions for the user
 
 1. npm scope and package names: is `@abfc/*` acceptable (availability unchecked), and is the CLI name `abfc` final?
-2. Release gate when `mod_audit` cannot run (fragile Mod Browser tile): fail closed with no bypass (current design), or allow `--no-audit` with a loud warning, since the upload runs the real audit anyway?
+2. Release gate when `mod_audit` cannot run (fragile Mod Browser tile): fail closed with no bypass (current design), or allow `--no-audit` with a loud warning, since the upload runs the real audit anyway? Phase 2 narrowed the cause (the picker could mount an arbitrary mod from the user's mods folder; the stage audit now isolates the mods folder and verifies the mounted mod), and the stage audit passed live at the end of Phase 2 (`mounted` equal to the requested mod). The remaining risk is the fixed tile coordinate; the question stays open for a decision on a bypass flag.
 3. Manifest location: committed in the TS project (current design), so ownership travels with the source. Is the mod folder itself under version control anywhere, so the two can stay in step?
 4. Backend versioning: resolved. The user decided to use `EmekC/abf-mod-editor-mcp` entirely, with nothing from the original maintainer and no dependency on other repositories. The `backend_info` protocol number is kept as a capability check, and version numbers are owned by that repo.
 

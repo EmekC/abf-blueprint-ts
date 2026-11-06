@@ -185,3 +185,129 @@ test("an edited owned unit is ABFC5001, a missing owned node ABFC5002", () => {
   });
   assert.deepEqual(missing.diagnostics.map((d) => d.code), ["ABFC5002"]);
 });
+
+// ---- Phase 2: class defaults, delegate owners, override units ----
+
+const phase2Dir = fileURLToPath(new URL("../../test/fixtures/phase2", import.meta.url));
+const ir2 = (() => {
+  const loaded = loadProgram(phase2Dir);
+  const root = loaded.files.classes.find((f) => f.fileName.endsWith("/Director.ts"));
+  assert.ok(root);
+  return lower(buildHir(loaded, { mod: "TestMod" }, profile, [root]), profile);
+})();
+const asset2 = ir2.assets[0]!.path;
+const units2 = ir2.assets[0]!.units;
+const unitOf = (id: string) => units2.find((u) => u.id === id)!;
+
+/** A manifest in which every unit of the Director asset is applied and clean against `snapshot`. */
+function appliedManifest(snapshot: Map<string, T3dNode>, over: Partial<Manifest> = {}, hashes: Record<string, string> = {}): Manifest {
+  const units = units2.map((u) => {
+    const names = [`${u.name}_1`, `${u.name}_2`];
+    return {
+      id: u.id,
+      graph: "EventGraph",
+      irHash: hashes[u.id] ?? u.hash,
+      assetHash: unitStateHash(snapshot, names),
+      nodes: names,
+      nodeIds: { ev0: names[0]! },
+      tag: null,
+      stageSyncedAt: "T1",
+      adopt: null,
+    } satisfies ManifestUnit;
+  });
+  return { asset: asset2, compiler: "test", profile: profile.id, units, variables: [], ...over };
+}
+
+function snapshot2(): Map<string, T3dNode> {
+  return snapshotOf(...units2.flatMap((u) => [node(`${u.name}_1`, CALL, []), node(`${u.name}_2`, CALL, [])]));
+}
+
+const input2 = (m: Manifest, snapshot: Map<string, T3dNode>, st = stage) => ({
+  manifests: new Map([[asset2, m]]),
+  snapshots: new Map([[asset2, snapshot]]),
+  stage: st,
+  handMadeUnits: new Map<string, string[]>(),
+});
+
+test("class defaults are their own plan item, keyed by hash and by the stage they were applied to", () => {
+  assert.deepEqual(ir2.assets[0]!.classDefaults, { bReplicates: "True", NetUpdateFrequency: "2.000000", TickInterval: "0.100000" });
+  const snapshot = snapshot2();
+
+  // never applied: a defaults-only plan (no units)
+  const first = planBuild(ir2, input2(appliedManifest(snapshot), snapshot));
+  assert.deepEqual(first.diagnostics, []);
+  assert.equal(first.plan.assets.length, 1);
+  assert.deepEqual(first.plan.assets[0]!.units, []);
+  const d = first.plan.assets[0]!.defaults!;
+  assert.equal(d.classPath, `${asset2}.BP_Director_C`);
+  assert.deepEqual(d.values, ir2.assets[0]!.classDefaults);
+  assert.match(d.hash, /^sha256:/);
+
+  // applied with this hash on this stage: nothing to do
+  const done = appliedManifest(snapshot, { classDefaultsHash: d.hash, classDefaultsStageSyncedAt: "T1" });
+  assert.deepEqual(planBuild(ir2, input2(done, snapshot)).plan.assets, []);
+  // the stage was resynced since (the defaults are gone): planned again
+  const resynced = planBuild(ir2, input2(done, snapshot, { syncedAt: "T2" }));
+  assert.ok(resynced.plan.assets.some((a) => a.defaults?.hash === d.hash));
+  // a changed value or row changes the hash
+  const other = appliedManifest(snapshot, { classDefaultsHash: "sha256:old", classDefaultsStageSyncedAt: "T1" });
+  assert.equal(planBuild(ir2, input2(other, snapshot)).plan.assets[0]?.defaults?.hash, d.hash);
+});
+
+test("a changed delegate target replans the unit that takes its delegate; the reverse does not", () => {
+  const snapshot = snapshot2();
+  const hash = planBuild(ir2, input2(appliedManifest(snapshot), snapshot)).plan.assets[0]!.defaults!.hash;
+  const base = { classDefaultsHash: hash, classDefaultsStageSyncedAt: "T1" };
+
+  assert.deepEqual(unitOf("event:Start").crossWires?.map((w) => w.toUnit), ["event:Scan"]);
+
+  const scanChanged = planBuild(ir2, input2(appliedManifest(snapshot, base, { "event:Scan": "sha256:old" }), snapshot));
+  assert.deepEqual(scanChanged.diagnostics, []);
+  assert.deepEqual(scanChanged.plan.assets[0]!.units.map((u) => u.unit.id).sort(), ["event:Scan", "event:Start"]);
+  const start = scanChanged.plan.assets[0]!.units.find((u) => u.unit.id === "event:Start")!;
+  assert.deepEqual(start.removeNodes, ["Start_1", "Start_2"]);
+  assert.equal(scanChanged.plan.assets[0]!.entryNames, undefined, "both ends are in the plan, so no real name is needed");
+  assert.ok(!scanChanged.upToDate.includes(`${asset2} event:Start`));
+
+  const startChanged = planBuild(ir2, input2(appliedManifest(snapshot, base, { "event:Start": "sha256:old" }), snapshot));
+  assert.deepEqual(startChanged.plan.assets[0]!.units.map((u) => u.unit.id), ["event:Start"]);
+  assert.deepEqual(startChanged.plan.assets[0]!.entryNames, { "event:Scan": "Scan_1" }, "the untouched target is wired by its real entry name");
+});
+
+test("an override unit without a manifest: a hand-made enabled override is ABFC5003, a disabled default node is not", () => {
+  const over = unitOf("override:ReceiveTick");
+  const ev = (extra: string[]) => node("EV_1", "/Script/BlueprintGraph.K2Node_Event", [`EventReference=(MemberParent="x",MemberName="ReceiveTick")`, ...extra]);
+  const run = (snapshot: Map<string, T3dNode>) =>
+    planBuild(ir2, { manifests: new Map(), snapshots: new Map([[asset2, snapshot]]), stage, handMadeUnits: new Map() });
+  const made = run(snapshotOf(ev([])));
+  const hit = made.diagnostics.find((d) => d.code === "ABFC5003");
+  assert.ok(hit && hit.span === over.origin);
+  assert.match(hit.fix ?? "", /abfc adopt \S+ override:ReceiveTick/);
+  const disabled = run(snapshotOf(ev(["EnabledState=Disabled"])));
+  assert.ok(!disabled.diagnostics.some((d) => d.code === "ABFC5003"));
+  assert.ok(disabled.plan.assets[0]!.units.some((u) => u.unit.id === "override:ReceiveTick"));
+});
+
+test("several pending adoptions in one asset are applied in one build: each removes its own adopted nodes", () => {
+  const snapshot = snapshot2();
+  const adopted = (id: string, nodes: string[]): ManifestUnit => ({
+    id,
+    graph: "EventGraph",
+    irHash: "",
+    assetHash: null,
+    nodes: [],
+    nodeIds: {},
+    tag: null,
+    stageSyncedAt: null,
+    adopt: { entry: nodes[0]!, nodes, hash: unitStateHash(snapshot, nodes), recordedAt: "2026-01-01T00:00:00Z", stageSyncedAt: null },
+  });
+  const manifest: Manifest = {
+    ...appliedManifest(snapshot),
+    units: [adopted("event:Start", ["Start_1", "Start_2"]), adopted("event:Scan", ["Scan_1", "Scan_2"])],
+  };
+  const r = planBuild(ir2, input2(manifest, snapshot));
+  const picked = r.plan.assets[0]!.units;
+  assert.deepEqual(r.diagnostics.map((d) => d.code).filter((c) => c === "ABFC5003" || c === "ABFC5001"), []);
+  assert.deepEqual(picked.find((u) => u.unit.id === "event:Start")!.removeNodes, ["Start_1", "Start_2"]);
+  assert.deepEqual(picked.find((u) => u.unit.id === "event:Scan")!.removeNodes, ["Scan_1", "Scan_2"]);
+});

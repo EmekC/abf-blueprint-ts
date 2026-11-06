@@ -15,7 +15,13 @@ export function lower(h: HirProgram, profile: Profile): IrModule {
       units.push(b.build());
       variables.push(...b.vars);
     }
-    return { path: cls.path, variables, units };
+    return {
+      path: cls.path,
+      variables,
+      units,
+      ...(Object.keys(cls.defaults).length > 0 ? { classDefaults: { ...cls.defaults } } : {}),
+      ...(cls.classManagerRow !== undefined ? { classManagerRow: cls.classManagerRow } : {}),
+    };
   });
   return { irVersion: 1, profile: profile.id, mod: h.mod, assets, classMeta: h.classMeta };
 }

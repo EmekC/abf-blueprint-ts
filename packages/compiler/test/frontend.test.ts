@@ -188,3 +188,185 @@ test("compileTests: filter keeps matching names and files", () => {
   assert.equal(compileTests(loaded, profile, "Relay.test").cases.length, 2);
   assert.equal(compileTests(loaded, profile, "nothing like this").cases.length, 0);
 });
+
+// ---- Phase 2: overrides, own calls, delegates, enums, widgets, spawns, arithmetic ----
+
+const phase2Dir = fileURLToPath(new URL("../../test/fixtures/phase2", import.meta.url));
+const loaded2 = loadProgram(phase2Dir);
+const file2 = (name: string) => {
+  const sf = loaded2.files.classes.find((f) => f.fileName.endsWith(`/${name}`));
+  assert.ok(sf, `${name} is a root file`);
+  return sf;
+};
+const director = buildHir(loaded2, config, profile, [file2("Director.ts")]);
+
+function walkExprs(s: HirStmt, out: HirExpr[]): void {
+  const walk = (e: HirExpr): void => {
+    out.push(e);
+    switch (e.k) {
+      case "getOn": case "field": walk(e.obj); break;
+      case "out": walk(e.call); break;
+      case "call": if (e.target) walk(e.target); e.args.forEach((a) => walk(a.value)); break;
+      case "callOwn": e.args.forEach((a) => walk(a.value)); break;
+      case "cast": case "isValid": walk(e.value); break;
+      case "optional": walk(e.value); walk(e.then); break;
+      case "eq": case "and": case "or": case "arith": case "cmp": walk(e.a); walk(e.b); break;
+      case "not": walk(e.e); break;
+      case "length": walk(e.array); break;
+      case "index": walk(e.array); walk(e.index); break;
+      case "arrayFind": walk(e.array); walk(e.value); break;
+      case "createWidget": walk(e.owner); break;
+      case "spawn": if (e.owner) walk(e.owner); break;
+      default: break;
+    }
+  };
+  switch (s.k) {
+    case "setSelfCond": walk(s.cond); walk(s.a); walk(s.b); break;
+    case "forCount": walk(s.init); walk(s.cond); s.body.forEach((x) => walkExprs(x, out)); break;
+    case "arrayOp": if (s.value) walk(s.value); if (s.index) walk(s.index); break;
+    case "expr": walk(s.e); break;
+    case "setSelf": walk(s.value); break;
+    case "const": walk(s.init); break;
+    case "if": walk(s.cond); s.then.forEach((x) => walkExprs(x, out)); s.else.forEach((x) => walkExprs(x, out)); break;
+    case "forOf": walk(s.array); s.body.forEach((x) => walkExprs(x, out)); break;
+    default: break;
+  }
+}
+
+test("Director.ts is clean and its class options are accepted", () => {
+  assert.deepEqual(inFile(loaded2.diagnostics, "src/Director.ts"), []);
+  assert.deepEqual(director.diagnostics, []);
+  assert.equal(director.classes.length, 1);
+  assert.deepEqual(director.classes[0]!.defaults, { bReplicates: "True", NetUpdateFrequency: "2.000000", TickInterval: "0.100000" });
+});
+
+test("HIR of the Director: override, events, docs", () => {
+  const cls = director.classes[0]!;
+  assert.deepEqual(cls.events.map((e) => [e.name, e.kind]), [["ReceiveTick", "override"], ["Step", "event"], ["Announce", "event"], ["Start", "event"], ["Scan", "event"]]);
+  const ov = cls.events[0]!;
+  assert.equal(ov.overrideOf, "/Script/FakeEngine.Actor");
+  assert.deepEqual(ov.params.map((p) => p.name), ["DeltaSeconds"]);
+  assert.equal(ov.doc, "Forwards the engine tick.");
+  assert.equal(cls.events[1]!.doc, "Counts the elapsed time down and bumps the counter.");
+  assert.equal(cls.events[1]!.overrideOf, undefined);
+  assert.equal(cls.events[2]!.doc, undefined);
+});
+
+test("HIR of the Director: own calls, arithmetic and comparisons", () => {
+  const ev = (n: string) => director.classes[0]!.events.find((e) => e.name === n)!;
+  const exprsOf = (n: string): HirExpr[] => {
+    const out: HirExpr[] = [];
+    ev(n).body.forEach((s) => walkExprs(s, out));
+    return out;
+  };
+  const tick = exprsOf("ReceiveTick").find((e) => e.k === "callOwn");
+  assert.ok(tick && tick.k === "callOwn" && tick.name === "Step" && tick.args.length === 1 && tick.args[0]!.pin === "Delta");
+
+  const step = exprsOf("Step");
+  assert.deepEqual(step.flatMap((e) => (e.k === "arith" ? [[e.op, e.kind]] : [])), [["-", "real"], ["+", "int"], ["*", "real"]]);
+  assert.deepEqual(step.flatMap((e) => (e.k === "cmp" ? [[e.op, e.kind]] : [])), [["<=", "real"], [">=", "int"], [">", "real"]]);
+  const own = step.find((e) => e.k === "callOwn");
+  assert.ok(own && own.k === "callOwn" && own.name === "Announce" && own.args.map((a) => a.pin).join() === "N,Left");
+  assert.ok(exprsOf("Announce").some((e) => e.k === "cmp" && e.op === "<" && e.kind === "int"));
+});
+
+test("HIR of the Director: delegate, enum, class, widget, spawn and name literals", () => {
+  const ev = (n: string) => director.classes[0]!.events.find((e) => e.name === n)!;
+  const collect = (n: string): HirExpr[] => {
+    const out: HirExpr[] = [];
+    ev(n).body.forEach((s) => walkExprs(s, out));
+    return out;
+  };
+  const start = collect("Start");
+  const del = start.find((e) => e.k === "delegateRef");
+  assert.ok(del && del.k === "delegateRef" && del.event === "Scan");
+  const cw = start.find((e) => e.k === "createWidget");
+  assert.ok(cw && cw.k === "createWidget" && cw.cls === "/Game/Fake/WBP_Panel.WBP_Panel_C");
+  const en = start.find((e) => e.k === "enumLit");
+  assert.ok(en && en.k === "enumLit" && en.text === "Collapsed" && en.enumPath === "/Script/FakeEngine.EFakeVisibility");
+  const cr = start.find((e) => e.k === "classRef");
+  assert.ok(cr && cr.k === "classRef" && cr.path === "/Game/Fake/WBP_Panel.WBP_Panel_C");
+
+  const scan = collect("Scan");
+  const sp = scan.find((e) => e.k === "spawn");
+  assert.ok(sp && sp.k === "spawn" && sp.cls === "/Game/Fake/BP_FakePot.BP_FakePot_C" && sp.collision === "AlwaysSpawn" && sp.owner !== undefined && sp.scale === undefined);
+  const nm = scan.find((e) => e.k === "nameLit");
+  assert.ok(nm && nm.k === "nameLit" && nm.text === "Spawned");
+  const idx = scan.find((e) => e.k === "index");
+  assert.ok(idx && idx.k === "index" && idx.elem === "object:/Game/Fake/BP_FakePot.BP_FakePot_C");
+});
+
+// ---- statements: ternary assignment, counted for loops, array operations ----
+
+const counter = buildHir(loaded2, config, profile, [file2("Counter.ts")]);
+
+test("Counter.ts is clean", () => {
+  assert.deepEqual(inFile(loaded2.diagnostics, "src/Counter.ts"), []);
+  assert.deepEqual(counter.diagnostics, []);
+  assert.equal(counter.classes[0]!.events.length, 2);
+});
+
+test("HIR of the Counter: this.X = c ? a : b", () => {
+  const pick = counter.classes[0]!.events[0]!;
+  assert.equal(pick.name, "Pick");
+  assert.equal(pick.doc, "Picks the interval and the starting count from the armed flag.");
+  assert.equal(pick.body.length, 2);
+  const [first, second] = pick.body;
+  assert.ok(first && first.k === "setSelfCond" && first.name === "Elapsed" && first.type === "double");
+  assert.deepEqual([first.cond.k, first.a.k, first.b.k], ["getSelf", "getSelf", "getSelf"]);
+  assert.ok(first.a.k === "getSelf" && first.a.name === "Fast" && first.b.k === "getSelf" && first.b.name === "Slow");
+  assert.ok(second && second.k === "setSelfCond" && second.name === "Count" && second.cond.k === "and" && second.a.k === "lit" && second.b.k === "lit");
+});
+
+test("HIR of the Counter: counted for loops and array operations", () => {
+  const sweep = counter.classes[0]!.events[1]!;
+  const [down, up, find, clear] = sweep.body;
+  assert.ok(down && down.k === "forCount" && down.name === "i" && down.step === -1);
+  assert.ok(down.init.k === "arith" && down.init.op === "-" && down.init.kind === "int" && down.init.a.k === "length");
+  assert.ok(down.cond.k === "cmp" && down.cond.op === ">=" && down.cond.kind === "int" && down.cond.a.k === "local" && down.cond.a.id === down.counter);
+  const [pot, check] = down.body;
+  assert.ok(pot && pot.k === "const" && pot.init.k === "index" && pot.init.index.k === "local" && pot.init.index.id === down.counter);
+  assert.ok(check && check.k === "if");
+  assert.deepEqual(check.then.map((s) => (s.k === "arrayOp" ? [s.op, s.array.self, s.array.type, s.index?.k] : s.k)), [
+    ["removeAt", "Pots", "array:object:/Game/Fake/BP_FakePot.BP_FakePot_C", "local"],
+    ["removeAt", "Names", "array:name", "local"],
+  ]);
+
+  assert.ok(up && up.k === "forCount" && up.name === "j" && up.step === 1 && up.init.k === "lit" && up.init.type === "int");
+  const push = up.body[0];
+  assert.ok(push && push.k === "arrayOp" && push.op === "push" && push.array.self === "Names" && push.value?.k === "nameLit");
+
+  assert.ok(find && find.k === "if" && find.cond.k === "eq" && find.cond.kind === "int");
+  assert.ok(find.cond.a.k === "arrayFind" && find.cond.a.elem === "name" && find.cond.a.type === "int" && find.cond.a.array.k === "getSelf" && find.cond.a.value.k === "nameLit");
+  assert.ok(find.cond.b.k === "lit" && find.cond.b.value === -1);
+
+  assert.ok(clear && clear.k === "arrayOp" && clear.op === "clear" && clear.array.self === "Names");
+  assert.equal(sweep.body.length, 4);
+});
+
+test("Phase2Bad.ts: every marked error is reported at its line and column, and nothing else", () => {
+  const text = readFileSync(`${phase2Dir}/src/Phase2Bad.ts`, "utf8").split(/\r?\n/);
+  const expected: Array<{ line: number; code: string; col: number | undefined }> = [];
+  text.forEach((raw, i) => {
+    const m = /\/\/ ((?:ABFC\d{4}\s*)+)(?:@(.*))?$/.exec(raw);
+    if (!m) return;
+    const codes = m[1]!.trim().split(/\s+/);
+    const snippet = m[2]?.trimEnd();
+    for (const code of codes) expected.push({ line: i + 1, code, col: snippet !== undefined && codes.length === 1 ? raw.indexOf(snippet) + 1 : undefined });
+  });
+  assert.ok(expected.length >= 8);
+
+  const hir = buildHir(loaded2, config, profile, [file2("Phase2Bad.ts")]);
+  const actual = inFile([...loaded2.diagnostics, ...hir.diagnostics], "src/Phase2Bad.ts");
+  assert.ok(actual.every((d) => d.severity === "error"));
+  const key = (line: number, code: string): string => `${line}:${code}`;
+  assert.deepEqual(
+    [...new Set(actual.map((d) => key(d.span!.line, d.code)))].sort(),
+    [...new Set(expected.map((e) => key(e.line, e.code)))].sort(),
+  );
+  for (const e of expected) {
+    if (e.col === undefined) continue;
+    const hits = actual.filter((d) => d.code === e.code && d.span?.line === e.line);
+    assert.ok(hits.some((d) => d.span?.col === e.col), `${e.code} on line ${e.line} should start at column ${e.col}, got ${hits.map((d) => d.span?.col).join(",")}`);
+  }
+});

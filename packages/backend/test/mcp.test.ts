@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AbfcError } from "@abfc/env";
-import { ALLOWED_TOOLS, McpStdioClient, assertToolAllowed } from "../src/index.js";
+import { ALLOWED_TOOLS, McpStdioClient, assertToolAllowed, backendServerEnv } from "../src/index.js";
 
 const FIXTURE = fileURLToPath(new URL("../../test/fixtures/fake-server.mjs", import.meta.url));
 
@@ -90,7 +90,7 @@ test("bp_publish and tools off the allowlist are refused before any message is s
 
 test("assertToolAllowed accepts exactly the allowlist", () => {
   for (const t of ALLOWED_TOOLS) assert.doesNotThrow(() => assertToolAllowed(t));
-  assert.equal(ALLOWED_TOOLS.length, 10);
+  assert.equal(ALLOWED_TOOLS.length, 11);
   assert.throws(() => assertToolAllowed("bp_publish"), AbfcError);
   assert.throws(() => assertToolAllowed("run_python"), AbfcError);
 });
@@ -134,4 +134,17 @@ test("a server that exits rejects pending requests", async () => {
     await c.close();
     await assert.rejects(pending, /exited/);
   });
+});
+
+test("backendServerEnv: warm true sets ABF_WARM_SESSION, warm false removes an inherited one, unset inherits", () => {
+  const base = { python: "py", backendDir: "b", headlessDir: "h", editorRoot: null };
+  const parent = { ABF_WARM_SESSION: "1", PATH: "p" };
+  assert.equal(backendServerEnv({ ...base, warm: true }, {}).ABF_WARM_SESSION, "1");
+  assert.equal("ABF_WARM_SESSION" in backendServerEnv({ ...base, warm: false }, parent), false, "--cold must stay cold");
+  assert.equal(backendServerEnv({ ...base }, parent).ABF_WARM_SESSION, "1");
+  const e = backendServerEnv({ ...base, warm: false, editorRoot: "E" }, parent);
+  assert.deepEqual(
+    [e.PATH, e.ABF_HEADLESS_DIR, e.ABF_ABFC_TOOLS, e.ABF_EDITOR_ROOT, e.PYTHONUTF8],
+    ["p", "h", "1", "E", "1"],
+  );
 });

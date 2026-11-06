@@ -5,6 +5,7 @@ export const ALLOWED_TOOLS = [
   "backend_info",
   "abfc_extensions",
   "reflect",
+  "warm_session",
   "staging_sync",
   "staging_status",
   "bp_apply",

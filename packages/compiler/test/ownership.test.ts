@@ -13,13 +13,14 @@ import type { Manifest, ManifestUnit, SourceMapFile } from "../src/index.js";
 
 const BP = "/Fake/Mod/BP_Host.BP_Host";
 const EXEC = 'PinType.PinCategory="exec",PinType.PinSubCategory="",PinType.PinSubCategoryObject=None';
+const DELEGATE = 'PinType.PinCategory="delegate",PinType.PinSubCategory="",PinType.PinSubCategoryObject=None';
 const DATA = 'PinType.PinCategory="int",PinType.PinSubCategory="",PinType.PinSubCategoryObject=None';
 
-interface PinSpec { id: string; name: string; out?: boolean; data?: boolean; def?: string; links?: string[] }
+interface PinSpec { id: string; name: string; out?: boolean; data?: boolean; delegate?: boolean; def?: string; links?: string[] }
 interface NodeSpec { name: string; cls: string; head?: string[]; x?: number; pins: PinSpec[] }
 
 const pinLine = (p: PinSpec): string =>
-  `CustomProperties Pin (PinId=${p.id},PinName="${p.name}"${p.out ? ',Direction="EGPD_Output"' : ""},${p.data ? DATA : EXEC},` +
+  `CustomProperties Pin (PinId=${p.id},PinName="${p.name}"${p.out ? ',Direction="EGPD_Output"' : ""},${p.delegate ? DELEGATE : p.data ? DATA : EXEC},` +
   "PinType.PinSubCategoryMemberReference=(),PinType.PinValueType=(),PinType.ContainerType=None,PinType.bIsReference=False" +
   (p.def !== undefined ? `,DefaultValue="${p.def}"` : "") +
   (p.links && p.links.length > 0 ? `,LinkedTo=(${p.links.join(",")},)` : "") +
@@ -210,4 +211,100 @@ test("compile messages map to owned nodes, hand-made nodes and units", () => {
   const wide = mapCompileMessages(asset, [{ asset, message: "oops" }, { asset: "/Fake/Mod/Other", message: "skip" }], two, {});
   assert.equal(wide.length, 1);
   assert.equal(wide[0]!.span, undefined);
+});
+
+// ---- Phase 2: delegate links, overrides, --remove-node ----
+
+const EVENT_NODE = "/Script/BlueprintGraph.K2Node_Event";
+const SELF = "/Script/BlueprintGraph.K2Node_Self";
+const ref = (name: string): string => `EventReference=(MemberParent="/Script/CoreUObject.Class'/Script/Engine.Actor'",MemberName="${name}")`;
+
+/** Start -> SetTimer(Delegate <- Scan.OutputDelegate); Scan -> Call_9; override ReceiveBeginPlay -> Call_8; disabled ReceiveTick; a comment and an unlinked Self. */
+function delegateSnapshot(): Map<string, T3dNode> {
+  const nodes: NodeSpec[] = [
+    { name: "Ev_Start", cls: EVENT, head: ['CustomFunctionName="Start"'], pins: [{ id: id(1), name: "then", out: true, links: [`Timer_1 ${id(10)}`] }] },
+    {
+      name: "Timer_1", cls: CALL, head: ['FunctionReference=(MemberName="SetTimer",bSelfContext=True)'],
+      pins: [
+        { id: id(10), name: "execute", links: [`Ev_Start ${id(1)}`] },
+        { id: id(11), name: "then", out: true },
+        { id: id(12), name: "Delegate", delegate: true, links: [`Ev_Scan ${id(21)}`] },
+      ],
+    },
+    {
+      name: "Ev_Scan", cls: EVENT, head: ['CustomFunctionName="Scan"'],
+      pins: [
+        { id: id(20), name: "then", out: true, links: [`Call_9 ${id(30)}`] },
+        { id: id(21), name: "OutputDelegate", out: true, delegate: true, links: [`Timer_1 ${id(12)}`] },
+      ],
+    },
+    { name: "Call_9", cls: CALL, head: ['FunctionReference=(MemberName="Nine",bSelfContext=True)'], pins: [{ id: id(30), name: "execute", links: [`Ev_Scan ${id(20)}`] }] },
+    { name: "Ev_Begin", cls: EVENT_NODE, head: [ref("ReceiveBeginPlay")], pins: [{ id: id(40), name: "then", out: true, links: [`Call_8 ${id(50)}`] }] },
+    { name: "Call_8", cls: CALL, head: ['FunctionReference=(MemberName="Eight",bSelfContext=True)'], pins: [{ id: id(50), name: "execute", links: [`Ev_Begin ${id(40)}`] }] },
+    { name: "Ev_Tick", cls: EVENT_NODE, head: [ref("ReceiveTick"), "EnabledState=Disabled"], pins: [{ id: id(60), name: "then", out: true }] },
+    { name: "Cmt_A", cls: COMMENT, pins: [] },
+    { name: "Self_0", cls: SELF, pins: [{ id: id(70), name: "self", out: true, data: true }] },
+  ];
+  return parseExport(render(nodes)).nodes;
+}
+
+test("adoption records delegate links to and from other entries", () => {
+  const nodes = delegateSnapshot();
+  const start = analyzeAdoption(nodes, "EventGraph", "Start");
+  assert.deepEqual(start.owned, ["Ev_Start", "Timer_1"]);
+  assert.deepEqual(start.crossLinks, [{ node: "Timer_1", pin: "Delegate", entry: "Ev_Scan", role: "uses" }]);
+  assert.deepEqual(adoptionDiagnostics(start, "/Fake/Mod/BP_Host", "Start"), []);
+
+  const scan = analyzeAdoption(nodes, "EventGraph", "Scan");
+  assert.deepEqual(scan.owned, ["Call_9", "Ev_Scan"]);
+  assert.deepEqual(scan.shared, []);
+  assert.deepEqual(scan.foreignLinks, []);
+  assert.deepEqual(scan.crossLinks, [{ node: "Timer_1", pin: "Delegate", entry: "Ev_Scan", role: "supplies" }]);
+  assert.deepEqual(adoptionDiagnostics(scan, "/Fake/Mod/BP_Host", "Scan", new Set(["Timer_1"])), []);
+});
+
+test("a hand-made node that takes the adopted event as its delegate is refused unless another unit owns it (ABFC5005)", () => {
+  const scan = analyzeAdoption(delegateSnapshot(), "EventGraph", "Scan");
+  const refused = adoptionDiagnostics(scan, "/Fake/Mod/BP_Host", "Scan");
+  assert.equal(refused.length, 1);
+  assert.equal(refused[0]!.code, "ABFC5005");
+  assert.match(refused[0]!.message, /Timer_1.Delegate/);
+  assert.equal(adoptionDiagnostics(scan, "/Fake/Mod/BP_Host", "Scan", new Set(["Other_Node"]))[0]?.code, "ABFC5005");
+  assert.deepEqual(adoptionDiagnostics(scan, "/Fake/Mod/BP_Host", "Scan", new Set(["Timer_1"])), []);
+});
+
+test("an event parameter pin linked into an owned node is a foreign link, not a delegate cross link (ABFC5005)", () => {
+  const nodes: NodeSpec[] = [
+    { name: "Ev_Start", cls: EVENT, head: ['CustomFunctionName="Start"'], pins: [{ id: id(1), name: "then", out: true, links: [`Call_1 ${id(10)}`] }] },
+    { name: "Call_1", cls: CALL, head: ['FunctionReference=(MemberName="One",bSelfContext=True)'], pins: [
+      { id: id(10), name: "execute", links: [`Ev_Start ${id(1)}`] },
+      { id: id(11), name: "Amount", data: true, links: [`Ev_Other ${id(21)}`] },
+    ] },
+    { name: "Ev_Other", cls: EVENT, head: ['CustomFunctionName="Other"'], pins: [
+      { id: id(20), name: "then", out: true },
+      { id: id(21), name: "DeltaSeconds", out: true, data: true, links: [`Call_1 ${id(11)}`] },
+    ] },
+  ];
+  const a = analyzeAdoption(parseExport(render(nodes)).nodes, "EventGraph", "Start");
+  assert.deepEqual(a.crossLinks, []);
+  assert.deepEqual(a.foreignLinks, [{ node: "Ev_Other", pin: "DeltaSeconds", to: "Call_1" }]);
+  assert.equal(adoptionDiagnostics(a, "/Fake/Mod/BP_Host", "Start")[0]?.code, "ABFC5005");
+});
+
+test("adoption of an engine override event; a disabled default node is not an override", () => {
+  const nodes = delegateSnapshot();
+  const begin = analyzeAdoption(nodes, "EventGraph", "ReceiveBeginPlay", { kind: "override" });
+  assert.equal(begin.entry, "Ev_Begin");
+  assert.deepEqual(begin.owned, ["Call_8", "Ev_Begin"]);
+  assert.throws(() => analyzeAdoption(nodes, "EventGraph", "ReceiveTick", { kind: "override" }), /ABFC5002/);
+  assert.throws(() => analyzeAdoption(nodes, "EventGraph", "ReceiveBeginPlay"), /ABFC5002/, "an override is not found as a custom event");
+});
+
+test("--remove-node: comment boxes and unlinked nodes only (ABFC5008)", () => {
+  const nodes = delegateSnapshot();
+  const a = analyzeAdoption(nodes, "EventGraph", "Scan", { extraNodes: ["Self_0", "Cmt_A", "Self_0"] });
+  assert.deepEqual(a.extra, ["Cmt_A", "Self_0"]);
+  assert.deepEqual(a.owned, ["Call_9", "Cmt_A", "Ev_Scan", "Self_0"]);
+  assert.throws(() => analyzeAdoption(nodes, "EventGraph", "Start", { extraNodes: ["Call_9"] }), /ABFC5008.*linked pins/);
+  assert.throws(() => analyzeAdoption(nodes, "EventGraph", "Start", { extraNodes: ["Nope"] }), /ABFC5008.*no node named/);
 });

@@ -17,6 +17,8 @@ export interface IrAsset {
   path: string; // "/goodsoupWagdD/SoupInfo/BP_SoupInfoRelay" (always under /<mod>/)
   create?: { kind: "Blueprint" | "WidgetBlueprint" | "BlueprintInterface" | "UserDefinedStruct"; parent: string };
   classDefaults?: Record<string, string>; // property -> T3D value text
+  /** Row asset path whose class reference is verified (read-only) by the class-defaults pass. */
+  classManagerRow?: string;
   variables: IrVariable[];
   units: IrUnit[]; // owned functions/events/overrides
   structFields?: IrVariable[]; // only for UserDefinedStruct
@@ -32,6 +34,11 @@ export interface IrUnit {
   locals: IrVariable[]; // honored when the backend has functionLocals; else hoisted by the lowering
   nodes: IrNode[];
   wires: IrWire[];
+  /**
+   * Wires to a node of another unit of the same asset (a delegate argument: the owned event's `OutputDelegate` feeds a pin of this unit).
+   * `toUnit` = unit id of the other unit, `from` = `<its entry node id>.<output pin>`, `to` = `<node id in this unit>.<pin>`.
+   */
+  crossWires?: Array<{ toUnit: string; from: string; to: string }>;
   origin: Span;
   hash: string; // sha256 of the canonical JSON of signature+nodes+wires (no positions)
 }
@@ -151,6 +158,10 @@ export interface AssetPlan {
   variables: IrVariable[];
   units: Array<{ unit: IrUnit; removeNodes: string[]; origin: [number, number] }>;
   classMeta: Record<string, string>;
+  /** Real entry node name of units that are not in this plan but are the target of a cross wire of a planned unit (from the manifest). */
+  entryNames?: Record<string, string>;
+  /** Class defaults to apply in pass 5 (plan item `defaults`); present only when they changed. */
+  defaults?: { classPath: string; values: Record<string, string>; hash: string; classManagerRow?: string };
 }
 export interface ApplyPlan { mod: string; assets: AssetPlan[] }
 

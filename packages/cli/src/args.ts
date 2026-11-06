@@ -16,6 +16,10 @@ export interface CliFlags {
   yes: boolean;
   discardEditorChanges: boolean;
   dryRun: boolean;
+  /** `--cold`: do not use the backend warm session (one editor start per operation). */
+  cold: boolean;
+  /** `--remove-node <name>` (repeatable): extra nodes `abfc adopt` removes with the unit. */
+  removeNode: string[];
 }
 
 export interface ParsedArgs {
@@ -57,6 +61,8 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
         yes: { type: "boolean" },
         "discard-editor-changes": { type: "boolean" },
         "dry-run": { type: "boolean" },
+        cold: { type: "boolean" },
+        "remove-node": { type: "string", multiple: true },
       },
     });
   } catch (e) {
@@ -83,6 +89,8 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
       yes: v.yes === true,
       discardEditorChanges: v["discard-editor-changes"] === true,
       dryRun: v["dry-run"] === true,
+      cold: v.cold === true,
+      removeNode: v["remove-node"] ?? [],
     },
   };
 }
