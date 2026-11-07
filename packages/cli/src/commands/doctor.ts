@@ -81,6 +81,27 @@ export async function doctor(ctx: CliContext): Promise<number> {
 
   for (const d of env.diagnostics) if (d.code !== "ABFC1030") output.diag(d);
 
+  // The exe ships its own backend and Python; an older source-install setting can still win over them (design 9.1).
+  if (info0.kind === "exe" && info0.runtimeDir !== null) {
+    const rt = norm(info0.runtimeDir);
+    const outside: string[] = [];
+    for (const [label, r] of [["python", env.python], ["backend folder", env.backendDir]] as const) {
+      if (r.value === null || r.source === "auto") continue;
+      const v = norm(r.value);
+      if (v !== rt && !v.startsWith(rt + "\\")) outside.push(`${label} ${r.value} [${r.source}]`);
+    }
+    if (outside.length > 0) {
+      output.diag(
+        envWarning(
+          1053,
+          `abfc.exe uses a ${outside.join(" and a ")} outside its own runtime folder ${info0.runtimeDir}.`,
+          [],
+          "remove the old backend / python setting (ABFC_BACKEND_DIR, ABFC_PYTHON, \"backendDir\" / \"python\" in the user config or abf.config.json) to use the bundled ones, or keep it on purpose.",
+        ),
+      );
+    }
+  }
+
   if (env.editorRoot.value !== null && env.appVersion === null) {
     output.diag(
       envWarning(
@@ -133,7 +154,7 @@ export async function doctor(ctx: CliContext): Promise<number> {
   return output.exitCode();
 }
 
-/** `abfc doctor --clean-runtimes`: deletes the extracted runtime folders of other versions. Needs no project. Returns the exit code. */
+/** `abfc doctor --clean-runtimes`: deletes the extracted runtime folders of other versions (and only those). Needs no project. Returns the exit code. */
 export function cleanRuntimesCommand(args: ParsedArgs, deps: CliDeps): number {
   const output = new Output({ command: "doctor", json: args.flags.json, projectDir: args.flags.project, stdout: deps.stdout, stderr: deps.stderr });
   const r = installOf(deps).clean();
@@ -141,9 +162,10 @@ export function cleanRuntimesCommand(args: ParsedArgs, deps: CliDeps): number {
   for (const p of r.failed) {
     output.diag(envWarning(1051, `in use, not removed: ${p}`, [], "close other abfc processes (language server, builds) and run the command again."));
   }
+  for (const p of r.skipped) output.info(`left alone (not an abfc runtime folder): ${p}`);
   if (r.kept !== null) output.info(`kept ${r.kept}`);
   if (r.removed.length === 0 && r.failed.length === 0) output.info("nothing to remove");
-  output.json({ removed: r.removed, failed: r.failed, kept: r.kept });
+  output.json({ removed: r.removed, failed: r.failed, skipped: r.skipped, kept: r.kept });
   return output.finish();
 }
 

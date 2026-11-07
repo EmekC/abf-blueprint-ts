@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // Stages the installer input folder, writes the release zip and compiles the Inno Setup installer when ISCC is found (design 18.9).
 //
-//   node scripts/release/build-installer.mjs --version <semver> [--iscc <path>] [--require-iscc]
+//   node scripts/release/build-installer.mjs --version <semver> [--iscc <path>] [--require-iscc] [--allow-dev]
 //
 // --version        release version; must equal the version in build/release/exe/build-info.json
 // --iscc           path of ISCC.exe (else env ABFC_ISCC, build/tools/innosetup, Program Files, per-user Programs)
 // --require-iscc   exit 1 when ISCC is not found (default: skip the compile, exit 0; CI uses --require-iscc)
+// --allow-dev      accept a build/release/exe made with --dev (build-info release:false); refused by default
 // Requires build/release/exe (node scripts/release/build-exe.mjs) and exactly one build/vsix/abfc-vscode-*.vsix (npm run vsix).
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -24,7 +25,7 @@ const zipDir = join(repoRoot, "build", "release", "zip");
 const installerDir = join(repoRoot, "build", "release", "installer");
 const issFile = join(repoRoot, "release", "installer", "abfc.iss");
 const readmeTemplate = join(repoRoot, "release", "installer", "README.txt");
-const USAGE = "usage: node scripts/release/build-installer.mjs --version <semver> [--iscc <path>] [--require-iscc]";
+const USAGE = "usage: node scripts/release/build-installer.mjs --version <semver> [--iscc <path>] [--require-iscc] [--allow-dev]";
 const SEMVER = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 
 function fail(message) {
@@ -33,12 +34,13 @@ function fail(message) {
 }
 
 function parseArgv(argv) {
-  const o = { version: "", iscc: "", requireIscc: false };
+  const o = { version: "", iscc: "", requireIscc: false, allowDev: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--version") o.version = String(argv[++i] ?? "");
     else if (a === "--iscc") o.iscc = String(argv[++i] ?? "");
     else if (a === "--require-iscc") o.requireIscc = true;
+    else if (a === "--allow-dev") o.allowDev = true;
     else fail(`unknown argument ${a}\n${USAGE}`);
   }
   if (!SEMVER.test(o.version)) fail(`--version must be a semver like 1.0.0 or 1.0.0-rc.0\n${USAGE}`);
@@ -69,6 +71,10 @@ function main() {
   }
   const info = JSON.parse(readFileSync(infoFile, "utf8"));
   if (info.version !== o.version) fail(`--version ${o.version} differs from build/release/exe/build-info.json (${info.version}): rebuild the exe with that version`);
+  if (info.release !== true) {
+    if (o.allowDev) console.warn("build-installer: --allow-dev: build-info.json is a --dev build");
+    else fail("build/release/exe/build-info.json is a --dev build (release is not true): rebuild the exe without --dev, or pass --allow-dev");
+  }
 
   const vsixes = existsSync(vsixDir) ? readdirSync(vsixDir).filter((n) => /^abfc-vscode-.+\.vsix$/.test(n)) : [];
   if (vsixes.length !== 1) fail(`expected exactly one build/vsix/abfc-vscode-*.vsix, found ${vsixes.length}: run npm run vsix (and remove stale files)`);

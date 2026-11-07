@@ -6,7 +6,7 @@ import { after, describe, it } from "node:test";
 import { readZip } from "@abfc/env";
 import { packageDirsFromMetafile, noticesText } from "../lib/notices.mjs";
 import { sha256Buf } from "../lib/pins.mjs";
-import { buildRuntimeZip, checkNoUserPaths, collectRuntimeFiles } from "../lib/runtime.mjs";
+import { buildRuntimeZip, checkNoBuildPathsInBinary, checkNoUserPaths, collectRuntimeFiles } from "../lib/runtime.mjs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
@@ -44,6 +44,18 @@ describe("checkNoUserPaths", () => {
     assert.doesNotThrow(() => checkNoUserPaths("a.txt", Buffer.from("C:\\Users\\Public\\x")));
     assert.doesNotThrow(() => checkNoUserPaths("a.py", Buffer.from("nothing here")));
     assert.doesNotThrow(() => checkNoUserPaths("a.exe", Buffer.from("C:\\Users\\jane\\x")));
+  });
+});
+
+describe("checkNoBuildPathsInBinary", () => {
+  it("finds user paths and .claude folders as latin1 and utf16le text at either alignment", () => {
+    const user = "C:\\Users\\jane\\proj\\abfc.cjs";
+    assert.throws(() => checkNoBuildPathsInBinary("abfc.exe", Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from(user, "latin1")])), /build path as latin1/);
+    assert.throws(() => checkNoBuildPathsInBinary("abfc.exe", Buffer.concat([Buffer.from([0, 1]), Buffer.from(user, "utf16le")])), /as utf16le/);
+    assert.throws(() => checkNoBuildPathsInBinary("abfc.exe", Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from(user, "utf16le")])), /as utf16le/);
+    assert.throws(() => checkNoBuildPathsInBinary("x.dll", Buffer.from("..\\.claude\\worktrees\\a", "latin1")), /\.claude/);
+    for (const n of [1, 2, 3, 6057, 6058]) assert.doesNotThrow(() => checkNoBuildPathsInBinary("a.py", Buffer.from("x".repeat(n))));
+    assert.doesNotThrow(() => checkNoBuildPathsInBinary("abfc.exe", Buffer.from("C:\\Users\\Public\\x \u0000\u0001 build\\release\\work\\abfc.cjs")));
   });
 });
 

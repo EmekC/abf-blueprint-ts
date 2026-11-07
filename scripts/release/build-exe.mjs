@@ -11,7 +11,7 @@
 // Requires `npm run build` and the cached, pinned downloads (node scripts/release/fetch-pins.mjs).
 import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { loadAllowlist, selectAllowed } from "./lib/allowlist.mjs";
@@ -20,7 +20,7 @@ import { packageDirsFromMetafile, noticesText } from "./lib/notices.mjs";
 import { stripAuthenticode } from "./lib/pe.mjs";
 import { loadPins, savePins, sha256Buf, sha256File } from "./lib/pins.mjs";
 import { embedPythonFiles } from "./lib/python.mjs";
-import { buildRuntimeZip, checkNoUserPaths, collectRuntimeFiles } from "./lib/runtime.mjs";
+import { buildRuntimeZip, checkNoBuildPathsInBinary, checkNoUserPaths, collectRuntimeFiles } from "./lib/runtime.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const pinsFile = join(repoRoot, "release", "pins.json");
@@ -174,28 +174,36 @@ async function main() {
   mkdirSync(exeOut, { recursive: true });
   const exeFile = join(exeOut, "abfc.exe");
   const seaConfig = join(workDir, "sea-config.json");
+  // The SEA blob embeds the `main` path as written, so every path is relative to workDir (the cwd of the build): no user path or
+  // worktree folder ends up in abfc.exe.
+  const fromWork = (p) => relative(workDir, p);
   writeFileSync(
     seaConfig,
     `${JSON.stringify(
       {
-        main: cjs,
-        output: exeFile,
+        main: fromWork(cjs),
+        output: fromWork(exeFile),
         disableExperimentalSEAWarning: true,
         useSnapshot: false,
         useCodeCache: true,
-        assets: { "runtime.zip": zipFile, "runtime.sha256.json": manifestFile },
+        assets: { "runtime.zip": fromWork(zipFile), "runtime.sha256.json": fromWork(manifestFile) },
       },
       null,
       2,
     )}\n`,
     "utf8",
   );
-  const sea = spawnSync(nodeExe, ["--build-sea", seaConfig], { stdio: "inherit", windowsHide: true });
+  const sea = spawnSync(nodeExe, ["--build-sea", "sea-config.json"], { stdio: "inherit", windowsHide: true, cwd: workDir });
   if (sea.status !== 0) fail(`node --build-sea failed (exit ${sea.status})`);
 
   // 7. strip the Node signature, notices, build-info
   const stripped = stripAuthenticode(readFileSync(exeFile));
   if (stripped.removed) writeFileSync(exeFile, stripped.buf);
+  try {
+    checkNoBuildPathsInBinary("abfc.exe", readFileSync(exeFile));
+  } catch (e) {
+    fail(e.message);
+  }
   copyFileSync(noticesFile, join(exeOut, "THIRD-PARTY-NOTICES.txt"));
   const exeBytes = statSync(exeFile).size;
   const info = {

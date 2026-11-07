@@ -28,6 +28,34 @@ export function checkNoUserPaths(name, buf) {
   if (m !== null) throw new Error(`${name}: contains a user path (${m[0]})`);
 }
 
+const CLAUDE_DIR = /\.claude[\\/]/i;
+
+/**
+ * Throws when a binary file (any extension) holds a Windows user-profile path or a `.claude` folder path as latin1 or
+ * UTF-16LE text (both byte alignments). Catches build paths that a Node SEA blob or a PE file embeds.
+ */
+export function checkNoBuildPathsInBinary(name, buf) {
+  // 8 MB windows with an overlap (even sizes, so UTF-16 alignment is the same in every window): converting a 130 MB file to one string is slow and can exhaust memory.
+  const WINDOW = 8 * 1024 * 1024;
+  const OVERLAP = 4096;
+  // UTF-16 is decoded from an aligned, even-length scratch copy: decoding an odd-offset or odd-length Buffer view with toString("utf16le") crashes Node (heap corruption).
+  const scratch = Buffer.alloc(Math.min(buf.length, WINDOW + OVERLAP) + 2);
+  const test = (enc, text) => {
+    const m = USER_PATH.exec(text) ?? CLAUDE_DIR.exec(text);
+    if (m !== null) throw new Error(`${name}: contains a build path as ${enc} text (${m[0]})`);
+  };
+  for (let start = 0; start < buf.length; start += WINDOW) {
+    const end = Math.min(buf.length, start + WINDOW + OVERLAP);
+    test("latin1", buf.toString("latin1", start, end));
+    for (const skip of [0, 1]) {
+      const n = (end - start - skip) & ~1;
+      if (n <= 0) continue;
+      buf.copy(scratch, 0, start + skip, start + skip + n);
+      test("utf16le", scratch.toString("utf16le", 0, n));
+    }
+  }
+}
+
 /**
  * Returns Map<runtime path, Buffer>. `backendFiles` = Map<path, Buffer> (without prefix), `pythonFiles` = Map with the
  * `python/` prefix already, `notices` = the THIRD-PARTY-NOTICES text.

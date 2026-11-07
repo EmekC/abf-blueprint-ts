@@ -81,7 +81,7 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
         "no-stubs": { type: "boolean" },
         deep: { type: "boolean" },
         "clean-runtimes": { type: "boolean" },
-        //`abfc lsp` accepts what language clients add; the values are ignored
+        // `abfc lsp` accepts what language clients add; the values are ignored
         stdio: { type: "boolean" },
         clientProcessId: { type: "string" },
       },

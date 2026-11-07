@@ -117,8 +117,8 @@ export function verifyBundledRuntime(deep: boolean): { dir: string; extracted: b
   return { ...r, files: Object.keys(source.manifest().files).length };
 }
 
-/** Deletes every runtime folder except the running exe's own (a source install keeps none). */
-export function cleanBundledRuntimes(): { removed: string[]; failed: string[]; kept: string | null } {
+/** Deletes the runtime folders abfc made, except the running exe's own (a source install keeps none); other files and folders are left alone and listed in `skipped`. */
+export function cleanBundledRuntimes(): { removed: string[]; failed: string[]; skipped: string[]; kept: string | null } {
   const root = runtimeRoot(process.env);
   if (!isExe()) return { ...cleanRuntimes(root, null), kept: null };
   const keepName = runtimeFolderName(seaRuntimeSource().manifest());

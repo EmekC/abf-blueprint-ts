@@ -12,6 +12,7 @@ const CUR = "C:\\rt\\1.0.0-abcdef12";
 const OLD = "C:\\rt\\0.9.0-deadbeef";
 const TMP = "C:\\rt\\.tmp-x";
 const BUSY = "C:\\rt\\0.8.0-cafebabe";
+const FOREIGN = "C:\\rt\\notes.txt";
 
 function fakeInstall(kind: "exe" | "source") {
   const calls: string[] = [];
@@ -26,7 +27,9 @@ function fakeInstall(kind: "exe" | "source") {
     },
     clean: () => {
       calls.push("clean");
-      return kind === "exe" ? { removed: [OLD, TMP], failed: [BUSY], kept: CUR } : { removed: [], failed: [], kept: null };
+      return kind === "exe"
+        ? { removed: [OLD, TMP], failed: [BUSY], skipped: [FOREIGN], kept: CUR }
+        : { removed: [], failed: [], skipped: [], kept: null };
     },
   };
   return { install, calls };
@@ -91,6 +94,7 @@ test("doctor --clean-runtimes needs no project: removes, warns about folders in 
   assert.ok(out.includes(`removed ${TMP}`), out);
   assert.ok(out.includes(`in use, not removed: ${BUSY}`), out);
   assert.ok(out.includes(`kept ${CUR}`), out);
+  assert.ok(out.includes(`left alone (not an abfc runtime folder): ${FOREIGN}`), out);
 });
 
 test("doctor --clean-runtimes: 'nothing to remove', and --json lists removed, failed and kept", async () => {
@@ -104,5 +108,25 @@ test("doctor --clean-runtimes: 'nothing to remove', and --json lists removed, fa
   cap2.deps.install = fakeInstall("exe").install;
   assert.equal(await main(["doctor", "--clean-runtimes", "--json"], cap2.deps), 0, cap2.text());
   const doc = JSON.parse(cap2.text()) as { result: unknown };
-  assert.deepEqual(doc.result, { removed: [OLD, TMP], failed: [BUSY], kept: CUR });
+  assert.deepEqual(doc.result, { removed: [OLD, TMP], failed: [BUSY], skipped: [FOREIGN], kept: CUR });
+});
+
+test("doctor warns ABFC1053 when the exe resolves a backend outside its runtime folder, and not when it uses its own", async () => {
+  const cap = doctorDeps();
+  cap.deps.install = fakeInstall("exe").install;
+  assert.equal(await main(["doctor"], cap.deps), 0, cap.text());
+  assert.match(cap.text(), /ABFC1053/);
+  assert.match(cap.text(), /backend folder C:.Backend.mcp \[env\]/);
+  assert.doesNotMatch(cap.text(), /uses a python/);
+
+  const cap2 = doctorDeps();
+  const own = fakeInstall("exe").install;
+  cap2.deps.install = { ...own, info: () => ({ kind: "exe" as const, abfcVersion: "1.0.0", runtimeDir: "C:\\Backend", runtimeRoot: RT }) };
+  assert.equal(await main(["doctor"], cap2.deps), 0, cap2.text());
+  assert.doesNotMatch(cap2.text(), /ABFC1053/);
+
+  const cap3 = doctorDeps();
+  cap3.deps.install = fakeInstall("source").install;
+  assert.equal(await main(["doctor"], cap3.deps), 0, cap3.text());
+  assert.doesNotMatch(cap3.text(), /ABFC1053/);
 });

@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // Checks the built release artifacts against each other and the allowlists (design 18.9, 18.10).
 //
-//   node scripts/release/inspect.mjs --version <semver>
+//   node scripts/release/inspect.mjs --version <semver> [--allow-dev]
 //
 // - the release zip holds exactly the files of build/release/installer-input (names, sizes, sha256) and passes allowlist.zip
 // - runtime.zip holds exactly the files of runtime.sha256.json (size + sha256), matches its recorded zip sha256 and passes allowlist.runtime
 // - abfc.exe in the zip has the sha256 recorded in build-info.json
-// - no user paths in the shipped text files
+// - build-info.json is a release build (release:true); --allow-dev accepts a --dev build
+// - no user paths in the shipped text files, and no user path or .claude folder in any binary (abfc.exe and every other zip entry, every runtime.zip entry; scanned after decompression) as latin1 or UTF-16LE
 // - the installer exe, when present, is between 20 MB and 250 MB
 // Exit 1 on any mismatch.
 import { existsSync, readFileSync, statSync } from "node:fs";
@@ -15,11 +16,11 @@ import { fileURLToPath } from "node:url";
 import { readZip } from "@abfc/env";
 import { loadAllowlist, selectAllowed } from "./lib/allowlist.mjs";
 import { sha256Buf } from "./lib/pins.mjs";
-import { checkNoUserPaths } from "./lib/runtime.mjs";
+import { checkNoBuildPathsInBinary, checkNoUserPaths } from "./lib/runtime.mjs";
 import { listingOf } from "./lib/stage.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const USAGE = "usage: node scripts/release/inspect.mjs --version <semver>";
+const USAGE = "usage: node scripts/release/inspect.mjs --version <semver> [--allow-dev]";
 const SEMVER = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 const MB = 1024 * 1024;
 
@@ -29,8 +30,10 @@ const mb = (n) => `${(n / MB).toFixed(2)} MB`;
 
 function parseArgv(argv) {
   let version = "";
+  let allowDev = false;
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--version") version = String(argv[++i] ?? "");
+    else if (argv[i] === "--allow-dev") allowDev = true;
     else {
       console.error(`inspect: unknown argument ${argv[i]}\n${USAGE}`);
       process.exit(1);
@@ -40,7 +43,7 @@ function parseArgv(argv) {
     console.error(`inspect: --version must be a semver like 1.0.0 or 1.0.0-rc.0\n${USAGE}`);
     process.exit(1);
   }
-  return version;
+  return { version, allowDev };
 }
 
 function need(file) {
@@ -56,7 +59,7 @@ function checkAllowlist(kind, names, patterns) {
 }
 
 function main() {
-  const version = parseArgv(process.argv.slice(2));
+  const { version, allowDev } = parseArgv(process.argv.slice(2));
   const allow = loadAllowlist(join(repoRoot, "release", "allowlist.json"));
   const exeInfoFile = join(repoRoot, "build", "release", "exe", "build-info.json");
   const inputDir = join(repoRoot, "build", "release", "installer-input");
@@ -72,6 +75,10 @@ function main() {
   }
   const info = JSON.parse(readFileSync(exeInfoFile, "utf8"));
   if (info.version !== version) bad(`build-info.json is for ${info.version}, not ${version}`);
+  if (info.release !== true) {
+    if (allowDev) console.warn("inspect: --allow-dev: build-info.json is a --dev build");
+    else bad("build-info.json is a --dev build (release is not true); rebuild without --dev, or pass --allow-dev");
+  }
 
   // release zip vs installer input folder
   const listing = listingOf(inputDir);
@@ -91,6 +98,7 @@ function main() {
     if (l.name === "abfc.exe" && sha !== info.exeSha256) bad(`zip: abfc.exe sha256 ${sha} differs from build-info exeSha256 ${info.exeSha256}`);
     try {
       checkNoUserPaths(l.name, data);
+      checkNoBuildPathsInBinary(l.name, data);
     } catch (err) {
       bad(`zip: ${err.message}`);
     }
@@ -123,6 +131,7 @@ function main() {
     if (sha256Buf(data) !== manifest.files[name].sha256) bad(`runtime.zip: ${name} sha256 differs from the manifest`);
     try {
       checkNoUserPaths(name, data);
+      checkNoBuildPathsInBinary(name, data);
     } catch (err) {
       bad(`runtime.zip: ${err.message}`);
     }

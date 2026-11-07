@@ -203,20 +203,45 @@ test("ensureRuntime: an unwritable runtime root is ABFC1050", () => {
   assert.equal(code(() => ensureRuntime(sourceOf(build(FILES)), join(blocker, "sub"))), "ABFC1050");
 });
 
-test("cleanRuntimes keeps the named folder and removes everything else", () => {
+test("cleanRuntimes keeps the named folder and removes the folders abfc made", () => {
   const root = temp();
-  for (const d of ["1.0.0-keep0000", "0.9.0-aaaaaaaa", ".tmp-x-1-abcd", ".bad-y-2-ef01"]) {
+  for (const d of ["1.0.0-0ee90000", "0.9.0-aaaaaaaa", "1.0.0-rc.0-0123abcd", ".tmp-x-1-abcd", ".bad-y-2-ef01"]) {
     mkdirSync(join(root, d), { recursive: true });
     writeFileSync(join(root, d, "f.txt"), "x");
+    if (!d.startsWith(".")) writeFileSync(join(root, d, RUNTIME_MARKER), "{}\n");
   }
-  writeFileSync(join(root, "stray.txt"), "x");
-  const r = cleanRuntimes(root, "1.0.0-keep0000");
+  mkdirSync(join(root, "0.7.0-bbbbbbbb"));
+  const r = cleanRuntimes(root, "1.0.0-0ee90000");
   assert.deepEqual(r.failed, []);
-  assert.equal(r.removed.length, 4);
-  assert.deepEqual(readdirSync(root), ["1.0.0-keep0000"]);
-  assert.deepEqual(cleanRuntimes(join(root, "missing"), null), { removed: [], failed: [] });
+  assert.deepEqual(r.skipped, []);
+  assert.equal(r.removed.length, 5);
+  assert.deepEqual(readdirSync(root), ["1.0.0-0ee90000"]);
+  assert.deepEqual(cleanRuntimes(join(root, "missing"), null), { removed: [], failed: [], skipped: [] });
   assert.equal(cleanRuntimes(root, null).removed.length, 1);
-  assert.equal(existsSync(join(root, "1.0.0-keep0000")), false);
+  assert.equal(existsSync(join(root, "1.0.0-0ee90000")), false);
+});
+
+test("cleanRuntimes leaves foreign files and folders alone and reports them", () => {
+  const root = temp();
+  writeFileSync(join(root, "stray.txt"), "x");
+  mkdirSync(join(root, "tools"));
+  writeFileSync(join(root, "tools", "keep.bin"), "x");
+  // named like a runtime folder but holding someone else's files and no marker
+  mkdirSync(join(root, "2.0.0-12345678"));
+  writeFileSync(join(root, "2.0.0-12345678", "mine.txt"), "x");
+  // a file named like a runtime folder
+  writeFileSync(join(root, "3.0.0-abcdef01"), "x");
+  mkdirSync(join(root, "0.9.0-aaaaaaaa"));
+  writeFileSync(join(root, "0.9.0-aaaaaaaa", RUNTIME_MARKER), "{}\n");
+  mkdirSync(join(root, ".tmp-x-1-abcd"));
+  mkdirSync(join(root, ".cache"));
+  const r = cleanRuntimes(root, null);
+  assert.deepEqual(r.failed, []);
+  assert.deepEqual(r.removed.map((p) => p.slice(root.length + 1)).sort(), [".tmp-x-1-abcd", "0.9.0-aaaaaaaa"]);
+  assert.deepEqual(r.skipped.map((p) => p.slice(root.length + 1)).sort(), [".cache", "2.0.0-12345678", "3.0.0-abcdef01", "stray.txt", "tools"]);
+  assert.deepEqual(readdirSync(root).sort(), [".cache", "2.0.0-12345678", "3.0.0-abcdef01", "stray.txt", "tools"]);
+  assert.equal(readFileSync(join(root, "tools", "keep.bin"), "utf8"), "x");
+  assert.equal(readFileSync(join(root, "2.0.0-12345678", "mine.txt"), "utf8"), "x");
 });
 
 test("runtimeRoot: ABFC_RUNTIME_DIR wins, then LOCALAPPDATA", () => {

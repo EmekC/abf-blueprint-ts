@@ -114,7 +114,8 @@ export function ensureRuntime(
     try {
       renameWithRetry(dir, bad);
     } catch (e) {
-      throw fail(
+      // ENOENT: another process moved the damaged folder aside first and is repairing it; extract our own copy and let the first rename win.
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw fail(
         "ABFC1051",
         `the runtime folder ${dir} is damaged and cannot be replaced (${(e as Error).message})`,
         problems.slice(0, 10).map((p) => ({ source: "problem", detail: p })),
@@ -188,20 +189,45 @@ function rmQuiet(p: string): void {
   }
 }
 
-/** Removes every entry of `rootDir` except `keepName` (also `.tmp-*` and `.bad-*`). Failures are collected, never thrown. */
-export function cleanRuntimes(rootDir: string, keepName: string | null): { removed: string[]; failed: string[] } {
+/** The name of a folder abfc extracts: `<abfc version>-<8 hex digits of the runtime.zip sha256>`. */
+const RUNTIME_FOLDER_NAME = /^\d+\.\d+\.\d+[0-9A-Za-z.+-]*-[0-9a-f]{8}$/;
+/** Temp and moved-aside folders of an extraction or repair. */
+const RUNTIME_LEFTOVER_NAME = /^\.(tmp|bad)-/;
+
+/** True when `p` is a runtime folder abfc made: it holds the marker, or it is empty (nothing of anyone else's inside). */
+function isAbfcRuntimeFolder(p: string): boolean {
+  try {
+    if (!statSync(p).isDirectory()) return false;
+    if (existsSync(join(p, RUNTIME_MARKER))) return true;
+    return readdirSync(p).length === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Removes the runtime folders abfc created in `rootDir`, except `keepName`: folders named `<version>-<sha8>` that hold the
+ * marker (or are empty) and `.tmp-*` / `.bad-*` leftovers. Everything else in the folder is left alone and listed in `skipped`.
+ * Failures are collected, never thrown.
+ */
+export function cleanRuntimes(rootDir: string, keepName: string | null): { removed: string[]; failed: string[]; skipped: string[] } {
   const removed: string[] = [];
   const failed: string[] = [];
+  const skipped: string[] = [];
   let names: string[];
   try {
     names = readdirSync(rootDir);
   } catch {
-    return { removed, failed };
+    return { removed, failed, skipped };
   }
   const keep = keepName === null ? null : keepName.toLowerCase();
   for (const n of names) {
     if (keep !== null && n.toLowerCase() === keep) continue;
     const p = join(rootDir, n);
+    if (!RUNTIME_LEFTOVER_NAME.test(n) && !(RUNTIME_FOLDER_NAME.test(n) && isAbfcRuntimeFolder(p))) {
+      skipped.push(p);
+      continue;
+    }
     try {
       rmSync(p, { recursive: true, force: true });
       if (existsSync(p)) failed.push(p);
@@ -210,5 +236,5 @@ export function cleanRuntimes(rootDir: string, keepName: string | null): { remov
       failed.push(p);
     }
   }
-  return { removed, failed };
+  return { removed, failed, skipped };
 }
