@@ -1108,6 +1108,112 @@ test("(r3) an apply that fails on the call is reported once, at the call's TS li
   });
 });
 
+/** Replaces the relay class by one event that owns no variable (so nothing but the event is left to retire). */
+function useMinimalRelay(dir: string): void {
+  rmSync(join(dir, "src", "Relay.test.ts"));
+  writeFileSync(
+    join(dir, "src", "Relay.ts"),
+    [
+      'import { blueprint, event } from "@abfc/runtime";',
+      'import { Actor } from "/Script/FakeEngine";',
+      'import type { BP_Relay_Manual } from "/TestMod/Relay/BP_Relay";',
+      "",
+      "export interface BP_Relay extends BP_Relay_Manual {}",
+      "",
+      '@blueprint({ path: "/TestMod/Relay/BP_Relay" })',
+      "export class BP_Relay extends Actor {",
+      "  @event",
+      "  UpdateTarget(): void {",
+      "    this.HideAll();",
+      "  }",
+      "}",
+      "",
+    ].join("\n"),
+    "utf8",
+  );
+}
+
+/** Deletes the relay class from the rig; an empty module keeps the project valid (TypeScript refuses a project without input files). */
+function deleteRelaySources(dir: string): void {
+  rmSync(join(dir, "src", "Relay.ts"));
+  writeFileSync(join(dir, "src", "Other.ts"), "export {};\n", "utf8");
+}
+
+test("(r5) deleting a class's TypeScript retires its units on build, publish publishes the asset, then forgets it", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    useMinimalRelay(r.dir);
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    const old = readManifest(r.dir, RELAY_ASSET)!.units.find((u) => u.id === "event:UpdateTarget")!;
+    const gone = [...old.nodes, old.tag!];
+    for (const n of gone) assert.ok(r.backend.nodeNames(RELAY_ASSET).includes(n), `${n} is on the stage`);
+    // a first publish of the built class empties the list of changed files
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(r.backend.publishCalls.length, 1);
+
+    deleteRelaySources(r.dir);
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /removed .*UpdateTarget/);
+    const names = r.backend.nodeNames(RELAY_ASSET);
+    for (const n of gone) assert.ok(!names.includes(n), `${n} is gone from the stage`);
+    const m = readManifest(r.dir, RELAY_ASSET)!;
+    assert.deepEqual(m.units, []);
+    assert.deepEqual(m.retiredUnpublished, ["event:UpdateTarget"]);
+
+    // a second build changes nothing
+    const before = r.backend.applyLabels().length;
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(r.backend.applyLabels().length, before);
+    assert.deepEqual(readManifest(r.dir, RELAY_ASSET)!.retiredUnpublished, ["event:UpdateTarget"]);
+
+    x = await r.run(["publish", "--dry-run"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /changed Content\/Relay\/BP_Relay\.uasset/);
+
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(r.backend.publishCalls.length, 2);
+    assert.deepEqual(r.backend.publishCalls[1]!.assets, [RELAY_ASSET]);
+    assert.match(x.out, /no longer owned by abfc: \/TestMod\/Relay\/BP_Relay/);
+    assert.equal(readManifest(r.dir, RELAY_ASSET), null, "the manifest is deleted");
+    assert.equal(readSourceMap(r.dir, RELAY_ASSET), null, "the source map is deleted");
+    const cache = JSON.parse(readFileSync(join(r.dir, ".abfc", "cache", "units.json"), "utf8")) as Record<string, unknown>;
+    assert.ok(!(RELAY_ASSET in cache), "the unit cache forgot the asset");
+
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /nothing to publish\./);
+    assert.equal(r.backend.publishCalls.length, 2);
+  });
+});
+
+test("(r6) a deleted class whose class defaults abfc set: ABFC5010 warning, units removed, exit 0", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    useMinimalRelay(r.dir);
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    const manifestFile = join(r.dir, ".abfc", "manifest", "TestMod__Relay__BP_Relay.json");
+    const m = JSON.parse(readFileSync(manifestFile, "utf8")) as Record<string, unknown>;
+    m.classDefaultsHash = "sha256:test";
+    writeFileSync(manifestFile, JSON.stringify(m), "utf8");
+
+    deleteRelaySources(r.dir);
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC5010: \/TestMod\/Relay\/BP_Relay is no longer declared in TypeScript/);
+    assert.deepEqual(readManifest(r.dir, RELAY_ASSET)!.units, []);
+
+    // the class defaults hash keeps the manifest after the publish (the defaults stay on the stage)
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.ok(readManifest(r.dir, RELAY_ASSET) !== null);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.retiredUnpublished, undefined);
+  });
+});
+
 test("(r4) a compile error 'Could not find a function' for a call in TS is reported at the call", async () => {
   await withRig({ handMadeEvent: false }, async (r) => {
     assert.equal((await r.run(["build"])).code, 0);
@@ -1240,5 +1346,51 @@ test("(r7) forgetting a never-synced adoption does not retire the unit: the hand
     const x = await r.run(["build"]);
     assert.equal(x.code, 0, x.out);
     assert.deepEqual(readRetired(r.dir), {}, "nothing of the forgotten unit was deleted from the stage");
+  });
+});
+
+test("(h) test.liveHud: skipped hidden with ABFC6105, listed in manual-checks.md and output.json, the game test is not called for it", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    assert.equal((await r.run(["build"])).code, 0);
+    writeFileSync(
+      join(r.dir, "src", "Hud.test.ts"),
+      [
+        'import { test } from "@abfc/testkit";',
+        'import { BP_Relay } from "./Relay.js";',
+        "",
+        'test.liveHud("HUD shows the relay", ["Start Play In Editor", "Look at the pot"], (t) => {',
+        "  const relay = t.spawn(BP_Relay);",
+        "  relay.call(\"UpdateTarget\");",
+        "});",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    r.backend.gameTestCalls = 0;
+    let x = await r.run(["test", "--no-build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(x.out.split("\n").filter((l) => /warning ABFC6105: HUD shows the relay needs the live HUD; skipped hidden \(manual check\)/.test(l)).length, 1, x.out);
+    assert.match(x.out, /2 of 2 test\(s\) passed/);
+    assert.equal(r.backend.gameTestCalls, 2, "only the two hidden tests reach bp_game_test");
+    const report = readFileSync(join(r.dir, ".abfc", "reports", "manual-checks.md"), "utf8");
+    assert.match(report, /## HUD shows the relay/);
+    assert.match(report, /src\/Hud\.test\.ts:4/);
+    assert.match(report, /1\. \[ \] Start Play In Editor\r?\n2\. \[ \] Look at the pot/);
+    assert.match(report, /Run in Play In Editor with the mod enabled; tick each item\./);
+
+    x = await r.run(["test", "--no-build", "--json"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /"manualChecks":\s*\[/);
+    assert.match(x.out, /"Look at the pot"/);
+
+    // nothing but liveHud tests: no backend is started
+    rmSync(join(r.dir, "src", "Relay.test.ts"));
+    const before = r.started.count;
+    r.backend.gameTestCalls = 0;
+    x = await r.run(["test", "--no-build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC6105/);
+    assert.equal(r.started.count, before, "the backend is not started");
+    assert.equal(r.backend.gameTestCalls, 0);
   });
 });

@@ -205,3 +205,34 @@ test("abfc stubs: a backend without reflect is ABFC4011, exit 2, nothing written
     rmSync(tmp, { recursive: true, force: true });
   }
 });
+
+test("abfc stubs: stubs.widgetMembers are emitted on the class stub, recorded in the lock, and an unreflected widget class warns ABFC3011", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-stubs-"));
+  try {
+    const fake = setup(tmp, []);
+    const widgetMembers = { [THING]: { TitleText: "/Script/UMG.TextBlock" } };
+    fake.files[join(tmp, "abf.config.json")] = JSON.stringify({
+      mod: { name: "TestMod" },
+      backend: { kind: "bp_apply", minProtocol: 1 },
+      stubs: { classes: [], scriptClasses: [THING], modAssets: [], widgetMembers },
+    });
+    const cap = captureDeps(fake, () => fakeBackend(true, [], []));
+    cap.deps.cwd = tmp;
+    const code = await main(["stubs"], cap.deps);
+    const out = cap.text();
+    assert.equal(code, 0, out);
+    assert.match(out, /warning ABFC3011: stubs\.widgetMembers: \/Script\/FakeEngine\.Thing TitleText is a \/Script\/UMG\.TextBlock, which is not in the stubs/);
+    assert.match(out, /stubs\.scriptClasses/);
+
+    const dir = join(tmp, ".abfc", "stubs", "ue5.4.4-1050002");
+    const script = readFileSync(join(dir, "Script", "FakeEngine.d.ts"), "utf8");
+    assert.match(script, /@bpPath \/Script\/FakeEngine\.Thing:TitleText/);
+    assert.match(script, /@bpType object:\/Script\/UMG\.TextBlock/);
+    assert.match(script, /@bpWidget/);
+    assert.match(script, /readonly TitleText: UObject;/);
+    const lock = JSON.parse(readFileSync(join(dir, "stubs.lock.json"), "utf8")) as { widgetMembers: unknown };
+    assert.deepEqual(lock.widgetMembers, widgetMembers);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});

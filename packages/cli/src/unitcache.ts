@@ -13,11 +13,14 @@ export interface UnitCacheEntry {
 /** `{[asset path]: {[unit id]: entry}}` */
 export type UnitCache = Record<string, Record<string, UnitCacheEntry>>;
 
-/** Hash of the stub lock without its timestamp (regenerating identical stubs does not invalidate the cache). */
+/**
+ * Hash of the editor and generator identity in the stub lock. The class lists are not part of it: what a unit uses from the stubs
+ * (member references, pin names and types) is in its IR hash, so adding classes or assets to the stubs must not re-plan every unit.
+ */
 export function stubLockHashOf(lock: StubsLock | null): string {
   if (lock === null) return "no-lock";
-  const { createdAt: _createdAt, ...rest } = lock;
-  return sha256(JSON.stringify(rest));
+  const { generator, profile, engineVersion, modEditorVersion, editorFingerprint, filterContentVersion } = lock;
+  return sha256(JSON.stringify({ generator, profile, engineVersion, modEditorVersion, editorFingerprint, filterContentVersion }));
 }
 
 /** Reads the cache; a missing or damaged file is an empty cache. */
@@ -34,4 +37,12 @@ export function readUnitCache(file: string): UnitCache {
 export function writeUnitCache(file: string, cache: UnitCache): void {
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, JSON.stringify(cache, null, 2) + "\n", "utf8");
+}
+
+/** Forgets the cached units of one asset (it is no longer owned by abfc). */
+export function dropUnitCacheAsset(file: string, asset: string): void {
+  const cache = readUnitCache(file);
+  if (!(asset in cache)) return;
+  delete cache[asset];
+  writeUnitCache(file, cache);
 }

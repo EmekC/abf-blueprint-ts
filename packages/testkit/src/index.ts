@@ -37,6 +37,20 @@ export interface TestContext {
   expect<T>(v: Value<T>): Expectation<T>;
 }
 
-export function test(_name: string, _body: (t: TestContext) => void | Promise<void>): void {
+export interface TestFn {
+  (name: string, body: (t: TestContext) => void | Promise<void>): void;
+  /**
+   * A test that needs the live HUD, which hidden runs do not have. It is type-checked and compiled like any test but never
+   * run: abfc skips it with warning ABFC6105 and lists `name` and the `checklist` (an array literal of strings) in
+   * `.abfc/reports/manual-checks.md` for a manual check in Play In Editor.
+   */
+  liveHud(name: string, checklist: readonly string[], body: (t: TestContext) => void | Promise<void>): void;
+}
+
+function notRun(): never {
   throw new Error("testkit files are compiled by abfc, not run");
 }
+
+export const test: TestFn = Object.assign((_name: string, _body: (t: TestContext) => void | Promise<void>): void => notRun(), {
+  liveHud: (_name: string, _checklist: readonly string[], _body: (t: TestContext) => void | Promise<void>): void => notRun(),
+});

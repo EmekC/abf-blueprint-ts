@@ -370,3 +370,159 @@ test("Phase2Bad.ts: every marked error is reported at its line and column, and n
     assert.ok(hits.some((d) => d.span?.col === e.col), `${e.code} on line ${e.line} should start at column ${e.col}, got ${hits.map((d) => d.span?.col).join(",")}`);
   }
 });
+
+// ---- Phase 3: kind "widget" ----
+
+const phase3Dir = fileURLToPath(new URL("../../test/fixtures/phase3", import.meta.url));
+const loaded3 = loadProgram(phase3Dir);
+const file3 = (name: string) => {
+  const sf = loaded3.files.classes.find((f) => f.fileName.endsWith(`/${name}`));
+  assert.ok(sf, `${name} is a root file`);
+  return sf;
+};
+
+test("a kind widget class extending a UserWidget stub compiles with the widget class meta", () => {
+  const widget = buildHir(loaded3, config, profile, [file3("Widget.ts")]);
+  assert.deepEqual(inFile(loaded3.diagnostics, "src/Widget.ts"), []);
+  assert.deepEqual(widget.diagnostics, []);
+  assert.equal(widget.classes.length, 1);
+  const cls = widget.classes[0]!;
+  assert.equal(cls.kind, "widget");
+  assert.equal(cls.parent, "/Script/UMG.UserWidget");
+  assert.equal(cls.classPath, "/TestMod/UI/WBP_ExampleInfo.WBP_ExampleInfo_C");
+  assert.equal(widget.classMeta[cls.classPath], "/Script/UMG.WidgetBlueprintGeneratedClass");
+  const set = cls.events[0]!.body.find((s) => s.k === "setSelf");
+  assert.ok(set && set.k === "setSelf" && set.name === "Score");
+  const call = cls.events[0]!.body.find((s) => s.k === "expr");
+  assert.ok(call && call.k === "expr" && call.e.k === "call");
+  assert.equal(call.e.k === "call" && call.e.target?.k, "getSelf");
+  assert.equal(call.e.k === "call" && call.e.target?.k === "getSelf" ? call.e.target.name : "", "NameText");
+});
+
+test("a @bpWidget readonly field is read like any member: SetText on this.<widget> and on another class's widget", () => {
+  const widget = buildHir(loaded3, config, profile, [file3("Widget.ts")]);
+  assert.deepEqual(widget.diagnostics, []);
+  const label = widget.classes[0]!.events.find((e) => e.name === "Label");
+  assert.ok(label, "Label event");
+  const calls = label.body.flatMap((s) => (s.k === "expr" && s.e.k === "call" ? [s.e] : []));
+  assert.equal(calls.length, 2);
+  const [own, other] = calls as [HirExpr & { k: "call" }, HirExpr & { k: "call" }];
+  assert.equal(own.name, "SetText");
+  assert.equal(own.owner, "/Script/UMG.TextBlock");
+  assert.ok(own.target && own.target.k === "getSelf" && own.target.name === "NameText");
+  assert.equal(other.name, "SetText");
+  assert.ok(other.target && other.target.k === "getOn", "a widget of another class is a member read on that object");
+  if (other.target && other.target.k === "getOn") {
+    assert.equal(other.target.name, "Caption");
+    assert.equal(other.target.owner, "/TestMod/UI/WBP_ExampleRow.WBP_ExampleRow_C");
+    assert.equal(other.target.obj.k, "param");
+  }
+});
+
+test("a template literal where a text is expected is a formatText with escaped braces and unique arg names", () => {
+  const widget = buildHir(loaded3, config, profile, [file3("Widget.ts")]);
+  assert.deepEqual(widget.diagnostics, []);
+  const tag = widget.classes[0]!.events.find((e) => e.name === "Tag");
+  assert.ok(tag, "Tag event");
+  const stmt = tag.body[0];
+  assert.ok(stmt && stmt.k === "expr" && stmt.e.k === "call");
+  const arg = stmt.e.k === "call" ? stmt.e.args[0]?.value : undefined;
+  assert.ok(arg && arg.k === "formatText");
+  if (arg && arg.k === "formatText") {
+    assert.equal(arg.type, "text");
+    assert.equal(arg.format, "+ {name} `{{hint}`} {hint_2}");
+    assert.deepEqual(arg.args.map((a) => a.name), ["name", "hint", "hint_2"]);
+  }
+});
+
+test("an object literal where a stub struct is expected is a makeStruct; shorthand properties and field types are kept", () => {
+  const widget = buildHir(loaded3, config, profile, [file3("Widget.ts")]);
+  assert.deepEqual(widget.diagnostics, []);
+  const style = widget.classes[0]!.events.find((e) => e.name === "Style");
+  assert.ok(style, "Style event");
+  const call = style.body.flatMap((s) => (s.k === "expr" && s.e.k === "call" ? [s.e] : []))[0];
+  assert.ok(call && call.name === "SetFont");
+  const arg = call.args[0]?.value;
+  assert.ok(arg && arg.k === "makeStruct");
+  if (arg && arg.k === "makeStruct") {
+    assert.equal(arg.struct, "/Script/TestCore.ExampleFont");
+    assert.equal(arg.type, "struct:/Script/TestCore.ExampleFont");
+    assert.deepEqual(arg.fields.map((f) => [f.name, f.value.type]), [["Size", "int"], ["Family", "name"], ["Label", "text"]]);
+  }
+});
+
+test("a one-substitution template literal is a formatText with the substitution's name", () => {
+  const widget = buildHir(loaded3, config, profile, [file3("Widget.ts")]);
+  const join = widget.classes[0]!.events.find((e) => e.name === "Join");
+  assert.ok(join, "Join event");
+  const stmt = join.body[0];
+  const arg = stmt && stmt.k === "expr" && stmt.e.k === "call" ? stmt.e.args[0]?.value : undefined;
+  assert.ok(arg && arg.k === "formatText");
+  if (arg && arg.k === "formatText") {
+    assert.equal(arg.format, "+ {name}");
+    assert.deepEqual(arg.args.map((a) => [a.name, a.value.type]), [["name", "text"]]);
+  }
+});
+
+test("a TS @blueprint widget class is a Blueprint type: createWidget, @event calls and `as` resolve like the stub", () => {
+  const refs = buildHir(loaded3, config, profile, [file3("TsRefs.ts")]);
+  assert.deepEqual(inFile(loaded3.diagnostics, "src/TsRefs.ts"), []);
+  assert.deepEqual(refs.diagnostics, []);
+  const line = "/TestMod/UI/WBP_ExampleLine.WBP_ExampleLine_C";
+  const host = refs.classes.find((c) => c.name === "WBP_ExampleHost");
+  assert.ok(host, "WBP_ExampleHost");
+  const fill = host.events.find((e) => e.name === "Fill");
+  assert.ok(fill, "Fill event");
+  const made = fill.body.find((st) => st.k === "const");
+  assert.ok(made && made.k === "const" && made.init.k === "createWidget");
+  if (made && made.k === "const" && made.init.k === "createWidget") assert.equal(made.init.cls, line);
+  assert.equal(refs.classMeta[line], "/Script/UMG.WidgetBlueprintGeneratedClass");
+  const call = fill.body.flatMap((st) => (st.k === "expr" && st.e.k === "call" ? [st.e] : []))[0];
+  assert.ok(call && call.k === "call");
+  assert.equal(call.owner, line);
+  assert.equal(call.name, "SetLine");
+  assert.notEqual(call.target, null);
+  assert.deepEqual(call.args.map((a) => a.pin), ["Label", "bBad"]);
+
+  const retype = host.events.find((e) => e.name === "Retype");
+  assert.ok(retype, "Retype event");
+  const viaAs = retype.body.flatMap((st) => (st.k === "expr" && st.e.k === "call" ? [st.e] : []))[0];
+  assert.ok(viaAs && viaAs.k === "call");
+  assert.equal(viaAs.owner, line);
+  assert.equal(viaAs.name, "SetLine");
+  assert.equal(viaAs.target?.k, "param", "the as expression emits no cast node");
+});
+
+test("Phase3Bad.ts: ABFC2060/2061/2064/2065/2066/2099 are reported at their line and column", () => {
+  const text = readFileSync(`${phase3Dir}/src/Phase3Bad.ts`, "utf8").split(/\r?\n/);
+  const expected: Array<{ line: number; code: string; col: number }> = [];
+  text.forEach((raw, i) => {
+    const m = /\/\/ (ABFC\d{4})\s+@(.*)$/.exec(raw);
+    if (m) expected.push({ line: i + 1, code: m[1]!, col: raw.indexOf(m[2]!.trimEnd()) + 1 });
+  });
+  assert.equal(expected.length, 12);
+
+  const hir = buildHir(loaded3, config, profile, [file3("Phase3Bad.ts")]);
+  const actual = inFile(hir.diagnostics, "src/Phase3Bad.ts");
+  const key = (line: number, code: string): string => `${line}:${code}`;
+  assert.deepEqual(actual.map((d) => key(d.span!.line, d.code)).sort(), expected.map((e) => key(e.line, e.code)).sort());
+  for (const e of expected) {
+    const hits = actual.filter((d) => d.code === e.code && d.span?.line === e.line);
+    assert.ok(hits.some((d) => d.span?.col === e.col), `${e.code} on line ${e.line} should start at column ${e.col}, got ${hits.map((d) => d.span?.col).join(",")}`);
+  }
+});
+
+test("compileTests: test.liveHud keeps the checklist and its body; test.liveHud with a bad checklist is ABFC2101", () => {
+  const { cases, diagnostics } = compileTests(loaded3, profile);
+  assert.deepEqual(diagnostics, []);
+  assert.deepEqual(cases.map((c) => [c.name, c.liveHud?.checklist.length]), [
+    ["HUD shows the example panel", 3],
+    ["hidden test next to a live one", undefined],
+  ]);
+  const live = cases[0]!;
+  assert.deepEqual(live.liveHud!.checklist, ["Start Play In Editor", "Look at the example item; the panel appears", "Look away; the panel hides"]);
+  assert.equal(live.file, "src/Hud.test.ts");
+  assert.equal(live.span.line, 4);
+  assert.deepEqual(live.steps.map((s) => s.step["op"]), ["widget", "call", "wait"]);
+  assert.equal("liveHud" in cases[1]!, false);
+});

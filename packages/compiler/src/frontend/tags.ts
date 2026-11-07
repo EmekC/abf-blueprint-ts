@@ -108,20 +108,89 @@ export function functionInfo(sym: ts.Symbol): FunctionInfo | undefined {
   };
 }
 
+export const BLUEPRINT_META = "/Script/Engine.BlueprintGeneratedClass";
+export const WIDGET_META = "/Script/UMG.WidgetBlueprintGeneratedClass";
+
+/** `<path>.<AssetName>_C` for a package path. */
+export function classPathOf(path: string): string {
+  return `${path}.${path.slice(path.lastIndexOf("/") + 1)}_C`;
+}
+
+/**
+ * Path and kind of a class declaration carrying `@blueprint({ path, kind? })`, read syntactically (decorator call whose callee
+ * identifier is `blueprint`). The frontend's class pass still validates the real decorator.
+ */
+export function tsBlueprintOfDecl(decl: ts.ClassDeclaration): { path: string; widget: boolean } | undefined {
+  for (const d of ts.getDecorators(decl) ?? []) {
+    const e = d.expression;
+    if (!ts.isCallExpression(e) || !ts.isIdentifier(e.expression) || e.expression.text !== "blueprint") continue;
+    const opts = e.arguments[0];
+    if (!opts || !ts.isObjectLiteralExpression(opts)) continue;
+    let path: string | undefined;
+    let widget = false;
+    for (const p of opts.properties) {
+      if (!ts.isPropertyAssignment(p) || !(ts.isIdentifier(p.name) || ts.isStringLiteral(p.name))) continue;
+      const init = p.initializer;
+      if (!ts.isStringLiteral(init) && !ts.isNoSubstitutionTemplateLiteral(init)) continue;
+      if (p.name.text === "path") path = init.text;
+      else if (p.name.text === "kind") widget = init.text === "widget";
+    }
+    if (path !== undefined && path !== "") return { path, widget };
+  }
+  return undefined;
+}
+
+/** `tsBlueprintOfDecl` of the first class declaration of a symbol that has one. */
+export function tsBlueprintOf(sym: ts.Symbol): { path: string; widget: boolean } | undefined {
+  for (const d of sym.declarations ?? []) {
+    if (!ts.isClassDeclaration(d)) continue;
+    const r = tsBlueprintOfDecl(d);
+    if (r) return r;
+  }
+  return undefined;
+}
+
+/** FunctionInfo of an `@event` method of a TS `@blueprint` class: what the stub's `_C` method would have given. */
+export function ownEventInfo(checker: ts.TypeChecker, sym: ts.Symbol): FunctionInfo | undefined {
+  const m = (sym.declarations ?? []).find((d): d is ts.MethodDeclaration => ts.isMethodDeclaration(d));
+  if (!m || !ts.isIdentifier(m.name) || !ts.isClassDeclaration(m.parent)) return undefined;
+  const isEvent = (ts.getDecorators(m) ?? []).some((d) => {
+    const callee = ts.isCallExpression(d.expression) ? d.expression.expression : d.expression;
+    return ts.isIdentifier(callee) && callee.text === "event";
+  });
+  if (!isEvent) return undefined;
+  const tb = tsBlueprintOfDecl(m.parent);
+  if (!tb) return undefined;
+  const params: FunctionInfo["params"] = [];
+  for (const p of m.parameters) {
+    const type = bpTypeOf(checker, checker.getTypeAtLocation(p));
+    if (type === undefined) return undefined;
+    const name = p.name.getText();
+    params.push({ tsName: name, pin: name, type });
+  }
+  return { owner: classPathOf(tb.path), name: m.name.text, pure: false, static: false, execOutputs: null, params, outs: [], pinOfTs: new Map() };
+}
+
 export interface ClassInfo {
   path: string;
   meta: string;
   castPin: string | null;
   kind: "class" | "struct" | "enum";
+  /** The class is a TS `@blueprint` class (no stub). */
+  fromTs?: true;
 }
 
 const DEFAULT_META = "/Script/CoreUObject.Class";
 
-/** Class metadata from `@bpPath`, `@bpMeta`, `@bpCastPin`, `@bpKind`; undefined without `@bpPath`. */
+/** Class metadata from `@bpPath`, `@bpMeta`, `@bpCastPin`, `@bpKind` (or a TS `@blueprint` class); undefined without either. */
 export function classInfo(sym: ts.Symbol): ClassInfo | undefined {
   const tags = bpTagsOfSymbol(sym);
   const path = tags.get("bpPath")?.[0];
-  if (path === undefined || path === "") return undefined;
+  if (path === undefined || path === "") {
+    const tb = tsBlueprintOf(sym);
+    if (tb) return { path: classPathOf(tb.path), meta: tb.widget ? WIDGET_META : BLUEPRINT_META, castPin: null, kind: "class", fromTs: true };
+    return undefined;
+  }
   const k = tags.get("bpKind")?.[0];
   return {
     path,

@@ -1,5 +1,5 @@
 // Source map (design 8.5): IR node -> TS span and IR node -> real node name; maps Unreal compile messages back to TS.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { Diagnostic, Span } from "@abfc/ir";
 import { assetFileStem, stringifySorted } from "./manifest.js";
@@ -27,6 +27,12 @@ export function writeSourceMap(dir: string, sm: SourceMapFile): string {
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, stringifySorted(sm), "utf8");
   return file;
+}
+
+/** Removes the source map file of an asset (no-op when there is none). */
+export function deleteSourceMap(dir: string, asset: string): void {
+  const file = sourceMapPath(dir, asset);
+  if (existsSync(file)) rmSync(file);
 }
 
 export function readSourceMap(dir: string, asset: string): SourceMapFile | null {

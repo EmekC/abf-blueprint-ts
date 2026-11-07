@@ -273,26 +273,47 @@ export function compileTests(loaded: LoadedProgram, _profile: Profile, filter?: 
     for (const st of sf.statements) {
       if (ts.isImportDeclaration(st) || ts.isEmptyStatement(st)) continue;
       const call = ts.isExpressionStatement(st) && ts.isCallExpression(st.expression) ? st.expression : undefined;
-      const callee = call && ts.isIdentifier(call.expression) ? call.expression : undefined;
+      // `test(...)` or `test.liveHud(...)`
+      const liveHud = call !== undefined && ts.isPropertyAccessExpression(call.expression) && call.expression.name.text === "liveHud";
+      const callee = call && ts.isIdentifier(call.expression)
+        ? call.expression
+        : call && liveHud && ts.isPropertyAccessExpression(call.expression) && ts.isIdentifier(call.expression.expression) ? call.expression.expression : undefined;
       const imp = callee ? importOf(loaded.checker, callee) : undefined;
       if (!call || !imp || imp.module !== "@abfc/testkit" || imp.name !== "test") {
         const sink = new DiagSink(root);
-        sink.error("ABFC2101", "only top-level test(...) calls are supported in a test file", st);
+        sink.error("ABFC2101", "only top-level test(...) and test.liveHud(...) calls are supported in a test file", st);
         diagnostics.push(...sink.diagnostics);
         continue;
       }
       const nameArg = call.arguments[0];
-      const cb = call.arguments[1];
+      const cb = call.arguments[liveHud ? 2 : 1];
       const tc = new TestCompiler(loaded.checker, root);
       if (!nameArg || !(ts.isStringLiteral(nameArg) || ts.isNoSubstitutionTemplateLiteral(nameArg)) || !cb || !(ts.isArrowFunction(cb) || ts.isFunctionExpression(cb))) {
-        tc.sink.error("ABFC2101", 'test("name", (t) => { ... }) needs a literal name and an inline callback', call);
+        tc.sink.error(
+          "ABFC2101",
+          liveHud ? 'test.liveHud("name", ["check", ...], (t) => { ... }) needs a literal name, a checklist and an inline callback' : 'test("name", (t) => { ... }) needs a literal name and an inline callback',
+          call,
+        );
         diagnostics.push(...tc.sink.diagnostics);
         continue;
+      }
+      let checklist: string[] | undefined;
+      if (liveHud) {
+        const list = call.arguments[1];
+        const items = list && ts.isArrayLiteralExpression(list) ? list.elements : undefined;
+        if (!list || !items || items.length === 0 || !items.every((x) => ts.isStringLiteral(x) || ts.isNoSubstitutionTemplateLiteral(x))) {
+          tc.sink.error("ABFC2101", "the checklist of test.liveHud must be a non-empty array literal of string literals", list ?? call);
+          diagnostics.push(...tc.sink.diagnostics);
+          continue;
+        }
+        checklist = items.map((x) => (x as ts.StringLiteral).text);
       }
       tc.compile(cb);
       diagnostics.push(...tc.sink.diagnostics);
       if (filter !== undefined && !nameArg.text.includes(filter) && !file.includes(filter)) continue;
-      cases.push({ name: nameArg.text, file, span: spanOf(call, root), steps: tc.steps });
+      const tcase: TestCase = { name: nameArg.text, file, span: spanOf(call, root), steps: tc.steps };
+      if (checklist !== undefined) tcase.liveHud = { checklist };
+      cases.push(tcase);
     }
   }
   return { cases, diagnostics };

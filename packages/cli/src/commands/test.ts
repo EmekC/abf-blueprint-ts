@@ -4,6 +4,7 @@ import { evaluateTest, toGameTestSteps } from "@abfc/testkit/runner";
 import type { CliContext } from "../context.js";
 import { BackendSession, Recorder, emitAll, lockDiagnostics, since } from "./common.js";
 import { runBuild } from "./build.js";
+import { writeManualChecks } from "./manualchecks.js";
 
 /**
  * Compiles the matching tests and runs each through `bp_game_test`. The caller decides whether to build first.
@@ -16,10 +17,16 @@ export async function runTests(ctx: CliContext, session: BackendSession, rec: Re
   if (emitAll(ctx, loaded.diagnostics)) return false;
   const compiled = compileTests(loaded, env.profile, pattern);
   if (emitAll(ctx, compiled.diagnostics)) return false;
-  const cases: TestCase[] = compiled.cases;
+  const live: TestCase[] = compiled.cases.filter((c) => c.liveHud !== undefined);
+  const cases: TestCase[] = compiled.cases.filter((c) => c.liveHud === undefined);
+  const manualChecks = live.map((c) => ({ name: c.name, file: c.file, line: c.span.line, checklist: c.liveHud!.checklist }));
+  for (const c of live) {
+    output.diag({ severity: "warning", code: "ABFC6105", message: `${c.name} needs the live HUD; skipped hidden (manual check)`, span: c.span });
+  }
+  if (live.length > 0) output.info(`manual checks: ${writeManualChecks(ctx.projectDir, mod, live)}`);
   if (cases.length === 0) {
-    output.info(pattern === undefined ? "no tests found" : `no tests match "${pattern}"`);
-    output.json({ tests: [] });
+    if (live.length === 0) output.info(pattern === undefined ? "no tests found" : `no tests match "${pattern}"`);
+    output.json(live.length > 0 ? { tests: [], manualChecks } : { tests: [] });
     return true;
   }
 
@@ -37,7 +44,7 @@ export async function runTests(ctx: CliContext, session: BackendSession, rec: Re
     results.push({ name: tc.name, passed: ev.passed, ok: ev.summary.ok, steps: tc.steps.length, seconds: report.seconds });
   }
   output.info(`${cases.length - failed} of ${cases.length} test(s) passed`);
-  output.json({ tests: results });
+  output.json(live.length > 0 ? { tests: results, manualChecks } : { tests: results });
   return failed === 0;
 }
 
