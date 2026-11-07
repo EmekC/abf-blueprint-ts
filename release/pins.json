@@ -16,7 +16,7 @@
   "backend": {
     "repo": "https://github.com/EmekC/abf-mod-editor-mcp",
     "version": "2.5.0",
-    "tag": null,
+    "tag": "v2.5.0",
     "commit": "7ff46879e2daae8fbf11475409537e7fa618d515",
     "filesSha256": "f630991476de7e5a3d29baf5a55638b9dfeafe0d60323bd797d70c9e4c23dc97"
   },
