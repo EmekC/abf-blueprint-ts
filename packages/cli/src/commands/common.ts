@@ -1,10 +1,10 @@
 // Pieces shared by check, build, test, status, adopt and publish: timings, lock check, frontend, backend session.
 import { win32 } from "node:path";
 import type { Backend } from "@abfc/backend";
-import { buildHir, compileTests, loadProgram, lower } from "@abfc/compiler";
+import { buildHir, loadProgram, lowerChecked } from "@abfc/compiler";
 import type { HirProgram, LoadedProgram } from "@abfc/compiler";
 import { AbfcError, envWarning } from "@abfc/env";
-import { parseExport, validateIrModule } from "@abfc/ir";
+import { parseExport } from "@abfc/ir";
 import type { BackendInfo, Diagnostic, IrModule, T3dExport } from "@abfc/ir";
 import { checkLock, readLock } from "@abfc/stubgen";
 import type { CliContext } from "../context.js";
@@ -73,18 +73,9 @@ export function compileFrontend(ctx: CliContext): Frontend {
   const diags = [...loaded.diagnostics, ...hir.diagnostics];
   emitAll(ctx, diags);
   if (hasError(diags)) return { loaded, hir, ir: null };
-  const ir = lower(hir, ctx.env.profile);
-  const problems = validateIrModule(ir);
-  for (const p of problems) {
-    const unit = ir.assets.flatMap((a) => a.units.map((u) => ({ key: `${a.path} ${u.id}: `, u }))).find((x) => p.startsWith(x.key));
-    ctx.output.diag({
-      severity: "error",
-      code: "ABFC2099",
-      message: `internal: ${p}`,
-      ...(unit ? { span: unit.u.origin } : {}),
-    });
-  }
-  return { loaded, hir, ir: problems.length > 0 ? null : ir };
+  const lowered = lowerChecked(hir, ctx.env.profile);
+  for (const d of lowered.diagnostics) ctx.output.diag(d);
+  return { loaded, hir, ir: lowered.ir };
 }
 
 export function countUnits(ir: IrModule): number {

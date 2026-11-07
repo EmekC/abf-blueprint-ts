@@ -17,6 +17,8 @@ export interface ReflectPin {
 export interface ReflectMember {
   name: string;
   pins: ReflectPin[];
+  /** Function metadata read from the engine (backends with the reflect meta pass); null/absent when unreadable. */
+  meta?: { tooltip?: string | null; displayName?: string | null } | null;
 }
 
 export interface ReflectClass {

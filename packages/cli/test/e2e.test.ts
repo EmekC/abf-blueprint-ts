@@ -864,6 +864,59 @@ test("incremental cache: warm runs are recorded, an unchanged asset is not read,
   });
 });
 
+test("a documented event built without event_meta is applied again once the backend gains it", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    const src = join(r.dir, "src", "Relay.ts");
+    const text = readFileSync(src, "utf8");
+    assert.ok(text.includes("  @event\n  UpdateTarget"));
+    writeFileSync(src, text.replace("  @event\n  UpdateTarget", "  /** Updates the target. */\n  @event\n  UpdateTarget"), "utf8");
+
+    // an older backend: applied, ABFC2071 warns, the cache records that no tooltip was written
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /ABFC2071/);
+    const cacheFile = join(r.dir, ".abfc", "cache", "units.json");
+    const cache = JSON.parse(readFileSync(cacheFile, "utf8")) as Record<string, Record<string, { eventMeta?: boolean }>>;
+    assert.equal(cache[RELAY_ASSET]!["event:UpdateTarget"]!.eventMeta, false);
+
+    const before = r.backend.applyLabels().length;
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /up to date/);
+    assert.equal(r.backend.applyLabels().length, before, "unchanged while the backend stays old");
+
+    // the backend is updated: the unit is applied again with its tooltip, the warning is gone, the next build is up to date
+    r.backend.setEventMeta(true);
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC2071/);
+    assert.match(x.out, /applied UpdateTarget/);
+    assert.ok(r.backend.applyLabels().length > before, "re-applied once the backend has event_meta");
+    const fresh = JSON.parse(readFileSync(cacheFile, "utf8")) as typeof cache;
+    assert.equal(fresh[RELAY_ASSET]!["event:UpdateTarget"]!.eventMeta, true);
+    const after = r.backend.applyLabels().length;
+    x = await r.run(["build"]);
+    assert.match(x.out, /up to date/);
+    assert.equal(r.backend.applyLabels().length, after);
+  });
+});
+
+test("an undocumented event keeps its cache entry and is not re-applied when the backend gains event_meta", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    const cacheFile = join(r.dir, ".abfc", "cache", "units.json");
+    const cache = JSON.parse(readFileSync(cacheFile, "utf8")) as Record<string, Record<string, { eventMeta?: boolean }>>;
+    assert.equal("eventMeta" in cache[RELAY_ASSET]!["event:UpdateTarget"]!, false);
+    const before = r.backend.applyLabels().length;
+    r.backend.setEventMeta(true);
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /up to date/);
+    assert.equal(r.backend.applyLabels().length, before);
+  });
+});
+
 const PHASE2_RELAY = `import { blueprint, event, override } from "@abfc/runtime";
 import type { double } from "@abfc/runtime";
 import { Actor } from "/Script/FakeEngine";

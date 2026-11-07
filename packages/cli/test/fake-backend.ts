@@ -118,6 +118,8 @@ export interface FakeBackendOptions {
   selfEventCalls?: boolean;
   /** With `selfEventCalls: false`, still advertise the feature (a backend that lies), so the apply failure itself can be tested. */
   advertiseSelfEventCalls?: boolean;
+  /** The backend has the bp_apply feature `event_meta` (default false: documented events get no tooltip and ABFC2071). */
+  eventMeta?: boolean;
   /** The backend has the bp_apply feature `struct_fields` (UserDefinedStruct in `createKinds`; default false). */
   structs?: boolean;
 }
@@ -373,6 +375,7 @@ export class FakeBackend implements Backend {
     const capabilities = capabilitiesFrom(tools, withInfo ? (fixInfo() as RawBackendInfo) : null, { features: EXT_FEATURES });
     capabilities.stageAudit = o.stageAudit === true;
     capabilities.selfEventCalls = o.selfEventCalls !== false || o.advertiseSelfEventCalls === true;
+    capabilities.eventMeta = o.eventMeta === true;
     if (o.structs === true) capabilities.createKinds = [...capabilities.createKinds, "UserDefinedStruct"];
     if (o.structs === true) capabilities.createKinds = [...capabilities.createKinds, "UserDefinedStruct"];
     this.infoValue = {
@@ -387,6 +390,11 @@ export class FakeBackend implements Backend {
       extensions: EXT_FEATURES,
       capabilities,
     };
+  }
+
+  /** Updates the backend: it has (or loses) the bp_apply feature `event_meta` from the next session on. */
+  setEventMeta(on: boolean): void {
+    this.infoValue.capabilities.eventMeta = on;
   }
 
   /** The recorded `bp_apply` labels, in order. */

@@ -42,7 +42,7 @@ export interface T3dExport {
    * keeps the plain name and later ones are keyed `<graph>/<name>` (`T3dNode.name` is always the real name).
    */
   nodes: Map<string, T3dNode>;
-  variables: Array<{ name: string; type: string; default: string | null }>;
+  variables: Array<{ name: string; type: string; default: string | null; propertyFlags: string | null }>;
   parentClass: string | null;
   /**
    * Designer widgets of a Widget Blueprint (children of its `WidgetTree`, slots excluded) in declaration order; empty for other
@@ -218,6 +218,7 @@ export function parseExport(text: string): T3dExport {
         name: unq(a["VarName"]) ?? "",
         type: typeFromAttrs(parseAttrs(unparen(a["VarType"]))),
         default: a["DefaultValue"] === undefined ? null : (unq(a["DefaultValue"]) ?? null),
+        propertyFlags: a["PropertyFlags"] === undefined ? null : (unq(a["PropertyFlags"]) ?? null),
       });
       continue;
     }

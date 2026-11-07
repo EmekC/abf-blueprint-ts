@@ -68,3 +68,5 @@ export declare function spawnActor<T>(cls: abstract new (...a: never[]) => T, op
 export declare function nameOf(text: string): name;
 export declare function cast<T>(value: object | null | undefined, cls: abstract new (...a: never[]) => T): T | null;
 export declare function isValid<T>(value: T | null | undefined): value is T;
+/** Integer division (truncates toward zero), Blueprint "Divide_IntInt". */
+export declare function idiv(a: int, b: int): int;

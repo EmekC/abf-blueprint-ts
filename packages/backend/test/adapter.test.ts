@@ -80,6 +80,24 @@ test("effectivePinTypes refuses what the backend refuses", () => {
   assert.deepEqual(effectivePinTypes({ ...base, pinTypes: { A: "array:int" } }, c, profile), { A: "array:int" });
 });
 
+test("event meta is emitted only with the event_meta capability", () => {
+  const meta = { tooltip: "Does it.", category: "Cat" };
+  const metaAsset = {
+    ...asset,
+    units: asset.units.map((pu, i) => i !== 0 ? pu : {
+      ...pu,
+      unit: { ...pu.unit, nodes: pu.unit.nodes.map((n) => n.sem?.k === "event" ? { ...n, sem: { ...n.sem, meta } } : n) },
+    }),
+  };
+  const events = (c: ReturnType<typeof caps>): BpNodeSpec[] =>
+    renderMainSpec(metaAsset, c, profile).graphs![0]!.add.filter((n) => n.k === "event");
+  assert.equal(events(caps(true, true)).length, 1);
+  assert.equal(events(caps(true, true))[0]!.meta, undefined);
+  assert.deepEqual(events({ ...caps(true, true), eventMeta: true })[0]!.meta, meta);
+  // the spec holds a copy, and an undocumented event never gets the key
+  assert.equal(renderMainSpec(asset, { ...caps(true, true), eventMeta: true }, profile).graphs![0]!.add.some((n) => "meta" in n), false);
+});
+
 test("variables carry flags 8196", () => {
   const spec = renderMainSpec(asset, caps(true, true), profile);
   assert.deepEqual(spec.variables!.map((v) => v.name), ["abfc_UpdateTarget_t0", "abfc_UpdateTarget_i0"]);

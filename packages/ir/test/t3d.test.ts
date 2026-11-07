@@ -123,9 +123,9 @@ test("parseExport keeps plain node keys for the event graph whatever the graph o
 test("parseExport reads variables and entry pins", () => {
   const e = parseExport(fakeExport());
   assert.deepEqual(e.variables, [
-    { name: "Infos", type: `array:object:${WIDGET}`, default: null },
-    { name: "Last", type: "name", default: "None" },
-    { name: "Scale", type: "float", default: null },
+    { name: "Infos", type: `array:object:${WIDGET}`, default: null, propertyFlags: "65541" },
+    { name: "Last", type: "name", default: "None", propertyFlags: "65541" },
+    { name: "Scale", type: "float", default: null, propertyFlags: "65541" },
   ]);
   const up = userPins(e.nodes.get("Fake_Event_0")!);
   assert.deepEqual(up.outs, [{ name: "DeltaSeconds", type: "float" }]);

@@ -1,5 +1,6 @@
 // Reflection JSON -> .d.ts stubs (design 5.1). Pure: no file or network access.
 import type { Profile } from "@abfc/ir";
+import { describeFunction, loadDescriptions } from "./describe.js";
 import { classFilterTag, memberFilterTags } from "./filter.js";
 import type { FilterRules } from "./filter.js";
 import { FileBuilder, jsdoc } from "./imports.js";
@@ -105,6 +106,7 @@ function renderClass(
   const instance: string[] = [];
   const statics: string[] = [];
   const seen = new Set<string>();
+  const descriptions = loadDescriptions();
   const callArrayShort = profile.nodeClasses.callArrayFunction.slice(profile.nodeClasses.callArrayFunction.lastIndexOf(".") + 1);
 
   for (const p of c.properties) {
@@ -203,8 +205,9 @@ function renderClass(
     if (worldContext) mt.push("@bpWorldContext");
     const sig = buildSignature(ins, outs, extraExec, fb);
     mt.push(...sig.tags);
-    if (isStatic) statics.push(jsdoc(mt, "  ") + `  function ${key}(${sig.params}): ${sig.ret};\n`);
-    else instance.push(jsdoc(mt, "  ") + `  ${memberKey(key)}(${sig.params}): ${sig.ret};\n`);
+    const desc = describeFunction(descriptions, path, f.name, f.meta ?? undefined);
+    if (isStatic) statics.push(jsdoc([desc, ...mt], "  ") + `  function ${key}(${sig.params}): ${sig.ret};\n`);
+    else instance.push(jsdoc([desc, ...mt], "  ") + `  ${memberKey(key)}(${sig.params}): ${sig.ret};\n`);
   }
 
   const ext = parentPath === null ? "" : ` extends ${fb.ref(parentPath, "class")}`;

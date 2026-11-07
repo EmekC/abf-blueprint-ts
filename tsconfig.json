@@ -8,6 +8,8 @@
     { "path": "packages/compiler" },
     { "path": "packages/backend" },
     { "path": "packages/stubgen" },
-    { "path": "packages/cli" }
+    { "path": "packages/cli" },
+    { "path": "packages/ts-plugin" },
+    { "path": "packages/eslint-plugin" }
   ]
 }

@@ -6,7 +6,7 @@ Repository: https://github.com/EmekC/abf-blueprint-ts
 
 ## Status
 
-Phases 0 to 2 are done: abfc builds, tests and gates the full Blueprint logic (actors and components) of a real mod from TypeScript. Phase 3 (widgets) is implemented, with the manual in-game HUD check still pending; see the roadmap. Phase 4 implemented; stage audit pending.
+Phases 0 to 2 are done: abfc builds, tests and gates the full Blueprint logic (actors and components) of a real mod from TypeScript. Phase 3 (widgets) is implemented, with the manual in-game HUD check still pending; see the roadmap. Phase 4 implemented; stage audit pending. Phase 5 (language service and lint) is implemented: `@abfc/ts-plugin`, `@abfc/eslint-plugin`, `abfc check --watch`, stub hover descriptions and event tooltips; the visual tooltip check in the Mod Editor is pending.
 
 - [docs/design.md](docs/design.md): goals, workflow, compiler architecture, backend interface, safety rules and open questions.
 - [docs/roadmap.md](docs/roadmap.md): the phased plan.
@@ -22,7 +22,9 @@ Phases 0 to 2 are done: abfc builds, tests and gates the full Blueprint logic (a
 | `@abfc/stubgen` | writes the `.d.ts` stubs and `stubs.lock.json` from reflection data |
 | `@abfc/compiler` | TypeScript frontend, lowering to IR, ownership (manifest, drift, adoption, source map), build planner |
 | `@abfc/backend` | the `Backend` interface, the `bp_apply` adapter and the two-phase wildcard fallback, MCP client |
-| `@abfc/cli` | the `abfc` command: `doctor`, `stubs`, `check`, `build`, `test`, `status`, `adopt`, `publish` |
+| `@abfc/cli` | the `abfc` command: `doctor`, `stubs`, `check` (also `--watch`), `build`, `test`, `status`, `adopt`, `publish` |
+| `@abfc/ts-plugin` | TypeScript language-service plugin: the subset diagnostics of `abfc check`, Blueprint-node hover and quick fixes ([docs/language-service.md](docs/language-service.md)) |
+| `@abfc/eslint-plugin` | five lint rules for tick cost, replication and RPC use ([docs/lint-rules.md](docs/lint-rules.md)) |
 
 ### Build and test
 

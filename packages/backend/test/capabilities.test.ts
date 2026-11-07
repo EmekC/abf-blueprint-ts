@@ -119,3 +119,10 @@ test("warmSession needs capabilities.warmSession and the warm_session tool; stag
   assert.equal(off.stageAudit, false);
   assert.equal(capabilitiesFrom(["warm_session"], null, null).warmSession, false);
 });
+
+test("eventMeta follows the bp_apply feature event_meta", () => {
+  const withFeature = { ...FIX_INFO, bpApply: { ...FIX_INFO.bpApply, features: [...((FIX_INFO.bpApply as { features?: string[] }).features ?? []), "event_meta"] } };
+  assert.equal(capabilitiesFrom(ALL_TOOLS, withFeature, EXT).eventMeta, true);
+  assert.equal(capabilitiesFrom(ALL_TOOLS, FIX_INFO, EXT).eventMeta, false);
+  assert.equal(capabilitiesFrom(ALL_TOOLS, null, EXT).eventMeta, false);
+});

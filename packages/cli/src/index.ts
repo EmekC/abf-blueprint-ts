@@ -8,7 +8,7 @@ export { stubs } from "./commands/stubs.js";
 export { ensureStage } from "./commands/stage.js";
 export { adopt } from "./commands/adopt.js";
 export { build, runBuild } from "./commands/build.js";
-export { check, runCheck } from "./commands/check.js";
+export { check, runCheck, runWatch } from "./commands/check.js";
 export { publish } from "./commands/publish.js";
 export { status } from "./commands/status.js";
 export { test, runTests } from "./commands/test.js";
