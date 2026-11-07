@@ -26,3 +26,6 @@ export { deleteSourceMap, mapCompileMessages, readSourceMap, sourceMapPath, writ
 export type { CompileMessageLike, SourceMapFile } from "./ownership/sourcemap.js";
 export { assetsNeedingRead, planBuild } from "./plan/planner.js";
 export type { PlanInput, PlanResult } from "./plan/planner.js";
+export { featureGates } from "./plan/gates.js";
+export type { GateCapabilities } from "./plan/gates.js";
+export { udsGuid, udsMemberName } from "./frontend/structnames.js";

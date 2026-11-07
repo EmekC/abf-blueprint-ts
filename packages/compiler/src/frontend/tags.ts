@@ -1,6 +1,7 @@
 // Reads the `@bp*` JSDoc tags of generated stubs (design 5.1) and maps TypeScript types to bp_apply type grammar.
 import ts from "typescript";
 import type { BpType } from "../hir.js";
+import { udsMemberName } from "./structnames.js";
 
 /** Tag name without the `@` -> comments, e.g. `bpPath` -> ["/Script/Engine.Actor"]. */
 export type Tags = Map<string, string[]>;
@@ -150,6 +151,53 @@ export function tsBlueprintOf(sym: ts.Symbol): { path: string; widget: boolean }
   return undefined;
 }
 
+/**
+ * Path of a class declaration carrying `@struct({ path })`, read syntactically (decorator call whose callee identifier is `struct`).
+ * `objectPath` is `<path>.<AssetName>`. undefined without the decorator or without a literal path (the frontend's class pass reports that).
+ */
+export function tsStructOfDecl(decl: ts.ClassDeclaration): { path: string; objectPath: string } | undefined {
+  for (const d of ts.getDecorators(decl) ?? []) {
+    const e = d.expression;
+    if (!ts.isCallExpression(e) || !ts.isIdentifier(e.expression) || e.expression.text !== "struct") continue;
+    const opts = e.arguments[0];
+    if (!opts || !ts.isObjectLiteralExpression(opts)) continue;
+    for (const p of opts.properties) {
+      if (!ts.isPropertyAssignment(p) || !(ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) || p.name.text !== "path") continue;
+      const init = p.initializer;
+      if (!ts.isStringLiteral(init) && !ts.isNoSubstitutionTemplateLiteral(init)) continue;
+      const path = init.text;
+      if (path === "" || path.endsWith("/")) continue;
+      return { path, objectPath: `${path}.${path.slice(path.lastIndexOf("/") + 1)}` };
+    }
+  }
+  return undefined;
+}
+
+/** `tsStructOfDecl` of the first class declaration of a symbol that has one. */
+export function tsStructOf(sym: ts.Symbol): { path: string; objectPath: string } | undefined {
+  for (const d of sym.declarations ?? []) {
+    if (!ts.isClassDeclaration(d)) continue;
+    const r = tsStructOfDecl(d);
+    if (r) return r;
+  }
+  return undefined;
+}
+
+/**
+ * The Blueprint member name (`<Field>_<index>_<GUID>`) of a field of a TS `@struct` class, or undefined when the symbol is not
+ * a field of one. The index is the field's declaration index among the property declarations of the class.
+ */
+export function tsStructMemberName(sym: ts.Symbol): string | undefined {
+  for (const d of sym.declarations ?? []) {
+    if (!ts.isPropertyDeclaration(d) || !ts.isIdentifier(d.name) || !ts.isClassDeclaration(d.parent)) continue;
+    const s = tsStructOfDecl(d.parent);
+    if (!s) continue;
+    const index = d.parent.members.filter((m) => ts.isPropertyDeclaration(m)).indexOf(d);
+    return udsMemberName(s.objectPath, d.name.text, index);
+  }
+  return undefined;
+}
+
 /** FunctionInfo of an `@event` method of a TS `@blueprint` class: what the stub's `_C` method would have given. */
 export function ownEventInfo(checker: ts.TypeChecker, sym: ts.Symbol): FunctionInfo | undefined {
   const m = (sym.declarations ?? []).find((d): d is ts.MethodDeclaration => ts.isMethodDeclaration(d));
@@ -189,6 +237,8 @@ export function classInfo(sym: ts.Symbol): ClassInfo | undefined {
   if (path === undefined || path === "") {
     const tb = tsBlueprintOf(sym);
     if (tb) return { path: classPathOf(tb.path), meta: tb.widget ? WIDGET_META : BLUEPRINT_META, castPin: null, kind: "class", fromTs: true };
+    const ts_ = tsStructOf(sym);
+    if (ts_) return { path: ts_.objectPath, meta: DEFAULT_META, castPin: null, kind: "struct", fromTs: true };
     return undefined;
   }
   const k = tags.get("bpKind")?.[0];
@@ -224,7 +274,16 @@ export function bpTypeOf(checker: ts.TypeChecker, type: ts.Type): BpType | undef
   if (checker.isArrayType(t)) {
     const arg = checker.getTypeArguments(t as ts.TypeReference)[0];
     const inner = arg ? bpTypeOf(checker, arg) : undefined;
-    return inner === undefined ? undefined : `array:${inner}`;
+    return inner === undefined || /^(map|set):/.test(inner) ? undefined : `array:${inner}`;
+  }
+  const csym = t.getSymbol();
+  if ((csym?.name === "Map" || csym?.name === "Set") && t.flags & ts.TypeFlags.Object && (t as ts.ObjectType).objectFlags & ts.ObjectFlags.Reference) {
+    const args = checker.getTypeArguments(t as ts.TypeReference);
+    const want = csym.name === "Map" ? 2 : 1;
+    if (args.length !== want) return undefined;
+    const inner = args.map((a) => bpTypeOf(checker, a));
+    if (inner.some((x) => x === undefined || /^(array|map|set):/.test(x))) return undefined;
+    return want === 2 ? `map:${inner[0]}:${inner[1]}` : `set:${inner[0]}`;
   }
   const num = literalOfProperty(checker, t, "__bpNumber");
   if (num !== undefined) return num;

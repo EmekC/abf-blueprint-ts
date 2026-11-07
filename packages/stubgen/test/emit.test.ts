@@ -534,3 +534,19 @@ test("supplemental properties: classes without a supplement are unchanged", () =
   const text = emitStubs(input()).get("Script/FakeEngine.d.ts") ?? "";
   assert.doesNotMatch(text, /Slot/);
 });
+
+test("map and set variables and event parameters of a hand-made asset keep their unsupported stub form", async () => {
+  const { manualFromExport, emitManual } = await import("../src/index.js");
+  const bp = "/TestMod/Core/BP_Host";
+  const body = [
+    `Begin Object Class=/Script/Engine.Blueprint Name="BP_Host" ExportPath="/Script/Engine.Blueprint'${bp}.BP_Host'"`,
+    `   NewVariables(0)=(VarName="Counts",VarGuid=4F1E9FD0FD104258BE5D5D30A551C609,VarType=(PinCategory="name",PinValueType=(TerminalCategory="int"),ContainerType=Map),FriendlyName="Counts",PropertyFlags=5)`,
+    `   NewVariables(1)=(VarName="Tags",VarGuid=4F1E9FD0FD104258BE5D5D30A551C60A,VarType=(PinCategory="name",ContainerType=Set),FriendlyName="Tags",PropertyFlags=5)`,
+    "End Object",
+  ].join("\n");
+  const m = manualFromExport(bp, body, { blueprint: { class: "Blueprint" } }, { units: [], variables: [] });
+  assert.deepEqual(m.variables, [{ name: "Counts", type: "unsupported:name:Map" }, { name: "Tags", type: "unsupported:name:Set" }]);
+  const f = emitManual(m);
+  assert.match(f.text, / \* @bpUnsupported name:Map/);
+  assert.match(f.text, / \* @bpUnsupported name:Set/);
+});

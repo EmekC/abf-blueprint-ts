@@ -27,6 +27,11 @@ export function unitHash(u: IrUnit): string {
   }));
 }
 
+/** Hash of the fields of a mod-defined struct (name and type of each, in declaration order); the manifest's `structFieldsHash`. */
+export function structFieldsHash(fields: ReadonlyArray<{ name: string; type: string }>): string {
+  return "sha256:" + sha256(canonicalJson(fields.map((f) => ({ name: f.name, type: f.type }))));
+}
+
 /** Hash of the class defaults of an asset (plan item `defaults`): the validated property map plus the class manager row. */
 export function classDefaultsHash(values: Record<string, string>, classManagerRow?: string): string {
   return "sha256:" + sha256(canonicalJson({ values, classManagerRow }));

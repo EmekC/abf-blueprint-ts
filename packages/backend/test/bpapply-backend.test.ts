@@ -70,7 +70,7 @@ test("info with backend_info and abfc_extensions", async () => {
     assert.equal(info.capabilities.castObjectPin, true);
     assert.equal(info.capabilities.reflect, true);
     assert.equal(info.capabilities.compileErrorNodeRefs, true);
-    assert.equal(info.capabilities.containerTypes.map, false);
+    assert.equal(info.capabilities.containerTypes.map, true);
     assert.equal(info.capabilities.backendContainerTypes?.map, true);
   });
 });
