@@ -1,5 +1,7 @@
 // One-line descriptions of stub functions: `<description> (<Node Name>).`
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { runtimeLayout } from "@abfc/env";
 import { displayNameOf } from "@abfc/ir";
 
 export interface DescriptionTable {
@@ -11,7 +13,8 @@ let cached: DescriptionTable | null = null;
 /** The curated table shipped with the package (`data/descriptions.json`), read once. */
 export function loadDescriptions(): DescriptionTable {
   if (cached === null) {
-    const raw = JSON.parse(readFileSync(new URL("../../data/descriptions.json", import.meta.url), "utf8")) as { functions?: DescriptionTable["functions"] };
+    const file = runtimeLayout()?.descriptionsJson ?? fileURLToPath(new URL("../../data/descriptions.json", import.meta.url));
+    const raw = JSON.parse(readFileSync(file, "utf8")) as { functions?: DescriptionTable["functions"] };
     cached = { functions: raw.functions ?? {} };
   }
   return cached;

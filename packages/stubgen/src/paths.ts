@@ -4,8 +4,11 @@ import { join } from "node:path";
 
 const fwd = (p: string): string => p.replaceAll("\\", "/");
 
-/** Returns the written file. `runtimeDts` and `testkitDts` are the absolute paths of the packages' `index.d.ts`. */
-export function writeTsconfigPaths(abfcDir: string, profileId: string, mod: string, runtimeDts: string, testkitDts: string): string {
+/**
+ * Returns the written file. `runtimeDts` and `testkitDts` are the absolute paths of the packages' `index.d.ts`;
+ * `irDts` (abfc.exe only, where testkit's declarations import `@abfc/ir`) adds the `@abfc/ir` mapping.
+ */
+export function writeTsconfigPaths(abfcDir: string, profileId: string, mod: string, runtimeDts: string, testkitDts: string, irDts?: string): string {
   // The `.js` suffix makes the mapping resolve in ESM (nodenext) projects too; TS finds the sibling `.d.ts`.
   const base = `./stubs/${profileId}`;
   const doc = {
@@ -17,6 +20,7 @@ export function writeTsconfigPaths(abfcDir: string, profileId: string, mod: stri
         "@mod/*": [`${base}/Mod/${mod}/*.js`],
         "@abfc/runtime": [fwd(runtimeDts)],
         "@abfc/testkit": [fwd(testkitDts)],
+        ...(irDts === undefined ? {} : { "@abfc/ir": [fwd(irDts)] }),
       },
     },
   };

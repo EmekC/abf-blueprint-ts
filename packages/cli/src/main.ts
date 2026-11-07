@@ -1,11 +1,11 @@
 import { startBackend } from "@abfc/backend";
-import { AbfcError, realHost } from "@abfc/env";
+import { AbfcError, cleanBundledRuntimes, installInfo, realHost, verifyBundledRuntime } from "@abfc/env";
 import { parseCliArgs, UsageError } from "./args.js";
 import type { ParsedArgs } from "./args.js";
 import { adopt } from "./commands/adopt.js";
 import { build } from "./commands/build.js";
 import { check } from "./commands/check.js";
-import { doctor } from "./commands/doctor.js";
+import { cleanRuntimesCommand, doctor } from "./commands/doctor.js";
 import { runInit } from "./commands/init.js";
 import { runLsp } from "./commands/lsp.js";
 import { publish } from "./commands/publish.js";
@@ -34,6 +34,7 @@ const USAGE = [
   "commands: init, lsp, " + Object.keys(COMMANDS).join(", "),
   "options: --json --verbose --project <dir> --editor-root <dir> --mods-dir <dir> --mod-dir <dir>",
   "         --backend-dir <dir> --python <exe> --headless-dir <dir> --timings --resync --no-build --yes --dry-run --full --discard-editor-changes --cold --watch (check)",
+  "doctor:  abfc doctor [--deep] [--clean-runtimes]",
   "init:    abfc init [dir] [--mod <name>] [--yes] [--no-stubs] [--mods-dir <dir>] [--editor-root <dir>] [--backend-dir <dir>] [--python <exe>]",
   "lsp:     abfc lsp [--stdio]   language server over stdio (docs/language-service.md)",
 ];
@@ -43,6 +44,7 @@ export function defaultDeps(): CliDeps {
     host: realHost(),
     startBackend: (env, o) => startBackend(env, o),
     now: () => new Date(),
+    install: { info: installInfo, verify: verifyBundledRuntime, clean: cleanBundledRuntimes },
   };
 }
 
@@ -87,6 +89,14 @@ export async function main(argv: string[], deps: CliDeps = defaultDeps()): Promi
       return await runLsp(args, deps);
     } catch (e) {
       err(`abfc: error: language server failed: ${e instanceof Error ? (args.flags.verbose ? (e.stack ?? e.message) : e.message) : String(e)}`);
+      return 2;
+    }
+  }
+  if (command === "doctor" && args.flags.cleanRuntimes) {
+    try {
+      return cleanRuntimesCommand(args, deps);
+    } catch (e) {
+      err(`abfc: error: could not clean the runtime folders: ${e instanceof Error ? (args.flags.verbose ? (e.stack ?? e.message) : e.message) : String(e)}`);
       return 2;
     }
   }

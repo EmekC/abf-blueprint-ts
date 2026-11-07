@@ -28,6 +28,10 @@ export interface CliFlags {
   mod: string | undefined;
   /** `--no-stubs`: `abfc init` does not run `abfc stubs`. */
   noStubs: boolean;
+  /** `--deep`: `abfc doctor` checks the extracted runtime by sha256 (abfc.exe). */
+  deep: boolean;
+  /** `--clean-runtimes`: `abfc doctor` deletes the old extracted runtime folders (works outside a project). */
+  cleanRuntimes: boolean;
 }
 
 export interface ParsedArgs {
@@ -75,7 +79,9 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
         watch: { type: "boolean" },
         mod: { type: "string" },
         "no-stubs": { type: "boolean" },
-        // `abfc lsp` accepts what language clients add; the values are ignored
+        deep: { type: "boolean" },
+        "clean-runtimes": { type: "boolean" },
+        //`abfc lsp` accepts what language clients add; the values are ignored
         stdio: { type: "boolean" },
         clientProcessId: { type: "string" },
       },
@@ -111,6 +117,8 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
       watch: v.watch === true,
       mod: v.mod,
       noStubs: v["no-stubs"] === true,
+      deep: v.deep === true,
+      cleanRuntimes: v["clean-runtimes"] === true,
     },
   };
 }

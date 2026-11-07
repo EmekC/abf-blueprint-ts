@@ -1,7 +1,7 @@
 import { win32 } from "node:path";
 import type { Backend } from "@abfc/backend";
-import { assertNotInModFolder, findProjectDir, resolveEnvironment } from "@abfc/env";
-import type { Environment, Host, ProjectConfig } from "@abfc/env";
+import { assertNotInModFolder, cleanBundledRuntimes, findProjectDir, installInfo, resolveEnvironment, verifyBundledRuntime } from "@abfc/env";
+import type { Environment, Host, InstallInfo, ProjectConfig } from "@abfc/env";
 import type { ParsedArgs } from "./args.js";
 import { Output } from "./output.js";
 
@@ -31,6 +31,19 @@ export interface CliDeps {
   interactive?: boolean | undefined;
   /** Streams `abfc lsp` speaks on (default: stdin and stdout). */
   lspStreams?: { input: NodeJS.ReadableStream; output: NodeJS.WritableStream } | undefined;
+  /** How this abfc is installed and its extracted runtime (default: the `@abfc/env` functions; tests replace it). */
+  install?:
+    | {
+        info(): InstallInfo;
+        verify(deep: boolean): ReturnType<typeof verifyBundledRuntime>;
+        clean(): ReturnType<typeof cleanBundledRuntimes>;
+      }
+    | undefined;
+}
+
+/** The install functions of `deps`, or the real ones. */
+export function installOf(deps: CliDeps): NonNullable<CliDeps["install"]> {
+  return deps.install ?? { info: installInfo, verify: verifyBundledRuntime, clean: cleanBundledRuntimes };
 }
 
 export interface CliPaths {

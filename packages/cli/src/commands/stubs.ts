@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { win32 } from "node:path";
 import type { Backend, ReflectData } from "@abfc/backend";
 import { ownedSets } from "@abfc/compiler";
-import { AbfcError } from "@abfc/env";
+import { AbfcError, runtimeLayout } from "@abfc/env";
 import {
   emitStubsWithIndex,
   manualFromExport,
@@ -187,7 +187,15 @@ async function reflectAndRead(ctx: CliContext, backend: Backend): Promise<number
   );
   writeFileSync(win32.join(profileDir, "_index.json"), JSON.stringify(index, null, 2) + "\n", "utf8");
   mkdirSync(paths.abfcDir, { recursive: true });
-  writeTsconfigPaths(paths.abfcDir, env.profile.id, mod, declarationOf("@abfc/runtime"), declarationOf("@abfc/testkit"));
+  const layout = runtimeLayout();
+  writeTsconfigPaths(
+    paths.abfcDir,
+    env.profile.id,
+    mod,
+    layout?.runtimeDts ?? declarationOf("@abfc/runtime"),
+    layout?.testkitDts ?? declarationOf("@abfc/testkit"),
+    layout?.irDts,
+  );
   recordRun(paths.runsFile, { at: at(), step: "stubs.emit", seconds: (clock() - t2) / 1000, ok: true, units: files.size, mode: "cold" });
 
   output.info(`stubs written to ${profileDir}`);

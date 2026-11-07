@@ -1,16 +1,25 @@
 import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Profile } from "@abfc/ir";
+import { runtimeLayout } from "./install.js";
 
-const PROFILES_DIR = new URL("../../profiles/", import.meta.url);
+let profilesDirCache: string | null = null;
 
-function readJson(url: URL): Profile {
-  const text = readFileSync(url, "utf8").replace(/^\uFEFF/, "");
+/** The shipped `profiles` folder: the runtime folder in abfc.exe, else the package's own. */
+function profilesDir(): string {
+  profilesDirCache ??= runtimeLayout()?.profilesDir ?? fileURLToPath(new URL("../../profiles/", import.meta.url));
+  return profilesDirCache;
+}
+
+function readJson(file: string): Profile {
+  const text = readFileSync(file, "utf8").replace(/^\uFEFF/, "");
   return JSON.parse(text) as Profile;
 }
 
 /** All profile ids shipped in the package `profiles` folder, sorted. */
 export function listProfileIds(): string[] {
-  return readdirSync(PROFILES_DIR)
+  return readdirSync(profilesDir())
     .filter((f) => f.endsWith(".json"))
     .map((f) => f.slice(0, -".json".length))
     .sort();
@@ -26,7 +35,7 @@ export function loadProfile(id?: string): Profile {
     }
     useId = ids[0];
   }
-  return readJson(new URL(`${useId}.json`, PROFILES_DIR));
+  return readJson(join(profilesDir(), `${useId}.json`));
 }
 
 /**

@@ -4,7 +4,10 @@ import type { Resolved } from "@abfc/env";
 import { MIN_BACKEND_VERSION } from "@abfc/backend";
 import type { Backend } from "@abfc/backend";
 import type { BackendInfo, Diagnostic } from "@abfc/ir";
-import type { CliContext } from "../context.js";
+import type { ParsedArgs } from "../args.js";
+import { installOf } from "../context.js";
+import type { CliContext, CliDeps } from "../context.js";
+import { Output } from "../output.js";
 import { backendInfoDiagnostics } from "./backend-version.js";
 
 function show(label: string, r: Resolved<string>, extra = ""): string {
@@ -34,6 +37,23 @@ export async function doctor(ctx: CliContext): Promise<number> {
   output.info(`  mod              ${config.mod.name}`);
   output.info(`  profile          ${env.profile.id} (editor build tag ${env.profile.buildTag})`);
   output.info(`  node             ${deps.host.nodeVersion}`);
+  const install = installOf(deps);
+  const info0 = install.info();
+  output.info(
+    info0.kind === "exe" ? `  abfc             exe ${info0.abfcVersion ?? "?"}, runtime ${info0.runtimeDir ?? "?"}` : "  abfc             source install",
+  );
+  const installJson = { kind: info0.kind, abfcVersion: info0.abfcVersion, runtimeDir: info0.runtimeDir };
+  let runtimeCheck: { files: number; repaired: boolean } | null = null;
+  if (ctx.args.flags.deep) {
+    const r = install.verify(true);
+    if (r === null) {
+      output.info("  runtime check    none (source install)");
+    } else {
+      runtimeCheck = { files: r.files, repaired: r.repaired };
+      output.info(`  runtime check    ${r.files} files verified by sha256${r.repaired ? " (repaired)" : ""}`);
+    }
+  }
+  const extra = ctx.args.flags.deep ? { install: installJson, runtimeCheck } : { install: installJson };
   output.info("settings (winner and source: flag > env > abf.config.json > user config > auto):");
   output.info(show("editor root", env.editorRoot, env.appVersion ? `  (build ${env.appVersion})` : ""));
   output.info(show("documents", env.documents));
@@ -84,7 +104,7 @@ export async function doctor(ctx: CliContext): Promise<number> {
   else if (headlessBlocked) skip = "the headless folder is not usable (see ABFC1012)";
   if (skip !== null) {
     output.info(`backend: not checked (${skip})`);
-    output.json({ settings: settingsJson(ctx), backend: null });
+    output.json({ settings: settingsJson(ctx), backend: null, ...extra });
     return output.exitCode();
   }
 
@@ -109,8 +129,22 @@ export async function doctor(ctx: CliContext): Promise<number> {
     checkInfo(ctx, info);
     printInfo(ctx, info);
   }
-  output.json({ settings: settingsJson(ctx), backend: info });
+  output.json({ settings: settingsJson(ctx), backend: info, ...extra });
   return output.exitCode();
+}
+
+/** `abfc doctor --clean-runtimes`: deletes the extracted runtime folders of other versions. Needs no project. Returns the exit code. */
+export function cleanRuntimesCommand(args: ParsedArgs, deps: CliDeps): number {
+  const output = new Output({ command: "doctor", json: args.flags.json, projectDir: args.flags.project, stdout: deps.stdout, stderr: deps.stderr });
+  const r = installOf(deps).clean();
+  for (const p of r.removed) output.info(`removed ${p}`);
+  for (const p of r.failed) {
+    output.diag(envWarning(1051, `in use, not removed: ${p}`, [], "close other abfc processes (language server, builds) and run the command again."));
+  }
+  if (r.kept !== null) output.info(`kept ${r.kept}`);
+  if (r.removed.length === 0 && r.failed.length === 0) output.info("nothing to remove");
+  output.json({ removed: r.removed, failed: r.failed, kept: r.kept });
+  return output.finish();
 }
 
 function checkInfo(ctx: CliContext, info: BackendInfo): void {

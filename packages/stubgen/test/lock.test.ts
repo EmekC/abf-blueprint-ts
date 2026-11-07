@@ -115,6 +115,26 @@ test("writeTsconfigPaths writes forward-slash absolute paths and the stub patter
   }
 });
 
+test("writeTsconfigPaths maps @abfc/ir only when irDts is given, otherwise the output is unchanged", () => {
+  const dir = mkdtempSync(join(tmpdir(), "abfc-paths-"));
+  try {
+    const rt = "C:\\fake\\runtime\\index.d.ts";
+    const tk = "C:\\fake\\testkit\\index.d.ts";
+    const without = readFileSync(writeTsconfigPaths(join(dir, "a"), "p1", "TestMod", rt, tk), "utf8");
+    const explicitUndefined = readFileSync(writeTsconfigPaths(join(dir, "b"), "p1", "TestMod", rt, tk, undefined), "utf8");
+    assert.equal(explicitUndefined, without);
+    assert.equal(JSON.parse(without).compilerOptions.paths["@abfc/ir"], undefined);
+    assert.ok(!without.includes("@abfc/ir"));
+    const withIr = JSON.parse(readFileSync(writeTsconfigPaths(join(dir, "c"), "p1", "TestMod", rt, tk, "C:\\fake\\ir\\index.d.ts"), "utf8")) as {
+      compilerOptions: { paths: Record<string, string[]> };
+    };
+    assert.deepEqual(withIr.compilerOptions.paths["@abfc/ir"], ["C:/fake/ir/index.d.ts"]);
+    assert.deepEqual(Object.keys(withIr.compilerOptions.paths).slice(-2), ["@abfc/testkit", "@abfc/ir"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 const EXPORT = [
   "Begin Object Class=/Script/Engine.Blueprint Name=\"BP_Hand\" ExportPath=\"/Script/Engine.Blueprint'/TestMod/BP_Hand.BP_Hand'\"",
   "   ParentClass=\"/Script/CoreUObject.Class'/Script/FakeEngine.Thing'\"",
