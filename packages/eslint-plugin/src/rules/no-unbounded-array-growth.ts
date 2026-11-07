@@ -1,8 +1,11 @@
 import type { TSESTree } from "@typescript-eslint/utils";
-import { createRule, thisMemberName } from "../util.js";
+import { createRule, overrideMethodOf, thisMemberName } from "../util.js";
 
-type Options = [{ ignore?: string[] }?];
+type Options = [{ ignore?: string[]; oneTimeMethods?: string[] }?];
 type MessageIds = "grows";
+
+/** Overrides the engine calls once per object; a push there fills the array once. */
+const ONE_TIME_METHODS: readonly string[] = ["ReceiveBeginPlay", "Construct", "OnInitialized"];
 
 /** Array methods that remove entries. */
 const REMOVERS: readonly string[] = ["splice", "pop", "shift"];
@@ -26,6 +29,7 @@ export default createRule<Options, MessageIds>({
         type: "object",
         properties: {
           ignore: { type: "array", items: { type: "string" } },
+          oneTimeMethods: { type: "array", items: { type: "string" } },
         },
         additionalProperties: false,
       },
@@ -34,6 +38,7 @@ export default createRule<Options, MessageIds>({
   defaultOptions: [{}],
   create(context, [options]) {
     const ignore = options?.ignore ?? [];
+    const oneTime = options?.oneTimeMethods ?? ONE_TIME_METHODS;
     const sourceCode = context.sourceCode;
     const stack: ClassState[] = [];
 
@@ -75,7 +80,9 @@ export default createRule<Options, MessageIds>({
         const name = thisMemberName(callee.object);
         if (name === null) return;
         const method = callee.property.name;
-        if (method === "push") state.pushes.push({ node, name });
+        if (method === "push") {
+          if (overrideMethodOf(node, oneTime) === null) state.pushes.push({ node, name });
+        }
         else if (REMOVERS.includes(method)) state.bounded.add(name);
       },
       AssignmentExpression(node) {

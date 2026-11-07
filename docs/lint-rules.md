@@ -138,6 +138,12 @@ Two checks on calls of `@bpRpc` members:
 
 Options: `authorityCalls: string[]` (as above) and `tickMethods: string[]`.
 
+`clientFromClient` does not report calls that run on the server anyway: the body of a server RPC (a method that
+carries `@bpRpc server`, or overrides a base member that does), and the body of a `private` or `#private` method of
+the same class whose every call site (`this.Helper()`) lies directly in a server RPC or in another such method. A
+callback inside a server RPC is not exempt, and neither is a helper that is public, called from an event, or passed
+around as a value. `reliableSpam` applies everywhere.
+
 ```ts
 // bad
 @event
@@ -150,6 +156,16 @@ Celebrate(): void {
 Celebrate(): void {
   if (this.HasAuthority()) this.PlayFanfare();
 }
+
+// good: ServerCelebrate is a server RPC, so the helper only ever runs on the server
+@override
+ServerCelebrate(): void {
+  this.Announce();
+}
+
+private Announce(): void {
+  this.PlayFanfare();
+}
 ```
 
 ## no-unbounded-array-growth
@@ -160,7 +176,12 @@ memory leak in a long session. A class counts as bounding `A` when it contains `
 `while` or `for` whose condition mentions `this.A.length`, `this.A.includes(` or `this.A.indexOf(`. The rule is
 syntactic: it does not follow the array through other objects or helper functions.
 
-Options: `ignore: string[]` lists array names that are allowed to grow.
+A push directly in an `@override` of `ReceiveBeginPlay`, `Construct` or `OnInitialized` is not reported: the engine
+calls those once per object, so the array is filled once. A push in a callback inside such a method is still reported.
+Clearing and refilling in one method (`this.A.length = 0` then `this.A.push(...)`) passes because the class bounds `A`.
+
+Options: `ignore: string[]` lists array names that are allowed to grow; `oneTimeMethods: string[]` replaces the list
+of one-time overrides above.
 
 ```ts
 // bad
@@ -173,5 +194,11 @@ Remember(name: name): void {
 @event
 Remember(name: name): void {
   if (!this.Seen.includes(name)) this.Seen.push(name);
+}
+
+// good: filled once when the actor starts
+@override
+ReceiveBeginPlay(): void {
+  this.Seen.push("start");
 }
 ```

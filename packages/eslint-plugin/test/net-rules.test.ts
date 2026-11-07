@@ -124,8 +124,41 @@ runTyped("rpc-misuse", rpcMisuse as never, {
       code: `class A extends StubActor { @override ReceiveTick(dt: number) { if (this.HasAuthority()) { this.Boom(); } } }`,
       options: [{ tickMethods: ["OtherTick"] }],
     },
+    // the body of a server RPC runs on the server
+    `class A extends StubActor { @override ServerDo() { this.Notify(); } }`,
+    // a private helper reachable only from a server RPC
+    `class A extends StubActor { @override ServerDo() { this.Helper(); } private Helper() { this.Notify(); } }`,
+    // a chain of private helpers
+    `class A extends StubActor { @override ServerDo() { this.H1(); } private H1() { this.H2(); } private H2() { this.Notify(); } }`,
+    // a #private helper
+    `class A extends StubActor { @override ServerDo() { this.#H(); } #H() { this.Notify(); } }`,
   ],
   invalid: [
+    // the helper is also called from a client-side event
+    {
+      code: `class A extends StubActor { @override ServerDo() { this.Helper(); } @event Go() { this.Helper(); } private Helper() { this.Notify(); } }`,
+      errors: [{ messageId: "clientFromClient", data: { name: "Notify", kind: "client" } }],
+    },
+    // a public helper can be called from anywhere
+    {
+      code: `class A extends StubActor { @override ServerDo() { this.Helper(); } Helper() { this.Notify(); } }`,
+      errors: [{ messageId: "clientFromClient" }],
+    },
+    // a private helper passed as a callback is not provably server-only
+    {
+      code: `class A extends StubActor { @override ServerDo() { this.Helper(); } @event Go() { const f = this.Helper; } private Helper() { this.Notify(); } }`,
+      errors: [{ messageId: "clientFromClient" }],
+    },
+    // an arrow function inside a server RPC is not exempt
+    {
+      code: `class A extends StubActor { @override ServerDo() { const f = () => this.Notify(); f(); } }`,
+      errors: [{ messageId: "clientFromClient" }],
+    },
+    // reliable RPCs are still checked in a server RPC
+    {
+      code: `class A extends StubActor { @override ServerDo() { for (let i = 0; i < 3; i++) this.Boom(); } }`,
+      errors: [{ messageId: "reliableSpam" }],
+    },
     {
       code: `class A extends StubActor { @event Go() { this.Notify(); } }`,
       errors: [{ messageId: "clientFromClient", data: { name: "Notify", kind: "client" } }],
@@ -184,6 +217,18 @@ untyped.run("no-unbounded-array-growth", noUnboundedArrayGrowth, {
     },
     // push and clear in the same class
     `class A { Items: number[] = []; Other: number[] = []; @event Add() { this.Items.push(1); this.Items.length = 0; } }`,
+    // one-time overrides fill the array once
+    `class A { Items: number[] = []; @override ReceiveBeginPlay() { this.Items.push(1); } }`,
+    `class A { Items: number[] = []; @override Construct() { this.Items.push(1); } }`,
+    `class A { Items: number[] = []; @override OnInitialized() { this.Items.push(1); } }`,
+    `class A { Items: number[] = []; @override ReceiveBeginPlay() { for (let i = 0; i < 3; i++) { this.Items.push(i); } } }`,
+    // clear, then push, in one method
+    `class A { Items: number[] = []; @event Rebuild() { this.Items.length = 0; this.Items.push(1); } }`,
+    // the option replaces the list of one-time methods
+    {
+      code: `class A { Items: number[] = []; @override Setup() { this.Items.push(1); } }`,
+      options: [{ oneTimeMethods: ["Setup"] }],
+    },
   ],
   invalid: [
     {
@@ -213,6 +258,26 @@ untyped.run("no-unbounded-array-growth", noUnboundedArrayGrowth, {
     {
       code: `class A { Items: number[] = []; @event Add() { this.Items.push(1); this.Items.push(2); } }`,
       errors: [{ messageId: "grows" }, { messageId: "grows" }],
+    },
+    // a callback inside ReceiveBeginPlay can run many times
+    {
+      code: `class A { Items: number[] = []; @override ReceiveBeginPlay() { this.Sub(() => { this.Items.push(1); }); } }`,
+      errors: [{ messageId: "grows" }],
+    },
+    // without @override the method is not the engine's one-time hook
+    {
+      code: `class A { Items: number[] = []; ReceiveBeginPlay() { this.Items.push(1); } }`,
+      errors: [{ messageId: "grows" }],
+    },
+    {
+      code: `class A { Items: number[] = []; @override ReceiveTick(dt: number) { this.Items.push(1); } }`,
+      errors: [{ messageId: "grows" }],
+    },
+    // the option replaces the default list
+    {
+      code: `class A { Items: number[] = []; @override ReceiveBeginPlay() { this.Items.push(1); } }`,
+      options: [{ oneTimeMethods: ["Setup"] }],
+      errors: [{ messageId: "grows" }],
     },
   ],
 });
