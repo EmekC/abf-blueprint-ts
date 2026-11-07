@@ -24,6 +24,10 @@ export interface CliFlags {
   removeNode: string[];
   /** `--watch`: `abfc check` stays running and checks again after every relevant file change. */
   watch: boolean;
+  /** `--mod <name>`: the mod `abfc init` links the project to. */
+  mod: string | undefined;
+  /** `--no-stubs`: `abfc init` does not run `abfc stubs`. */
+  noStubs: boolean;
 }
 
 export interface ParsedArgs {
@@ -69,6 +73,8 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
         cold: { type: "boolean" },
         "remove-node": { type: "string", multiple: true },
         watch: { type: "boolean" },
+        mod: { type: "string" },
+        "no-stubs": { type: "boolean" },
       },
     });
   } catch (e) {
@@ -100,6 +106,8 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
       cold: v.cold === true,
       removeNode: v["remove-node"] ?? [],
       watch: v.watch === true,
+      mod: v.mod,
+      noStubs: v["no-stubs"] === true,
     },
   };
 }

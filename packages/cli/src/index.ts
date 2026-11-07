@@ -12,3 +12,4 @@ export { check, runCheck, runWatch } from "./commands/check.js";
 export { publish } from "./commands/publish.js";
 export { status } from "./commands/status.js";
 export { test, runTests } from "./commands/test.js";
+export { runInit } from "./commands/init.js";

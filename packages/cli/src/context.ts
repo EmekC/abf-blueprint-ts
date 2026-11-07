@@ -23,6 +23,12 @@ export interface CliDeps {
   cwd?: string | undefined;
   stdout?: ((line: string) => void) | undefined;
   stderr?: ((line: string) => void) | undefined;
+  /** File writes of `abfc init` (default: `node:fs`; `writeFile` creates no folders, `mkdir` creates them recursively). */
+  fs?: { writeFile(p: string, text: string): void; mkdir(p: string): void } | undefined;
+  /** Asks one question and returns the answer (default: `node:readline/promises` on stdin and stdout). */
+  prompt?: ((question: string) => Promise<string>) | undefined;
+  /** Whether `abfc init` may ask questions (default: stdin and stdout are both terminals). */
+  interactive?: boolean | undefined;
 }
 
 export interface CliPaths {

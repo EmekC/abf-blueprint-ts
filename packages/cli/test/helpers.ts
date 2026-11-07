@@ -217,3 +217,42 @@ export function captureDeps(fake: FakeEnvironment, backend: (env: Environment) =
   };
   return { deps, lines, text: () => lines.join("\n"), started };
 }
+
+export interface MutableCaptured extends Captured {
+  /** The files of the fake machine; `deps.fs.writeFile` updates them. */
+  files: Record<string, string>;
+  /** Absolute path of every file written through `deps.fs`, in order. */
+  writes: string[];
+}
+
+/**
+ * Like {@link captureDeps}, but the host follows the writes of `deps.fs` (what `abfc init` writes can be read back by the
+ * commands it runs afterwards). `deps.interactive` is false until a test sets it.
+ */
+export function mutableCapture(fake: FakeEnvironment, backend: (env: Environment) => Promise<Backend>): MutableCaptured {
+  const cap = captureDeps(fake, backend);
+  const files = fake.files;
+  const writes: string[] = [];
+  let current = fakeHost(files, fake.run, fake.env);
+  cap.deps.host = {
+    env: fake.env,
+    exists: (p) => current.exists(p),
+    readFile: (p) => current.readFile(p),
+    readDir: (p) => current.readDir(p),
+    stat: (p) => current.stat(p),
+    run: (cmd, args) => current.run(cmd, args),
+    platform: "win32",
+    nodeVersion: "v24.0.0",
+  };
+  cap.deps.fs = {
+    writeFile: (p, text) => {
+      const existing = Object.keys(files).find((k) => key(k) === key(p));
+      files[existing ?? p] = text;
+      writes.push(p);
+      current = fakeHost(files, fake.run, fake.env);
+    },
+    mkdir: () => {},
+  };
+  cap.deps.interactive = false;
+  return Object.assign(cap, { files, writes });
+}

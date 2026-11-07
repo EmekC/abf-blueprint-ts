@@ -299,6 +299,12 @@ test("exitCodeFor: publish codes", () => {
   assert.equal(exitCodeFor("ABFC4090"), 3);
 });
 
+test("exitCodeFor: init codes", () => {
+  for (const c of ["ABFC1040", "ABFC1041", "ABFC1042", "ABFC1044"]) assert.equal(exitCodeFor(c), 1, c);
+  assert.equal(exitCodeFor("ABFC1001"), 2);
+  assert.equal(exitCodeFor("ABFC1020"), 3);
+});
+
 // ------------------------------------------------------------------ resolveEnvironment
 
 test("resolveEnvironment: full discovery for a user name with a space and redirected Documents", () => {

@@ -6,6 +6,8 @@ export type ExitCode = 1 | 2 | 3;
 export function exitCodeFor(code: string): ExitCode {
   const n = Number(code.replace(/^ABFC/, ""));
   if (n === 7006) return 2;
+  // abfc init: nested project, no terminal, mod not found, no mods in the folder are user errors (docs/design.md 18.5).
+  if (n >= 1040 && n <= 1044) return 1;
   if (n === 1020 || n === 4090 || (n >= 5001 && n <= 5007) || n === 7005) return 3;
   if (n >= 2000 && n < 3000) return 1;
   if (n >= 6000 && n < 7000) return 1;
