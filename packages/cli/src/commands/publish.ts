@@ -190,7 +190,7 @@ function wouldPublish(ctx: CliContext, stage: StageStatus | null): PublishList {
   const fe = compileFrontend(ctx);
   const owned = new Set<string>();
   for (const a of fe.ir?.assets ?? []) {
-    if (a.units.length > 0 || a.classDefaults !== undefined || a.classManagerRow !== undefined) owned.add(a.path);
+    if (a.units.length > 0 || a.classDefaults !== undefined || a.classManagerRow !== undefined || a.structFields !== undefined || a.variables.some((v) => v.temp !== true)) owned.add(a.path);
   }
   for (const a of fe.ir?.assets ?? []) {
     const m = readManifest(ctx.projectDir, a.path);
@@ -242,7 +242,7 @@ async function copyToMod(ctx: CliContext, rec: Recorder, backend: Backend, list:
     const m = readManifest(ctx.projectDir, asset);
     if (m === null || m.retiredUnpublished === undefined) continue;
     const { retiredUnpublished: _retired, ...rest } = m;
-    if (rest.units.length === 0 && rest.variables.length === 0 && rest.classDefaultsHash === undefined) {
+    if (rest.units.length === 0 && rest.variables.length === 0 && rest.classDefaultsHash === undefined && rest.structFieldsHash === undefined) {
       deleteManifest(ctx.projectDir, asset);
       deleteSourceMap(ctx.projectDir, asset);
       dropUnitCacheAsset(win32.join(ctx.paths.cacheDir, "units.json"), asset);

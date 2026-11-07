@@ -5,6 +5,7 @@ import {
   fingerprintUnit,
   listManifests,
   mapCompileMessages,
+  featureGates,
   planBuild,
   readManifest,
   readSourceMap,
@@ -14,7 +15,7 @@ import {
   writeSourceMap,
 } from "@abfc/compiler";
 import type { Manifest, ManifestUnit, SourceMapFile } from "@abfc/compiler";
-import { parseExport, sha256 } from "@abfc/ir";
+import { parseExport, sha256, structFieldsHash } from "@abfc/ir";
 import type { AssetPlan, Diagnostic, IrAsset, IrModule, Span, T3dNode } from "@abfc/ir";
 import { readLock } from "@abfc/stubgen";
 import { win32 } from "node:path";
@@ -30,6 +31,7 @@ import {
   emitAll,
   hasError,
   lockDiagnostics,
+  missingInStage,
   readAsset,
   since,
 } from "./common.js";
@@ -124,7 +126,9 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   rec.record("build.frontend", since(tFront), fe.ir !== null, fe.ir === null ? 0 : countUnits(fe.ir));
   if (fe.ir === null) return false;
   const ir = fe.ir;
-  const owned = ir.assets.filter((a) => a.units.length > 0 || a.classDefaults !== undefined || a.classManagerRow !== undefined);
+  // Mod-defined structs (UserDefinedStruct): created from the TS, never read; planned first.
+  const structAssets = ir.assets.filter((a) => a.structFields !== undefined);
+  const owned = ir.assets.filter((a) => a.units.length > 0 || a.classDefaults !== undefined || a.classManagerRow !== undefined || a.variables.some((v) => v.temp !== true));
   // A class whose TypeScript is gone but whose manifest still lists units: its units are retired like those of a removed event.
   for (const m of listManifests(projectDir)) {
     if (!m.asset.startsWith(`/${mod}/`) || m.units.length === 0 || owned.some((a) => a.path === m.asset)) continue;
@@ -141,10 +145,14 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
 
   const { backend, info } = await session.open();
   const caps = info.capabilities;
+  // Feature gates: Map/Set types and creatable kinds the backend (or abfc's native policy) lacks fail here, before the stage is touched.
+  if (emitAll(ctx, featureGates({ ...ir, assets: [...structAssets, ...owned] }, caps))) return false;
 
   const tStage = performance.now();
   const stage = await ensureStage(backend, env, config, { resync: args.flags.resync });
   rec.record("build.stage", since(tStage));
+  // A class whose asset is not in the stage yet is created by the apply: it is not read, its manifest (if any) is ignored, every unit is planned.
+  const missing = missingInStage(ctx, stage.stagingPath, [...structAssets, ...owned].filter((a) => a.create !== undefined).map((a) => a.path));
 
   // Units built with another compiler or stub lock, or whose cached IR hash differs from the current one (an earlier build did not
   // finish: the cache is written last), are re-planned although the manifest's IR hash is equal.
@@ -152,8 +160,10 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   const cache = readUnitCache(win32.join(ctx.paths.cacheDir, "units.json"));
   const forceReplan = new Set<string>();
   const manifests = new Map<string, Manifest | null>();
+  // A struct's manifest is read even when the stage lacks the file: its field hash guards against changing a created struct.
+  for (const a of structAssets) manifests.set(a.path, readManifest(projectDir, a.path));
   for (const a of owned) {
-    manifests.set(a.path, readManifest(projectDir, a.path));
+    manifests.set(a.path, missing.has(a.path) ? null : readManifest(projectDir, a.path));
     for (const u of a.units) {
       const c = cache[a.path]?.[u.id];
       if (c !== undefined && (c.stubLockHash !== stubLockHash || c.compilerVersion !== COMPILER_ID || c.irHash !== u.hash)) forceReplan.add(`${a.path} ${u.id}`);
@@ -162,9 +172,10 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
 
   // Assets that cannot have anything to plan are not read (no drift check there; `abfc status` still reads everything), unless `readAll`.
   const tRead = performance.now();
-  const toRead = readAll ? new Set(owned.map((a) => a.path)) : assetsNeedingRead({ ...ir, assets: owned }, { manifests, stage, forceReplan });
-  const readAssets = owned.filter((a) => toRead.has(a.path));
-  const skipped = owned.filter((a) => !toRead.has(a.path));
+  const existing = owned.filter((a) => !missing.has(a.path));
+  const toRead = readAll ? new Set(existing.map((a) => a.path)) : assetsNeedingRead({ ...ir, assets: existing }, { manifests, stage, forceReplan });
+  const readAssets = existing.filter((a) => toRead.has(a.path));
+  const skipped = existing.filter((a) => !toRead.has(a.path));
   const snapshots = new Map<string, Map<string, T3dNode>>();
   const snapshotVariables = new Map<string, string[]>();
   for (const a of readAssets) {
@@ -185,7 +196,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     writeManifest(projectDir, rebased.manifest);
   }
 
-  const planIr: IrModule = { ...ir, assets: readAssets };
+  const planIr: IrModule = { ...ir, assets: [...structAssets, ...owned.filter((a) => toRead.has(a.path) || missing.has(a.path))] };
   const planned = planBuild(planIr, {
     manifests,
     snapshots,
@@ -194,6 +205,8 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     snapshotVariables,
     forceReplan,
     selfEventCalls: caps.selfEventCalls,
+    missing,
+    createKinds: caps.createKinds,
   });
   if (emitAll(ctx, planned.diagnostics)) return false;
   for (const a of skipped) for (const u of a.units) planned.upToDate.push(`${a.path} ${u.id}`);
@@ -220,6 +233,13 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     planned.plan.assets.forEach((a, i) => {
       const outcome = applied.perAsset[i];
       const irAsset = irByPath.get(a.asset);
+      if (outcome !== undefined && irAsset === undefined && a.struct !== undefined) {
+        for (const m of outcome.compile) {
+          output.diag({ severity: "error", code: "ABFC4002", asset: a.asset, message: `[backend] ${m.message}` });
+          reported++;
+        }
+        return;
+      }
       if (outcome === undefined || irAsset === undefined) return;
       for (const d of errorDiagnostics(a, irAsset, outcome)) {
         output.diag(d);
@@ -243,11 +263,18 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   const finals: Manifest[] = [];
   const stagedUnits: string[] = [];
   const appliedAssets: string[] = [];
+  const createdStructs: string[] = [];
   const removedUnits: string[] = [];
   let removedOrphanTags = 0;
   for (let i = 0; i < planned.plan.assets.length; i++) {
     const a = planned.plan.assets[i]!;
     const outcome = applied.perAsset[i]!;
+    if (a.struct !== undefined) {
+      // The struct exists in the stage now (the backend compiled it): record the field hash that guards later changes.
+      writeManifest(projectDir, { asset: a.asset, compiler: COMPILER_ID, profile: profile.id, units: [], variables: [], structFieldsHash: structFieldsHash(a.struct.fields) });
+      createdStructs.push(a.asset.slice(a.asset.lastIndexOf("/") + 1));
+      continue;
+    }
     const irAsset = irByPath.get(a.asset)!;
     if (outcome.tagWarning) output.diag(outcome.tagWarning);
     for (const d of outcome.defaultsWarnings) output.diag(d);
@@ -332,7 +359,8 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
 
   // Unreal's own compile of the changed assets.
   const tCompile = performance.now();
-  const report = await backend.compile(mod, appliedAssets);
+  // A struct was compiled by the backend when it was created; a build that only created structs has nothing else to compile.
+  const report = appliedAssets.length > 0 ? await backend.compile(mod, appliedAssets) : ({ clean: true, messages: [] } as unknown as Awaited<ReturnType<typeof backend.compile>>);
   const compileOk = report.clean || !report.messages.some((m) => m.severity === "error");
   rec.record("build.compile", since(tCompile), compileOk);
   if (!compileOk) {
@@ -357,8 +385,8 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   for (const m of report.messages) if (m.severity === "warning" && args.flags.verbose) output.info(`[Unreal warning] ${m.message}`);
 
   writeCache(ctx, owned, cache, stubLockHash);
-  output.info(`applied ${stagedUnits.length > 0 ? stagedUnits.join(", ") : "no units"} in ${appliedAssets.join(", ")} (route: ${route})${removedUnits.length > 0 ? `, removed ${removedUnits.join(", ")}` : ""}${removedOrphanTags > 0 ? `, removed ${removedOrphanTags} orphan tag comment(s)` : ""}`);
-  output.json({ applied: stagedUnits, assets: appliedAssets, route, upToDate: planned.upToDate, ...(removedUnits.length > 0 ? { removed: removedUnits } : {}), ...(removedOrphanTags > 0 ? { removedOrphanTags } : {}) });
+  output.info(`applied ${stagedUnits.length > 0 ? stagedUnits.join(", ") : "no units"} in ${appliedAssets.join(", ")} (route: ${route})${createdStructs.length > 0 ? `, created struct ${createdStructs.join(", ")}` : ""}${removedUnits.length > 0 ? `, removed ${removedUnits.join(", ")}` : ""}${removedOrphanTags > 0 ? `, removed ${removedOrphanTags} orphan tag comment(s)` : ""}`);
+  output.json({ applied: stagedUnits, assets: appliedAssets, ...(createdStructs.length > 0 ? { structs: createdStructs } : {}), route, upToDate: planned.upToDate, ...(removedUnits.length > 0 ? { removed: removedUnits } : {}), ...(removedOrphanTags > 0 ? { removedOrphanTags } : {}) });
   return true;
 }
 

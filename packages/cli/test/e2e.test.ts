@@ -1394,3 +1394,176 @@ test("(h) test.liveHud: skipped hidden with ABFC6105, listed in manual-checks.md
     assert.equal(r.backend.gameTestCalls, 0);
   });
 });
+
+test("(p4) a class with an own field: the apply spec declares the variable, it enters the manifest, and a rebuild is up to date", async () => {
+  await withRig({}, async (r) => {
+    assert.equal((await r.run(["adopt", RELAY_ASSET, "UpdateTarget", "--yes"])).code, 0);
+    assert.equal((await r.run(["build"])).code, 0);
+    const src = join(r.dir, "src", "Relay.ts");
+    const text = readFileSync(src, "utf8");
+    writeFileSync(
+      src,
+      'import type { int } from "@abfc/runtime";\n' + text.replace("export class BP_Relay extends Actor {\n", "export class BP_Relay extends Actor {\n  Score!: int;\n"),
+      "utf8",
+    );
+    const before = r.backend.calls.filter((c) => c.tool === "bp_apply").length;
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    const applies = r.backend.calls.filter((c) => c.tool === "bp_apply").slice(before);
+    const declared = applies.flatMap((c) => c.specs!.flatMap((s: any) => (s.variables ?? []).map((v: any) => v.name)));
+    assert.equal(declared.filter((n: string) => n === "Score").length, 1, JSON.stringify(declared));
+    assert.ok(readManifest(r.dir, RELAY_ASSET)!.variables.some((v) => v.name === "Score" && v.type === "int"));
+    const again = r.backend.applyLabels().length;
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(r.backend.applyLabels().length, again, "a rebuild does not declare it again");
+  });
+});
+
+// ---- Creating a missing Blueprint asset ----
+
+const TALLY = `import { blueprint, event } from "@abfc/runtime";
+import type { int } from "@abfc/runtime";
+import { Actor } from "/Script/FakeEngine";
+
+@blueprint({ path: "/TestMod/Relay/BP_Tally" })
+export class BP_Tally extends Actor {
+  Total!: int;
+
+  @event
+  Bump(by: int): void {
+    this.Total = by;
+  }
+}
+`;
+const TALLY_ASSET = "/TestMod/Relay/BP_Tally";
+
+test("a class whose asset is not in the stage is created once, then built like any other", async () => {
+  await withRig({}, async (r) => {
+    rmSync(join(r.dir, "src", "Relay.ts"));
+    rmSync(join(r.dir, "src", "Relay.test.ts"));
+    writeFileSync(join(r.dir, "src", "Tally.ts"), TALLY, "utf8");
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    const specs = r.backend.calls.filter((c) => c.tool === "bp_apply").flatMap((c) => c.specs ?? []);
+    const creating = specs.filter((s: any) => s.asset === TALLY_ASSET && s.create !== undefined);
+    assert.equal(creating.length, 1, JSON.stringify(specs.map((s: any) => [s.asset, s.create])));
+    assert.deepEqual(creating[0]!.create, { class: "Blueprint", parent: "/Script/FakeEngine.Actor", if_missing: true });
+    const m = readManifest(r.dir, TALLY_ASSET);
+    assert.ok(m, "manifest written");
+    assert.deepEqual(m!.units.map((u) => u.id), ["event:Bump"]);
+    assert.ok(m!.variables.some((v) => v.name === "Total" && v.type === "int"));
+
+    const again = r.backend.applyLabels().length;
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(r.backend.applyLabels().length, again, "a second build is up to date");
+  });
+});
+
+// ---- Feature gate: Map/Set need a backend that reports them ----
+
+const MAPPED = `import { blueprint, event } from "@abfc/runtime";
+import type { int, name } from "@abfc/runtime";
+import { Actor } from "/Script/FakeEngine";
+
+@blueprint({ path: "/TestMod/Relay/BP_Mapped" })
+export class BP_Mapped extends Actor {
+  Counts!: Map<name, int>;
+
+  @event
+  Bump(key: name, by: int): void {
+    this.Counts.set(key, by);
+  }
+}
+`;
+
+test("a Map field with a backend that does not report map support is ABFC2044 before the stage is touched; no bp_apply is sent", async () => {
+  await withRig({}, async (r) => {
+    rmSync(join(r.dir, "src", "Relay.ts"));
+    rmSync(join(r.dir, "src", "Relay.test.ts"));
+    writeFileSync(join(r.dir, "src", "Mapped.ts"), MAPPED, "utf8");
+    for (const args of [["build"], ["check"]]) {
+      const x = await r.run(args);
+      if (args[0] === "check") continue;
+      assert.notEqual(x.code, 0, x.out);
+      assert.match(x.out, /ABFC2044/);
+      assert.match(x.out, /Map</);
+    }
+    assert.equal(r.backend.calls.filter((c) => c.tool === "bp_apply").length, 0);
+    assert.equal(r.backend.calls.filter((c) => c.tool === "staging_sync").length, 0);
+    assert.equal(r.backend.calls.filter((c) => c.tool === "bp_read").length, 0);
+  });
+});
+
+// ---- Mod-defined structs ----
+
+const STRUCT_SRC = (extra: string): string => `import { blueprint, event, struct } from "@abfc/runtime";
+import type { int } from "@abfc/runtime";
+import { Actor } from "/Script/FakeEngine";
+
+@struct({ path: "/TestMod/Relay/S_Entry" })
+export class S_Entry {
+  Count!: int;
+${extra}}
+
+@blueprint({ path: "/TestMod/Relay/BP_Holder" })
+export class BP_Holder extends Actor {
+  Entry!: S_Entry;
+  Total!: int;
+
+  @event
+  Use(): void {
+    this.Total = this.Entry.Count + 1;
+  }
+}
+`;
+const STRUCT_ASSET = "/TestMod/Relay/S_Entry";
+const HOLDER_ASSET = "/TestMod/Relay/BP_Holder";
+
+function appliedSpecs(r: { backend: FakeBackend }): Array<Record<string, any>> {
+  return r.backend.calls.filter((c) => c.tool === "bp_apply").flatMap((c) => c.specs ?? []);
+}
+
+test("a @struct is created before the Blueprint that uses it; a rebuild plans no struct; changing its fields is ABFC2046", async () => {
+  await withRig({ structs: true }, async (r) => {
+    rmSync(join(r.dir, "src", "Relay.ts"));
+    rmSync(join(r.dir, "src", "Relay.test.ts"));
+    writeFileSync(join(r.dir, "src", "Holder.ts"), STRUCT_SRC(""), "utf8");
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    const specs = appliedSpecs(r);
+    const si = specs.findIndex((s) => s.asset === STRUCT_ASSET);
+    const hi = specs.findIndex((s) => s.asset === HOLDER_ASSET);
+    assert.ok(si >= 0 && hi > si, JSON.stringify(specs.map((s) => s.asset)));
+    assert.equal(specs[si]!.create.class, "UserDefinedStruct");
+    assert.equal(specs[si]!.struct_fields.length, 1);
+    assert.equal(specs[si]!.struct_fields[0].friendly, "Count");
+    const entry = (specs[hi]!.variables as Array<{ name: string; type: string }>).find((v) => v.name === "Entry");
+    assert.equal(entry?.type, `struct:${STRUCT_ASSET}.S_Entry`);
+    assert.ok(readManifest(r.dir, STRUCT_ASSET)?.structFieldsHash);
+
+    const before = appliedSpecs(r).length;
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(appliedSpecs(r).length, before, "a rebuild applies nothing");
+
+    writeFileSync(join(r.dir, "src", "Holder.ts"), STRUCT_SRC("  Extra!: int;\n"), "utf8");
+    x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, /ABFC2046/);
+    assert.equal(appliedSpecs(r).length, before, "nothing is applied after the error");
+  });
+});
+
+test("a @struct with a backend that cannot create a UserDefinedStruct is ABFC2044 before any apply", async () => {
+  await withRig({}, async (r) => {
+    rmSync(join(r.dir, "src", "Relay.ts"));
+    rmSync(join(r.dir, "src", "Relay.test.ts"));
+    writeFileSync(join(r.dir, "src", "Holder.ts"), STRUCT_SRC(""), "utf8");
+    const x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, /ABFC2044/);
+    assert.equal(r.backend.calls.filter((c) => c.tool === "bp_apply").length, 0);
+  });
+});

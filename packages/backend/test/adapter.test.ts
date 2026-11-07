@@ -42,6 +42,22 @@ test("pin types with cast_object_pin: only the array length nodes and the array 
   assert.equal(nodes.filter((n) => Object.keys(n.pin_types!).join() === "Array,Output").length, 1);
 });
 
+test("effectivePinTypes allows map and set types only with the matching container capability", () => {
+  const base: IrNode = { id: "x0", t3d: { class: profile.nodeClasses.callFunction, props: [] }, pos: [0, 0], origin: unit.origin };
+  const withContainers = (map: boolean, set: boolean) => {
+    const c = caps(true, true);
+    return { ...c, containerTypes: { ...c.containerTypes, map, set } };
+  };
+  const pinTypes = { TargetMap: "map:name:int", Key: "name", Value: "int" };
+  const setTypes = { TargetSet: "set:name", NewItem: "name" };
+  assert.deepEqual(effectivePinTypes({ ...base, pinTypes }, withContainers(true, false), profile), pinTypes);
+  assert.deepEqual(effectivePinTypes({ ...base, pinTypes: setTypes }, withContainers(false, true), profile), setTypes);
+  assert.throws(() => effectivePinTypes({ ...base, pinTypes }, withContainers(false, true), profile), AbfcError);
+  assert.throws(() => effectivePinTypes({ ...base, pinTypes: setTypes }, withContainers(true, false), profile), AbfcError);
+  // exec stays refused, even inside a map value
+  assert.throws(() => effectivePinTypes({ ...base, pinTypes: { A: "map:name:exec" } }, withContainers(true, true), profile), AbfcError);
+});
+
 test("effectivePinTypes refuses what the backend refuses", () => {
   const base: IrNode = { id: "x0", t3d: { class: profile.nodeClasses.callFunction, props: [] }, pos: [0, 0], origin: unit.origin };
   const c = caps(true, true);
@@ -231,4 +247,28 @@ test("removeTags: orphan tag comments join the graph's remove list; an asset wit
   assert.equal(out.ok, true);
   assert.deepEqual(ok.calls.map((x) => x.label), ["main"]);
   assert.deepEqual(ok.calls[0]!.specs[0]!.graphs[0].remove, ["EdGraphNode_Comment_2"]);
+});
+
+test("a plan item for a missing asset puts create (with if_missing) in its main spec; others have none", () => {
+  assert.equal(renderMainSpec(asset, caps(true, true), profile).create, undefined);
+  const spec = renderMainSpec({ ...asset, create: { class: "WidgetBlueprint", parent: "/Script/UMG.UserWidget" } }, caps(true, true), profile);
+  assert.deepEqual(spec.create, { class: "WidgetBlueprint", parent: "/Script/UMG.UserWidget", if_missing: true });
+});
+
+test("a struct plan item renders create UserDefinedStruct plus struct_fields (friendly and guid from the member name)", () => {
+  const G = "0123456789ABCDEF0123456789ABCDEF";
+  const item = {
+    asset: "/TestMod/S_Entry",
+    struct: { fields: [{ name: `Count_0_${G}`, type: "int", flags: [], origin: { file: "a.ts", line: 1, col: 1, endLine: 1, endCol: 2 } }] },
+    graphNodes: {},
+    variables: [],
+    units: [],
+    classMeta: {},
+  };
+  const spec = renderMainSpec(item, caps(true, true), profile);
+  assert.deepEqual(spec, {
+    asset: "/TestMod/S_Entry",
+    create: { class: "UserDefinedStruct", if_missing: true },
+    struct_fields: [{ name: `Count_0_${G}`, friendly: "Count", guid: G, type: "int" }],
+  });
 });

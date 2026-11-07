@@ -47,6 +47,15 @@ export const BP_APPLY_P1_BASE: BackendCapabilities = {
   backendContainerTypes: null,
 };
 
+/**
+ * abfc-owned policy for the native Map, Set and mod-defined struct (UserDefinedStruct) routes, ANDed with what the backend
+ * reports. Map, Set and struct are enabled on compile and game-test evidence ("native now, audit later"): their stage `mod_audit`
+ * verdict is still pending because the audit's hidden Mod Editor could not mount the mod, and `abfc publish --full` still runs
+ * the audit before anything is published. A failed audit (a real verdict) would switch the feature off again here.
+ */
+export interface NativePolicy { map: boolean; set: boolean; struct: boolean }
+export const NATIVE_POLICY: NativePolicy = { map: true, set: true, struct: true };
+
 function strings(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 }
@@ -56,22 +65,33 @@ function bool(v: unknown): boolean {
 }
 
 /**
- * Phase 1 gate: `pinTypes` needs `backend_info` to say so AND list `pin_types`; the container policy stays abfc's own
- * (array only), the backend's report is kept in `backendContainerTypes` for `abfc doctor`.
+ * Phase 1 gate: `pinTypes` needs `backend_info` to say so AND list `pin_types`. Map and Set need abfc's native policy AND the
+ * backend's report AND `pinTypes` (their wildcard pins are typed through `pin_types`); `UserDefinedStruct` joins `createKinds`
+ * with the policy AND the `struct_fields` feature. The backend's raw report is kept in `backendContainerTypes` for `abfc doctor`.
  */
 export function capabilitiesFrom(
   tools: string[],
   info: RawBackendInfo | null,
   ext: { features?: string[] } | null,
+  policy: NativePolicy = NATIVE_POLICY,
 ): BackendCapabilities {
   const bpApplyFeatures = strings(info?.bpApply?.features);
   const rawContainers = info?.capabilities?.containerTypes ?? null;
+  const pinTypes = bool(info?.capabilities?.pinTypes) && bpApplyFeatures.includes("pin_types");
   return {
     ...BP_APPLY_P1_BASE,
-    containerTypes: { ...BP_APPLY_P1_BASE.containerTypes },
+    createKinds:
+      policy.struct && bpApplyFeatures.includes("struct_fields")
+        ? [...BP_APPLY_P1_BASE.createKinds, "UserDefinedStruct"]
+        : [...BP_APPLY_P1_BASE.createKinds],
+    containerTypes: {
+      ...BP_APPLY_P1_BASE.containerTypes,
+      map: policy.map && bool(rawContainers?.map) && pinTypes,
+      set: policy.set && bool(rawContainers?.set) && pinTypes,
+    },
     protocol: typeof info?.protocol === "number" ? info.protocol : 0,
     bpApplyFeatures,
-    pinTypes: bool(info?.capabilities?.pinTypes) && bpApplyFeatures.includes("pin_types"),
+    pinTypes,
     castObjectPin: bpApplyFeatures.includes("cast_object_pin"),
     selfEventCalls: bpApplyFeatures.includes("self_event_calls"),
     nodeKinds: strings(info?.bpApply?.nodeKinds),

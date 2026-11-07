@@ -43,6 +43,15 @@ function pins(v: unknown): ManualPin[] {
 }
 
 /**
+ * Map and set types of an export keep their former stub form (`unsupported:<key>:Map` / `unsupported:<element>:Set`), so
+ * the generated stubs of hand-made assets do not change with the container support of the grammar.
+ */
+function legacyStubType(t: string): string {
+  const m = /^(map|set):([^:]+)/.exec(t);
+  return m?.[1] !== undefined && m[2] !== undefined ? `unsupported:${m[2]}:${m[1] === "map" ? "Map" : "Set"}` : t;
+}
+
+/**
  * `exportText` is the `<run>/export.t3d` of `bp_read`, `structure` its JSON result (`blueprint.class`, `functions`).
  * Variables, parent class and custom events come from the export, functions from the structure.
  */
@@ -66,7 +75,7 @@ export function manualFromExport(
       const m = /^CustomFunctionName="([^"]*)"/.exec(h);
       if (m?.[1] !== undefined) name = m[1];
     }
-    if (name !== null) events.push({ name, params: userPins(n).outs });
+    if (name !== null) events.push({ name, params: userPins(n).outs.map((p) => ({ name: p.name, type: legacyStubType(p.type) })) });
   }
   const functions: ManualAsset["functions"] = [];
   if (Array.isArray(st.functions)) {
@@ -79,7 +88,7 @@ export function manualFromExport(
     classPath: `${asset}.${short}_C`,
     meta,
     parent: ex.parentClass,
-    variables: ex.variables.map((v) => ({ name: v.name, type: v.type })),
+    variables: ex.variables.map((v) => ({ name: v.name, type: legacyStubType(v.type) })),
     widgets: ex.widgets.filter((w) => w.isVariable && !ex.variables.some((v) => v.name === w.name)).map((w) => ({ name: w.name, cls: w.cls })),
     functions,
     events,

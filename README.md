@@ -6,7 +6,7 @@ Repository: https://github.com/EmekC/abf-blueprint-ts
 
 ## Status
 
-Phases 0 to 2 are done: abfc builds, tests and gates the full Blueprint logic (actors and components) of a real mod from TypeScript. Phase 3 (widgets) is implemented, with the manual in-game HUD check still pending; see the roadmap.
+Phases 0 to 2 are done: abfc builds, tests and gates the full Blueprint logic (actors and components) of a real mod from TypeScript. Phase 3 (widgets) is implemented, with the manual in-game HUD check still pending; see the roadmap. Phase 4 implemented; stage audit pending.
 
 - [docs/design.md](docs/design.md): goals, workflow, compiler architecture, backend interface, safety rules and open questions.
 - [docs/roadmap.md](docs/roadmap.md): the phased plan.

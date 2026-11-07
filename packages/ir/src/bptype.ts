@@ -8,7 +8,17 @@ export class BpTypeError extends Error {
 }
 
 export type BpContainer = "None" | "Array" | "Set" | "Map";
-export interface ParsedBpType { cat: string; sub: string; path: string | null; container: BpContainer }
+export interface ParsedBpType {
+  cat: string;
+  sub: string;
+  path: string | null;
+  container: BpContainer;
+  /** Value type of a `map:<K>:<V>` (`cat`/`sub` describe the key); absent for every other type. */
+  value?: ParsedBpType;
+}
+
+/** Key types of maps and element types of sets (a subset of what the backend grammar accepts). */
+const KEY_TYPES = new Set(["int", "int64", "byte", "name", "string"]);
 
 const SIMPLE: Record<string, [string, string]> = {
   exec: ["exec", ""], int: ["int", ""], int64: ["int64", ""], bool: ["bool", ""], byte: ["byte", ""],
@@ -30,7 +40,27 @@ export function parseBpType(t: string): ParsedBpType {
   }
   const colon = t.indexOf(":");
   const head = colon < 0 ? t : t.slice(0, colon);
-  if (head === "set" || head === "map") throw new BpTypeError(`${head} types are not supported (arrays only): ${t}`);
+  if (head === "map") {
+    const rest = t.slice(4);
+    const sep = rest.indexOf(":");
+    const key = sep < 0 ? rest : rest.slice(0, sep);
+    if (sep < 0 || !KEY_TYPES.has(key)) {
+      throw new BpTypeError(`map types are map:<key>:<value> with a key type of int int64 byte name string: ${t}`);
+    }
+    const value = parseBpType(rest.slice(sep + 1));
+    if (value.container !== "None") throw new BpTypeError(`nested containers are not supported: ${t}`);
+    if (value.cat === "exec") throw new BpTypeError(`a map value cannot be exec: ${t}`);
+    const k = SIMPLE[key] as [string, string];
+    return { cat: k[0], sub: k[1], path: null, container: "Map", value };
+  }
+  if (head === "set") {
+    const elem = t.slice(4);
+    if (!KEY_TYPES.has(elem)) {
+      throw new BpTypeError(`set types are set:<type> with an element type of int int64 byte name string: ${t}`);
+    }
+    const k = SIMPLE[elem] as [string, string];
+    return { cat: k[0], sub: k[1], path: null, container: "Set" };
+  }
   const simple = Object.hasOwn(SIMPLE, t) ? SIMPLE[t] : undefined;
   if (simple) return { cat: simple[0], sub: simple[1], path: null, container: "None" };
   const objCat = Object.hasOwn(OBJ_KINDS, head) ? OBJ_KINDS[head] : undefined;
@@ -42,7 +72,7 @@ export function parseBpType(t: string): ParsedBpType {
   if (objCat !== undefined) throw new BpTypeError(`type "${head}" needs a path, e.g. ${head}:/Script/Engine.Actor`);
   throw new BpTypeError(
     `unknown type ${JSON.stringify(t)} (exec int int64 bool byte name string text real double float ` +
-    "object:<path> class:<path> softobject:<path> softclass:<path> interface:<path> struct:<path> enum:<path> array:<type>)",
+    "object:<path> class:<path> softobject:<path> softclass:<path> interface:<path> struct:<path> enum:<path> array:<type> map:<key>:<type> set:<type>)",
   );
 }
 
@@ -64,6 +94,8 @@ export function bpTypeFromPin(p: {
   subCategory: string;
   subCategoryObject: string | null;
   container: string;
+  /** Value type of a map pin or variable (`PinValueType`); `category` is then the key type. */
+  valueType?: { category: string; subCategory: string; subCategoryObject: string | null } | null;
 }): string {
   const path = p.subCategoryObject;
   let inner: string;
@@ -84,5 +116,12 @@ export function bpTypeFromPin(p: {
   }
   if (p.container === "None" || p.container === "") return inner;
   if (p.container === "Array") return `array:${inner}`;
-  throw new BpTypeError(`${p.container.toLowerCase()} containers are not supported (arrays only)`);
+  if (p.container === "Set" || p.container === "Map") {
+    if (!KEY_TYPES.has(inner)) throw new BpTypeError(`${p.container.toLowerCase()} key/element type "${inner}" is not supported`);
+    if (p.container === "Set") return `set:${inner}`;
+    if (!p.valueType) throw new BpTypeError("map pin has no value type");
+    const v = bpTypeFromPin({ ...p.valueType, container: "None", valueType: null });
+    return `map:${inner}:${v}`;
+  }
+  throw new BpTypeError(`unknown container "${p.container}"`);
 }

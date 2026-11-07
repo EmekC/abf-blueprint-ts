@@ -157,6 +157,22 @@ export class BackendSession {
   }
 }
 
+/**
+ * The assets (package paths under `/<mod>/`) that have no file in the stage: `<stagingPath>\Content\<path under /<mod>/>.uasset`
+ * does not exist. An empty `stagingPath` (a backend that does not report it) means nothing is judged missing.
+ */
+export function missingInStage(ctx: CliContext, stagingPath: string, assets: string[]): Set<string> {
+  const out = new Set<string>();
+  if (stagingPath === "") return out;
+  const prefix = `/${ctx.config.mod.name}/`;
+  for (const a of assets) {
+    if (!a.startsWith(prefix)) continue;
+    const file = win32.join(stagingPath, "Content", ...a.slice(prefix.length).split("/")) + ".uasset";
+    if (!ctx.deps.host.exists(file)) out.add(a);
+  }
+  return out;
+}
+
 /** `bp_read` of an asset and the parsed export. */
 export async function readAsset(ctx: CliContext, backend: Backend, asset: string): Promise<{ text: string; parsed: T3dExport }> {
   const snap = await backend.read(ctx.config.mod.name, asset);
