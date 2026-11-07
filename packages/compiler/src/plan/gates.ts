@@ -1,4 +1,5 @@
 import type { Diagnostic, IrModule, Span } from "@abfc/ir";
+import { EVENT_META_MAX, isClamped } from "../lower/eventmeta.js";
 
 /** The part of the backend capabilities the feature gates look at (structural, so the compiler does not depend on the backend package). */
 export interface GateCapabilities {
@@ -37,6 +38,24 @@ export function featureGates(ir: IrModule, caps: GateCapabilities): Diagnostic[]
     for (const v of a.variables) check(v.type, a.path, v.origin);
     for (const v of a.structFields ?? []) check(v.type, a.path, v.origin);
     for (const u of a.units) {
+      if (u.kind === "event") {
+        const entry = u.nodes.find((n) => n.sem?.k === "event");
+        const meta = entry?.sem?.k === "event" ? entry.sem.meta : undefined;
+        if (meta !== undefined) {
+          for (const field of ["tooltip", "category", "keywords"] as const) {
+            const value = meta[field];
+            if (value !== undefined && isClamped(value)) {
+              out.push({
+                severity: "warning",
+                code: "ABFC2072",
+                asset: a.path,
+                span: u.origin,
+                message: `the doc comment of @event ${u.name} is longer than ${EVENT_META_MAX} characters; its Blueprint ${field} is cut to ${EVENT_META_MAX}.`,
+              });
+            }
+          }
+        }
+      }
       if (u.kind === "event" && caps.eventMeta !== true) {
         const entry = u.nodes.find((n) => n.sem?.k === "event");
         if (entry?.sem?.k === "event" && entry.sem.meta !== undefined) {

@@ -3,11 +3,12 @@ import { win32 } from "node:path";
 import type { Backend } from "@abfc/backend";
 import { buildHir, loadProgram, lowerChecked } from "@abfc/compiler";
 import type { HirProgram, LoadedProgram } from "@abfc/compiler";
-import { AbfcError, envWarning } from "@abfc/env";
+import { AbfcError } from "@abfc/env";
 import { parseExport } from "@abfc/ir";
 import type { BackendInfo, Diagnostic, IrModule, T3dExport } from "@abfc/ir";
 import { checkLock, readLock } from "@abfc/stubgen";
 import type { CliContext } from "../context.js";
+import { backendInfoDiagnostics } from "./backend-version.js";
 import { formatTimings, recordRun } from "../runs.js";
 import type { RunEntry } from "../runs.js";
 
@@ -82,27 +83,12 @@ export function countUnits(ir: IrModule): number {
   return ir.assets.reduce((n, a) => n + a.units.length, 0);
 }
 
-/** Problems of the backend's `backend_info`: warning ABFC4012 (none), error ABFC4001 (protocol too old, thrown). */
+/** Problems of the backend's `backend_info`: warnings ABFC4012 (none) and ABFC4014 (older than the minimum), error ABFC4001 (protocol too old, thrown). */
 function checkProtocol(ctx: CliContext, info: BackendInfo): void {
   const { config, env, output } = ctx;
-  if (info.protocol === null) {
-    output.diag(
-      envWarning(
-        4012,
-        `the backend at ${env.backendDir.value ?? "?"} (server ${info.serverVersion}) has no backend_info tool (older abf-mod-editor-mcp).`,
-        [],
-        "update the backend to a version with backend_info; until then wildcard pins use the two-phase fallback.",
-      ),
-    );
-  } else if (info.protocol < config.backend.minProtocol) {
-    throw new AbfcError({
-      severity: "error",
-      code: "ABFC4001",
-      message:
-        `abf-mod-editor-mcp at ${env.backendDir.value ?? "?"} (server ${info.serverVersion}) reports protocol ${info.protocol}; ` +
-        `abfc needs protocol >= ${config.backend.minProtocol}. Update it (see docs/backend.md).`,
-      fix: "update the abf-mod-editor-mcp checkout.",
-    });
+  for (const d of backendInfoDiagnostics(info, config.backend.minProtocol, env.backendDir.value ?? "?")) {
+    if (d.severity === "error") throw new AbfcError(d);
+    output.diag(d);
   }
 }
 

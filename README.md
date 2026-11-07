@@ -10,6 +10,7 @@ Phases 0 to 2 are done: abfc builds, tests and gates the full Blueprint logic (a
 
 - [docs/design.md](docs/design.md): goals, workflow, compiler architecture, backend interface, safety rules and open questions.
 - [docs/roadmap.md](docs/roadmap.md): the phased plan.
+- [docs/backend.md](docs/backend.md): the backend (abf-mod-editor-mcp 2.4.0 or newer): install, settings, capabilities and diagnostics.
 
 ### Packages
 
@@ -38,9 +39,9 @@ npm test
 
 ### Backend
 
-`ABFC_BACKEND_DIR` must point at a checkout of `EmekC/abf-mod-editor-mcp` that has the abfc tools. Until they are merged, that is the `abfc-p1-backend` branch; abfc starts the server with `ABF_ABFC_TOOLS=1`, which switches on the opt-in `abfc_extensions` and `reflect` tools.
+abfc needs `EmekC/abf-mod-editor-mcp` 2.4.0 or newer (tag `v2.4.0`). Point `ABFC_BACKEND_DIR` (or `--backend-dir`, or `backend.serverDir` in `abf.config.json`) at a checkout; abfc starts the server with `ABF_ABFC_TOOLS=1` for its opt-in tools. Install, settings, `abfc doctor`, capabilities and diagnostics are in [docs/backend.md](docs/backend.md).
 
-Wildcard pins (array length, array item, casts) use one apply when the backend's `backend_info` reports `pin_types` (branch `abfc-wildcard-pins`). Without `backend_info`, abfc prints warning ABFC4012 and uses the two-phase fallback (apply, patch the rolled-back graph, apply it again as a raw block), which costs about 10-20 s more per build.
+A server older than 2.4.0 gets warning ABFC4014 (a protocol below 1 is error ABFC4001). Without `backend_info`, abfc prints warning ABFC4012 and wildcard pins use the two-phase fallback (apply, patch the rolled-back graph, apply it again as a raw block), which costs about 10-20 s more per build.
 
 `abfc publish` builds and copies the built assets into the mod named in `abf.config.json` (about 30 s with a warm build; the Mod Editor may stay open with the mod loaded, stop Play In Editor first). Every publish backs up the replaced files first. `abfc publish --full` also runs the game tests, the stage audit and the upload file check: use it before an upload to mod.io. `--dry-run` lists what would be copied.
 

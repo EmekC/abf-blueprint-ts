@@ -155,10 +155,12 @@ export const ALL_TOOLS = [
 ];
 
 /** `backend_info` in the shape of the wildcard-pins branch. */
-export function fixInfo(over: { protocol?: number; headlessDir?: string; documentsDir?: string; pinTypes?: boolean } = {}): Record<string, unknown> {
+export function fixInfo(
+  over: { protocol?: number; serverVersion?: string; headlessDir?: string; documentsDir?: string; pinTypes?: boolean } = {},
+): Record<string, unknown> {
   return {
     protocol: over.protocol ?? 1,
-    serverVersion: "fake-1",
+    serverVersion: over.serverVersion ?? "fake-1",
     editorRoot: null,
     headlessDir: over.headlessDir ?? "C:\\abfc-headless",
     documentsDir: over.documentsDir ?? "C:\\Users\\Jane\\Documents",

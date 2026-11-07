@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { IrModule, IrNode, Profile } from "@abfc/ir";
 import { buildHir, featureGates, loadProgram, lower } from "../src/index.js";
-import { eventMetaOf } from "../src/lower/eventmeta.js";
+import { EVENT_META_MAX, clampMeta, eventMetaOf, isClamped } from "../src/lower/eventmeta.js";
 
 // compiled to packages/compiler/dist/test/ -> packages/compiler/test/fixtures/project and packages/env/profiles
 const projectDir = fileURLToPath(new URL("../../test/fixtures/project", import.meta.url));
@@ -77,4 +77,42 @@ test("gate: ABFC2071 once per documented event without event_meta, none with it"
   assert.deepEqual(featureGates(documented, { ...caps, eventMeta: false }).map((d) => d.code), ["ABFC2071"]);
   assert.deepEqual(featureGates(documented, { ...caps, eventMeta: true }), []);
   assert.deepEqual(featureGates(plain, caps), []);
+});
+
+test("clampMeta: 2000 code points, cut values end with '...', astral characters count once", () => {
+  const long = eventMetaOf("x".repeat(2500))!;
+  assert.equal(Array.from(long.tooltip!).length, EVENT_META_MAX);
+  assert.ok(long.tooltip!.endsWith("..."));
+  assert.equal(long.tooltip, "x".repeat(1997) + "...");
+  assert.equal(clampMeta("x".repeat(2000)), "x".repeat(2000));
+
+  const grin = "\u{1F600}";
+  const astral = eventMetaOf(grin.repeat(1999))!;
+  assert.equal(astral.tooltip, grin.repeat(1999));
+  assert.equal(isClamped(astral.tooltip!), false);
+  const cut = eventMetaOf(grin.repeat(2001))!;
+  assert.equal(Array.from(cut.tooltip!).length, 2000);
+  assert.equal(cut.tooltip, grin.repeat(1997) + "...");
+  assert.equal(isClamped(cut.tooltip!), true);
+
+  const tags = eventMetaOf(`short\n@category ${"c".repeat(2100)}\n@keywords ${"k".repeat(2100)}`)!;
+  assert.equal(tags.tooltip, "short");
+  assert.equal(Array.from(tags.category!).length, 2000);
+  assert.equal(Array.from(tags.keywords!).length, 2000);
+  assert.ok(tags.category!.endsWith("...") && tags.keywords!.endsWith("..."));
+});
+
+test("gate: ABFC2072 per clamped field of an event, even with event_meta; none for short docs", () => {
+  const caps = { containerTypes: { map: true, set: true }, createKinds: ["Blueprint"], eventMeta: true };
+  const clamped = lowerWithDoc(`  /** ${"t".repeat(2500)} */`);
+  const sem = entry(clamped).sem!;
+  assert.equal(sem.k === "event" ? Array.from(sem.meta?.tooltip ?? "").length : 0, 2000);
+  const warned = featureGates(clamped, caps);
+  assert.deepEqual(warned.map((d) => [d.code, d.severity, d.asset]), [["ABFC2072", "warning", "/TestMod/Relay/BP_Relay"]]);
+  assert.match(warned[0]!.message, /@event UpdateTarget is longer than 2000 characters; its Blueprint tooltip is cut to 2000/);
+  assert.ok(warned[0]!.span);
+  assert.deepEqual(featureGates(lowerWithDoc("  /** Updates the target. */"), caps), []);
+  assert.deepEqual(featureGates(lowerWithDoc(null), caps), []);
+  // without event_meta the not-written warning comes too
+  assert.deepEqual(featureGates(clamped, { ...caps, eventMeta: false }).map((d) => d.code), ["ABFC2072", "ABFC2071"]);
 });

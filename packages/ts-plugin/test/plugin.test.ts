@@ -274,3 +274,29 @@ test("stub filtering applies to a program built before the service module loaded
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("code fixes sync the stub filter first, like diagnostics and hover", async () => {
+  const dir = copyFixture("project", (d) => rmSync(join(d, "src", "Bad.ts")));
+  try {
+    const retired = join(dir, ".abfc", "stubs", "test", "retired.json");
+    const { made, dirtied, markAsDirty } = createVersionedLs(dir);
+    const relay = fwd(join(dir, "src", "Relay.ts"));
+    writeFileSync(retired, "{}", "utf8");
+    const created = plugin({ typescript: ts }).create({
+      languageService: made.ls,
+      languageServiceHost: made.host,
+      project: { getCurrentDirectory: () => dir, projectService: { logger: { info: () => undefined } }, markAsDirty },
+      config: {},
+    });
+    await plugin.whenReady();
+
+    // a manifest change is noticed by a code fix request alone, once the one-second token cache has expired
+    writeFileSync(retired, retiredHideAll, "utf8");
+    const before = dirtied();
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    created.getCodeFixesAtPosition(relay, 0, 1, [2010], {}, {});
+    assert.ok(dirtied() > before, "the code fix request marked the project dirty");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

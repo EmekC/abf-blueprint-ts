@@ -81,6 +81,33 @@ test("backend_info protocol 0: ABFC4001 and exit 2", async () => {
   assert.match(out, /error ABFC4001: .*protocol 0.*abfc needs protocol >= 1/);
 });
 
+test("backend 2.3.0: warning ABFC4014, exit 0", async () => {
+  const fake = fakeEnvironmentFiles({ headlessDir: "C:\\abfc-headless" });
+  const cap = captureDeps(fake, async () =>
+    scriptedBackend(ALL_TOOLS, { backend_info: fixInfo({ serverVersion: "2.3.0" }), abfc_extensions: EXT }),
+  );
+  const code = await main(["doctor"], cap.deps);
+  const out = cap.text();
+  assert.equal(code, 0, out);
+  assert.match(out, /warning ABFC4014: .*server 2\.3\.0; abfc needs 2\.4\.0 or newer/);
+  assert.match(out, /\(minimum 2\.4\.0\)/);
+  assert.doesNotMatch(out, /ABFC4012|ABFC4001/);
+});
+
+test("backend 2.4.0 and v2.10.1: no ABFC4014; the minimum is printed", async () => {
+  for (const serverVersion of ["2.4.0", "v2.10.1"]) {
+    const fake = fakeEnvironmentFiles({ headlessDir: "C:\\abfc-headless" });
+    const cap = captureDeps(fake, async () =>
+      scriptedBackend(ALL_TOOLS, { backend_info: fixInfo({ serverVersion }), abfc_extensions: EXT }),
+    );
+    const code = await main(["doctor"], cap.deps);
+    const out = cap.text();
+    assert.equal(code, 0, out);
+    assert.doesNotMatch(out, /ABFC4014/);
+    assert.match(out, /\(minimum 2\.4\.0\)/);
+  }
+});
+
 test("backend without bp_apply: ABFC4001 and exit 2", async () => {
   const fake = fakeEnvironmentFiles({ headlessDir: "C:\\abfc-headless" });
   const tools = ALL_TOOLS.filter((t) => t !== "bp_apply");

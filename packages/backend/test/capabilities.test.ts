@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BP_APPLY_P1_BASE, NATIVE_POLICY, capabilitiesFrom } from "../src/index.js";
+import { BP_APPLY_P1_BASE, MIN_BACKEND_VERSION, NATIVE_POLICY, capabilitiesFrom, compareServerVersion } from "../src/index.js";
 import type { RawBackendInfo } from "../src/index.js";
 
 const ALL_TOOLS = [
@@ -125,4 +125,20 @@ test("eventMeta follows the bp_apply feature event_meta", () => {
   assert.equal(capabilitiesFrom(ALL_TOOLS, withFeature, EXT).eventMeta, true);
   assert.equal(capabilitiesFrom(ALL_TOOLS, FIX_INFO, EXT).eventMeta, false);
   assert.equal(capabilitiesFrom(ALL_TOOLS, null, EXT).eventMeta, false);
+});
+
+test("compareServerVersion: older, equal, newer, a leading v, and unparseable versions", () => {
+  assert.equal(compareServerVersion("2.3.0", MIN_BACKEND_VERSION), -1);
+  assert.equal(compareServerVersion("2.4.0", MIN_BACKEND_VERSION), 0);
+  assert.equal(compareServerVersion("v2.10.0", MIN_BACKEND_VERSION), 1);
+  assert.equal(compareServerVersion("3.0.0-rc1", MIN_BACKEND_VERSION), 1);
+  assert.equal(compareServerVersion("fake-1", MIN_BACKEND_VERSION), null);
+  assert.equal(compareServerVersion("unknown", MIN_BACKEND_VERSION), null);
+  assert.equal(MIN_BACKEND_VERSION, "2.4.0");
+});
+
+test("compileErrorNodeRefs comes from backend_info without the abfc_extensions tool", () => {
+  const info: RawBackendInfo = { ...FIX_INFO, capabilities: { ...FIX_INFO.capabilities, compileErrorNodeRefs: true } };
+  assert.equal(capabilitiesFrom(ALL_TOOLS, info, null).compileErrorNodeRefs, true);
+  assert.equal(capabilitiesFrom(ALL_TOOLS, FIX_INFO, null).compileErrorNodeRefs, false);
 });

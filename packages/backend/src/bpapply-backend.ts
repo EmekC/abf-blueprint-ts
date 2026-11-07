@@ -169,7 +169,7 @@ export class BpApplyBackend implements Backend {
       id: "bp_apply",
       serverVersion: str(raw?.serverVersion) ?? extServerVersion ?? "unknown",
       protocol: raw === null ? null : typeof raw.protocol === "number" ? raw.protocol : null,
-      engineVersion: null,
+      engineVersion: str(raw?.engineVersion),
       editorRoot: str(raw?.editorRoot),
       headlessDir,
       documentsDir: str(raw?.documentsDir),
