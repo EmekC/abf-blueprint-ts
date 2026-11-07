@@ -42,7 +42,8 @@ If you want to be sure the file is the one the project published, [verify the do
 `abfc-<version>-win-x64.zip` from the same releases page holds the same files without an installer: `abfc.exe`, `README.txt`, `LICENSE.txt`, `THIRD-PARTY-NOTICES.txt` and `abfc-vscode-<version>.vsix`.
 
 1. Right-click the zip, choose **Properties**, tick **Unblock** if it is offered, then extract it to a folder you keep, for example `%LOCALAPPDATA%\Programs\abfc`.
-2. Either add that folder to your `PATH` (Settings, System, About, Advanced system settings, Environment Variables, the `Path` of your user) or run `abfc.exe` by its full path.
+   From PowerShell the extraction is one command (`Expand-Archive .\abfc-<version>-win-x64.zip -DestinationPath $env:LOCALAPPDATA\Programs\abfc`).
+2. Either add that folder to your `PATH` (Settings, System, About, Advanced system settings, Environment Variables, the `Path` of your user) or run `abfc.exe` by its full path. To try abfc in one PowerShell window only, set `$env:PATH = "<folder>;$env:PATH"` there; it lasts until the window is closed. Then run `abfc --version` as described under [Installer](#installer).
 3. For VS Code, install the extension file once:
 
 ```
