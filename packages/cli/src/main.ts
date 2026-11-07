@@ -15,6 +15,7 @@ import { test } from "./commands/test.js";
 import { loadContext } from "./context.js";
 import type { CliContext, CliDeps } from "./context.js";
 import { Output } from "./output.js";
+import { ABFC_VERSION } from "./version.js";
 
 export type CommandFn = (ctx: CliContext) => Promise<number>;
 
@@ -31,12 +32,13 @@ export const COMMANDS: Record<string, CommandFn> = {
 
 const USAGE = [
   "usage: abfc <command> [options]",
-  "commands: init, lsp, " + Object.keys(COMMANDS).join(", "),
+  "commands: init, lsp, version, " + Object.keys(COMMANDS).join(", "),
   "options: --json --verbose --project <dir> --editor-root <dir> --mods-dir <dir> --mod-dir <dir>",
   "         --backend-dir <dir> --python <exe> --headless-dir <dir> --timings --resync --no-build --yes --dry-run --full --discard-editor-changes --cold --watch (check)",
   "doctor:  abfc doctor [--deep] [--clean-runtimes]",
   "init:    abfc init [dir] [--mod <name>] [--yes] [--no-stubs] [--mods-dir <dir>] [--editor-root <dir>] [--backend-dir <dir>] [--python <exe>]",
   "lsp:     abfc lsp [--stdio]   language server over stdio (docs/language-service.md)",
+  "version: abfc version [--json] | abfc --version",
 ];
 
 export function defaultDeps(): CliDeps {
@@ -66,6 +68,20 @@ export async function main(argv: string[], deps: CliDeps = defaultDeps()): Promi
   }
 
   const command = args.command;
+  if (args.flags.version && command !== null && command !== "version") {
+    err(`abfc: error: --version is not an option of abfc ${command}`);
+    for (const l of USAGE) err(l);
+    return 2;
+  }
+  if (command === "version" || args.flags.version) {
+    const kind = deps.install?.info().kind ?? "source";
+    if (args.flags.json) {
+      out(JSON.stringify({ version: ABFC_VERSION, install: kind, node: process.versions.node }));
+    } else {
+      out(`abfc ${ABFC_VERSION} (${kind === "exe" ? "exe" : "source install"}, node ${process.versions.node})`);
+    }
+    return 0;
+  }
   if (command === null) {
     for (const l of USAGE) out(l);
     return 0;

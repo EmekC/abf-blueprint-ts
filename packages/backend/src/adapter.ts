@@ -181,7 +181,7 @@ export function renderMainSpec(a: AssetPlan, caps: BackendCapabilities, profile:
       if (entry === undefined) {
         throw new AbfcError({
           severity: "error",
-          code: "ABFC4012",
+          code: "ABFC4015",
           message: `${u.unit.id}: the event ${w.toUnit} that supplies its delegate is neither in this build nor recorded in the manifest.`,
           span: u.unit.origin,
         }, 2);

@@ -32,6 +32,8 @@ export interface CliFlags {
   deep: boolean;
   /** `--clean-runtimes`: `abfc doctor` deletes the old extracted runtime folders (works outside a project). */
   cleanRuntimes: boolean;
+  /** `--version`: print the abfc version (same as `abfc version`). */
+  version: boolean;
 }
 
 export interface ParsedArgs {
@@ -81,6 +83,7 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
         "no-stubs": { type: "boolean" },
         deep: { type: "boolean" },
         "clean-runtimes": { type: "boolean" },
+        version: { type: "boolean" },
         // `abfc lsp` accepts what language clients add; the values are ignored
         stdio: { type: "boolean" },
         clientProcessId: { type: "string" },
@@ -119,6 +122,7 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
       noStubs: v["no-stubs"] === true,
       deep: v.deep === true,
       cleanRuntimes: v["clean-runtimes"] === true,
+      version: v.version === true,
     },
   };
 }

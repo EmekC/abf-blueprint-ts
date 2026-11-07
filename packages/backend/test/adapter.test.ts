@@ -140,6 +140,19 @@ test("removeNodes are passed through to the graph", () => {
   assert.deepEqual(renderMainSpec(p.assets[0]!, caps(true, true), profile).graphs![0]!.remove, ["K2Node_A", "K2Node_B"]);
 });
 
+test("a cross-wire to an event that is neither in the plan nor recorded in the manifest is ABFC4015 (exit 2)", () => {
+  const a = planOf(ir).assets[0]!;
+  const first = a.units[0]!;
+  const broken = {
+    ...a,
+    units: [{ ...first, unit: { ...first.unit, crossWires: [{ toUnit: "event:Missing", from: "n1.then", to: "n2.execute" }] } }],
+  };
+  assert.throws(
+    () => renderMainSpec(broken, caps(true, true), profile),
+    (e: unknown) => e instanceof AbfcError && e.diagnostic.code === "ABFC4015" && e.exitCode === 2,
+  );
+});
+
 test("tag spec: one comment box per unit, above and left of the origin", () => {
   const spec = renderTagSpec(asset, asset.units, profile);
   assert.equal(spec.asset, asset.asset);

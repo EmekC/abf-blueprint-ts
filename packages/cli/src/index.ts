@@ -3,6 +3,7 @@ export * from "./output.js";
 export * from "./context.js";
 export * from "./runs.js";
 export * from "./main.js";
+export * from "./version.js";
 export { doctor } from "./commands/doctor.js";
 export { stubs } from "./commands/stubs.js";
 export { ensureStage } from "./commands/stage.js";
