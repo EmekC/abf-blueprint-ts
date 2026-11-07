@@ -29,52 +29,54 @@ Non-goals (phase 1)
 The mod project (the `.uplugin` folder, usually `<Documents>\Abiotic Factor Mods\<Mod>`) and the TS project are separate folders. `abfc init` refuses to create a TS project inside a mod folder: it walks up from the target and fails if any ancestor holds a `.uplugin`.
 
 ```
-example-mod-ts/                   # TS project, its own git repo
-  abf.config.json                 # project config, committed, no machine paths
-  package.json                    # devDependencies: @abfc/cli, typescript (exact), engines.node
-  .nvmrc                          # 24
-  tsconfig.json                   # strict, paths -> .abfc/stubs, plugin @abfc/ts-plugin
-  eslint.config.js                # @abfc/eslint-plugin recommended
-  src/
-    PotInfoRelay.ts               # @blueprint classes
-    PotInfoRelay.test.ts          # compiled to bp_game_test steps
+example-mod-ts/                   # TS project, its own git repo, linked to exactly one mod
+  abf.config.json                 # project config (schema 2), committed, names the mod, no machine paths
+  tsconfig.json                   # strict, extends .abfc/tsconfig.paths.json (no tsserver plugin since 1.0)
+  src/                            # sourceRoot: the folder layout below it IS the asset layout (section 18.1)
+    Relays/MyRelay.ts             # @blueprint() class MyRelay -> /<mod>/Relays/MyRelay
+    Relays/MyRelay.test.ts        # compiled to bp_game_test steps (test files never define assets)
   .abfc/                          # gitignored except manifest/
+    tsconfig.paths.json           # per machine: /Script/*, /Game/*, @mod/*, @abfc/runtime, @abfc/testkit
     stubs/<profileId>/...         # generated per machine (never committed)
-    manifest/<asset>.json         # ownership + hashes (committed)
+    manifest/<asset>.json         # ownership + hashes + recorded source file (committed)
     sourcemap/<asset>.json        # IR id <-> TS span <-> real node name
     cache/                        # incremental build cache, env discovery cache
+    reports/                      # manual-checks.md
     runs.jsonl                    # timings of every build step
-  .vscode/tasks.json, settings.json   # written by abfc init
+  .vscode/tasks.json, extensions.json   # written by abfc init when absent
 ```
 
-`abfc init` writes `.gitignore` with `.abfc/stubs/`, `.abfc/cache/`, `.abfc/sourcemap/`, `.abfc/runs.jsonl`, `node_modules/`.
+No `package.json` and no `node_modules` are needed: the types of `@abfc/runtime` and `@abfc/testkit` come from the abfc install through `.abfc/tsconfig.paths.json` (section 18.8). A source install (npm or git) works the same way. `abfc init` (section 18.5) writes `.gitignore` with `.abfc/stubs/`, `.abfc/cache/`, `.abfc/sourcemap/`, `.abfc/sourcemaps/`, `.abfc/reports/`, `.abfc/runs.jsonl`, `.abfc/tsconfig.paths.json`, `node_modules/`.
 
 ### 2.2 `abf.config.json` (project, committed)
 
 ```json
 {
-  "$schema": "./node_modules/@abfc/cli/schema/abf.config.schema.json",
+  "schemaVersion": 2,
   "mod": { "name": "ExampleMod" },
-  "sources": ["src/**/*.ts"],
+  "sourceRoot": "src",
+  "classManager": { "table": "DataTables/DT_ClassManager" },
   "stubs": {
     "classes": [
-      "/Game/Blueprints/Characters/Abiotic_PlayerCharacter.Abiotic_PlayerCharacter_C",
-      "/Game/Blueprints/DeployedObjects/Furniture/Deployed_PotOfSoup.Deployed_PotOfSoup_C"
+      "/Game/Blueprints/Characters/Abiotic_PlayerCharacter.Abiotic_PlayerCharacter_C"
     ],
-    "scriptModules": ["Engine", "CoreUObject", "UMG", "SlateCore", "AbioticFactor"],
-    "modAssets": "all"
+    "scriptClasses": ["/Script/Engine.Actor", "/Script/Engine.KismetSystemLibrary"],
+    "modAssets": "all",
+    "widgetMembers": {}
   },
   "backend": { "kind": "bp_apply", "minProtocol": 1 }
 }
 ```
 
-Machine-specific values (`editor.root`, `mod.dir`, `backend.serverDir`, `backend.python`, `headlessDir`) are allowed here but `abfc doctor` warns about them. Their normal home is the user config `%APPDATA%\abfc\config.json`, which has the same schema and is never committed.
+The full key list, validation, the schema-1 migration and the per-machine user config are in section 18.4. `mod.name` is the only place the mod's name appears in a project: switching the target mod (a test mod and the real mod, for example) is a change of that one value. Machine-specific values (`editor.root`, `modsDir`, `mod.dir`, `backend.serverDir`, `backend.python`, `headlessDir`) are still read here but `abfc doctor` warns about them (ABFC1021 warning). Their home is the user config `%APPDATA%\abfc\config.json` (or the file named by `ABFC_USER_CONFIG`), which `abfc init` writes and which is never committed.
 
 ### 2.3 CLI
 
 | Command | Needs editor | What it does |
 | --- | --- | --- |
-| `abfc init [dir]` | no | Scaffold the TS project, `.vscode` tasks and settings (`typescript.tsdk` -> workspace TS so the plugin loads), `.gitignore`. Refuses inside a mod folder. |
+| `abfc init [dir] [--mod <name>] [--yes] [--no-stubs]` | no (the installed editor for stubs) | Detects the Mod Editor and the mods folder, lists the mods, links one existing mod, writes the project files and the user config, runs `abfc stubs`, ends with `doctor` (section 18.5). Refuses inside a mod folder. Re-running upgrades a schema-1 config and fills in missing files. |
+| `abfc lsp [--stdio]` | no | Language server over stdio for any LSP editor (section 18.6). |
+| `abfc mv <asset> <new path>` | yes | Only if the headless move probe passes (section 18.2); otherwise not built and ABFC5012 offers the `path:` quick fix only. |
 | `abfc doctor` | no (yes with `--deep`) | Print every discovered path with its source (flag, env, config, auto) and the backend version and capabilities. `--deep` also runs one commandlet to read the engine version. |
 | `abfc stubs` | yes | Generate `.d.ts` stubs from editor reflection for the current editor build (section 5). |
 | `abfc check` | no | tsc, the TS subset checker and lowering to IR. No backend. Fast. `--watch` re-runs on every save (0.3 to 0.5 s on the test project) and cannot be combined with `--json`. ESLint (`@abfc/eslint-plugin`) runs separately, in the editor or with `eslint`; `abfc check` does not run it. |
@@ -89,8 +91,9 @@ Global flags: `--json` (machine-readable output for scripts and AI front ends), 
 
 ### 2.4 VS Code
 
-- Squiggles come from tsc plus `@abfc/ts-plugin`, which runs the same subset checker that `abfc check` uses.
-- Hover on a statement shows the Blueprint nodes it lowers to, and `@abfc/ts-plugin` offers quick fixes for `/` on integers (`idiv(a, b)`, ABFC2010) and for TypeScript's "possibly null" errors on a property access (`?.`, lowers to IsValid plus Branch). The plugin needs the workspace TypeScript (6.0.3, `typescript.tsdk`); VS Code's bundled TypeScript or TS 7 do not load it. Setup and limits: [language-service.md](language-service.md).
+- Since 1.0 the editor support is `abfc lsp` (section 18.6), started by the small VS Code extension shipped as a `.vsix` in the release (section 18.7). VS Code's own TypeScript service keeps doing completion, TypeScript errors and type hover; the abfc server adds the ABFC diagnostics (subset checker, lowering, tests, lock codes, the lint rules), the Blueprint-node hover and the quick fixes. The workspace TypeScript and `typescript.tsdk` are no longer needed.
+- Phase 5 to 6 (before 1.0): squiggles came from tsc plus `@abfc/ts-plugin`, a tsserver plugin running the same subset checker as `abfc check`; it needed the workspace TypeScript (6.0.3). The plugin is retired in 1.0 (section 18.6).
+- Hover on a statement shows the Blueprint nodes it lowers to. Quick fixes: `/` on integers (`idiv(a, b)`, ABFC2010), TypeScript's "possibly null" errors on a property access (`?.`, lowers to IsValid plus Branch), and the project-model fixes of section 18 (ABFC2005, ABFC2006, ABFC2008, ABFC2076, ABFC5012). Setup and limits: [language-service.md](language-service.md).
 - `@abfc/eslint-plugin` adds five lint rules (heavy calls, loops and unbounded array growth in tick, replicated writes without authority, RPC misuse), documented with examples in [lint-rules.md](lint-rules.md).
 - `abfc init` writes tasks `abfc: check` (watch), `abfc: build` and `abfc: test`, with a problem matcher for `^(.*\.ts):(\d+):(\d+): (error|warning) (ABFC\d+): (.*)$`.
 - Unreal compile errors and test failures show up in the Problems panel at the TS line that produced the failing node (section 8.6).
@@ -108,9 +111,13 @@ npm workspaces monorepo `abf-blueprint-ts`, built with `tsc -b`, tests on `node:
 | `@abfc/backend` | `Backend` interface, MCP-over-stdio client, the `bp_apply`, `import_nodes` and `paste_graph` adapters. | `@abfc/ir`, `@abfc/env` |
 | `@abfc/stubgen` | Reflection result -> `.d.ts` files plus stub lock. | `@abfc/backend`, `@abfc/env` |
 | `@abfc/testkit` | `*.test.ts` recorder -> bp_game_test steps. | `@abfc/ir` |
-| `@abfc/ts-plugin` | Language-service plugin that reuses `@abfc/compiler`'s subset checker. | `@abfc/compiler` |
+| `@abfc/ts-plugin` | Language-service plugin that reuses `@abfc/compiler`'s subset checker. Retired in 1.0 (replaced by `@abfc/lsp`; not published, not shipped; the folder is deleted in 7b once LSP parity passes). | `@abfc/compiler` |
+| `@abfc/lsp` (1.0) | Stdio language server behind `abfc lsp`: diagnostics, hover, code actions (section 18.6). | `@abfc/compiler`, `@abfc/env`, `@abfc/eslint-plugin`, `eslint` (`Linter` only), `@typescript-eslint/parser`, `vscode-languageserver` |
 | `@abfc/eslint-plugin` | Network and performance rules. | `@typescript-eslint/utils` |
 | `@abfc/cli` | `abfc` bin. Orchestration and diagnostics printing. | all |
+| `abfc-vscode` (1.0, `packages/vscode`, private) | The VS Code extension, built to a `.vsix`, never published to npm or the marketplace (section 18.7). | `vscode-languageclient` |
+
+Release builds (section 18.8, 18.10) bundle the CLI with esbuild into one CommonJS file for the Node single-executable `abfc.exe`, and the extension into one file for the `.vsix`. The npm packages themselves stay unbundled `tsc -b` output.
 
 Pipeline:
 
@@ -132,7 +139,7 @@ Type-checker isolation: `packages/compiler/src/frontend/` is the only code that 
 
 | TS | Blueprint |
 | --- | --- |
-| `@blueprint({path, parent?, replicates?, alwaysRelevant?, onlyRelevantToOwner?, netUpdateFrequency?, minNetUpdateFrequency?, tickInterval?, classManagerRow?}) class X extends Parent` | Blueprint asset at `path` (must be under `/<Mod>/`), parent class, class defaults applied in the class-defaults pass. `classManagerRow` names the DT_ClassManager row asset (verify-only: the class-defaults pass checks read-only that the row references this class and reports ABFC2070 as a warning otherwise; abfc does not create or change the row). Option values must be literals (ABFC2061); the actor-only options need an `Actor` parent (ABFC2062). `tickEnabled` is not supported yet: it is ABFC2063, because writing the saved `PrimaryActorTick.bStartWithTickEnabled` (not the CDO tick function's state, which is all `set_actor_tick_enabled` changes) has not been verified in the editor. |
+| `@blueprint({path?, parent?, replicates?, alwaysRelevant?, onlyRelevantToOwner?, netUpdateFrequency?, minNetUpdateFrequency?, tickInterval?, kind?, classManagerRow?}) class X extends Parent`, also `@blueprint()` | Since 1.0 the asset path is derived from the file's folder under `src/` and the class name (section 18.1); `path` is an optional override, relative to the mod (`"Relays/X"`) or, for older code, absolute under `/<Mod>/`. `@director("Row")` (section 18.3) replaces `classManagerRow`, which is deprecated (ABFC2076). Before 1.0: Blueprint asset at `path` (must be under `/<Mod>/`), parent class, class defaults applied in the class-defaults pass. `classManagerRow` names the DT_ClassManager row asset (verify-only: the class-defaults pass checks read-only that the row references this class and reports ABFC2070 as a warning otherwise; abfc does not create or change the row). Option values must be literals (ABFC2061); the actor-only options need an `Actor` parent (ABFC2062). `tickEnabled` is not supported yet: it is ABFC2063, because writing the saved `PrimaryActorTick.bStartWithTickEnabled` (not the CDO tick function's state, which is all `set_actor_tick_enabled` changes) has not been verified in the editor. |
 | Field `Score: int = 10` | Member variable with that default. `@replicated`, `@editable`, `@transient` set flags. |
 | Own field `Name!: T;` (also `Map<K,V>`, `Set<T>`) | Member variable owned by abfc, declared with `!` and no initializer, no defaults (a default or any other form is ABFC2047). The type of a field already in the manifest cannot change (ABFC2047). A field removed from the TS stays in the asset and the manifest, with warning ABFC5011 (delete it in the Mod Editor). |
 | `@override ReceiveTick(dt: double)` | `K2Node_Event` with `bOverrideFunction` (bp_apply `override`). The name must exist on a parent stub with `@bpPath`; parameters are typed from the stub; the unit id is `override:<Name>`. `abfc adopt <asset> override:<Name>` takes over a hand-made override event. |
@@ -496,7 +503,7 @@ Printed as `src/PotInfoRelay.ts:14:5: error ABFC6001: [Unreal] <message>`.
 
 ### 9.1 Precedence
 
-For every setting: **CLI flag > environment variable > project `abf.config.json` > user `%APPDATA%\abfc\config.json` > auto-discovery.** `abfc doctor` prints the winner and its source for each one.
+For every setting: **CLI flag > environment variable > project `abf.config.json` > user `%APPDATA%\abfc\config.json` > auto-discovery.** `abfc doctor` prints the winner and its source for each one. `ABFC_USER_CONFIG` (1.0) names a different user-config file (tests, portable setups). The user config is written by `abfc init` (section 18.4); a mod's folder is always `<mods folder>\<mod.name>` unless `--mod-dir`/`ABFC_MOD_DIR` says otherwise (the user config no longer gets `mod.dir`, because one machine can hold projects for several mods).
 
 | Setting | Flag | Env | Auto-discovery |
 | --- | --- | --- | --- |
@@ -504,8 +511,8 @@ For every setting: **CLI flag > environment variable > project `abf.config.json`
 | Documents | — | — | Known Folder `FOLDERID_Documents`. Node has no Win32 FFI without native addons, so (1) `backend_info` reports the server's `documents_dir()` (`SHGetFolderPathW`, follows redirection), and (2) without a backend, `reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders" /v Personal`, with `%VAR%` expanded. Never `%USERPROFILE%\Documents`. |
 | Mods folder | `--mods-dir` | `ABFC_MODS_DIR` | `<Documents>\Abiotic Factor Mods` (folder name from the profile) |
 | Mod dir | `--mod-dir` | `ABFC_MOD_DIR` | `<mods folder>\<mod.name>`, which must hold `<mod.name>.uplugin` |
-| Backend dir | `--backend-dir` | `ABFC_BACKEND_DIR` | none in phase 1 (explicit is required). Later: `abfc backend install` puts a pinned release in `%LOCALAPPDATA%\abfc\backend\<version>`. |
-| Python | `--python` | `ABFC_PYTHON` | `py -3` launcher, then `python` on PATH. Requires 3.9+. Rejects the Microsoft Store alias stub (`...\WindowsApps\python.exe`). |
+| Backend dir | `--backend-dir` | `ABFC_BACKEND_DIR` | `abfc.exe` (1.0): the pinned backend extracted from the executable, `%LOCALAPPDATA%\abfc\runtime\<abfc version>-<sha8>\backend` (section 18.8). Source install: none (explicit is required; `abfc init --backend-dir` writes it to the user config). There is no `abfc backend install` command. |
+| Python | `--python` | `ABFC_PYTHON` | `abfc.exe` (1.0): the bundled embeddable Python in `...\runtime\<abfc version>-<sha8>\python\python.exe`. Source install: `py -3` launcher, then `python` on PATH. Requires 3.9+. Rejects the Microsoft Store alias stub (`...\WindowsApps\python.exe`). |
 | Headless dir | `--headless-dir` | `ABF_HEADLESS_DIR` (passed through to the server) | the server's default `%LOCALAPPDATA%\abf-mod-editor-mcp\headless` |
 
 ### 9.2 Robustness rules
@@ -582,7 +589,7 @@ test("unowned relay stops ticking and never builds UI", async (t) => {
 4. `abfc test` passes (all tests; `knownIssue` rules as in section 11; `test.liveHud` tests are skipped with `ABFC6105` and do not fail the gate; they are listed in `.abfc/reports/manual-checks.md`).
 5. `mod_audit` with `stage: true` passes (capability `stageAudit`): the hidden editor is launched with an empty mods folder (redirected `USERPROFILE`, with junctions for `AppData\Local` and `AppData\Roaming` back to the real ones, because the editor hangs during startup without them) and only the staged copy as the recent entry (the tile is then the only one, at a fixed window coordinate tried first), and the backend checks the editor log that it mounted the requested mod (`picker mounted <other>` fails, one retry). Without `stageAudit` the gate prints warning ABFC7003 and audits the real mod folder. A result that is not `ok`, or an audited copy other than the stage under `stageAudit`, fails with ABFC7002 and the backend's reason. There is no bypass flag in phase 1 (open question 2).
 6. abfc's own upload file check, read-only, on the real mod folder and the stage folder (rules copied from the backend's `check_upload`: shippable file types, no `Saved`/`Intermediate`/`Binaries`/`DerivedDataCache`, no `.md` files). ABFC7010 per offending file (error), ABFC7012 for working folders and unknown types (warning). The `/Game` reference check of `check_upload` needs the retail asset list and is not repeated here.
-7. The would-publish list: `staging_status` changed and added files under `Content/` (no `_McpTest`/`_McpTmp`), restricted to assets that hold owned units, class defaults, a class manager row, an adoption, or units retired but not yet published (`retiredUnpublished`). `--dry-run` prints it and exits 0 in both modes; `bp_publish` is never sent with `--dry-run`.
+7. The would-publish list: `staging_status` changed and added files under `Content/` (no `_McpTest`/`_McpTmp`), restricted to assets that hold owned units, class defaults, a class manager row (since 1.0 also the row asset itself when abfc wrote it, section 18.3), an adoption, or units retired but not yet published (`retiredUnpublished`). `--dry-run` prints it and exits 0 in both modes; `bp_publish` is never sent with `--dry-run`.
 8. `bp_publish` for exactly the assets of the would-publish list, so staged edits that abfc does not own are never published. The backend copies Content only and backs the old files up outside the mod. When the list is empty abfc prints "nothing to publish." and calls nothing. Refusals: ABFC7004 compile errors (exit 1), ABFC7005 conflicts, Play In Editor, unsaved or locked assets (exit 3), ABFC7006 editor unreachable or a backup, copy or reload failure (exit 2), each with the backend's message and a fix. On the live-reload route abfc lists the referencers the editor reloaded and the assets left with unsaved changes after the reload, and prints warning ABFC7013 (exit 0) when the open editor logs Blueprint compile errors during the reload (the published files on disk are fine). Timed as `gate.8` (`--full`) or `publish.copy`; `publish.total` covers the whole command.
 
 abfc never uploads to mod.io and never offers to.
@@ -604,6 +611,7 @@ All items land in `EmekC/abf-mod-editor-mcp`. Each item is small and gated by a 
 6. `mod_audit` must audit the staged copy (in Phase 0 it mounted the real mod folder, so the P3, P6 and P7 audit results are not verified), and `bp_read` and reflect runs should return `seconds`: done (2.4.0).
 7. Single backend: the headless tools (bpkit, staging, headless runs) already live in `EmekC/abf-mod-editor-mcp`, which is the one supported backend. abfc checks `protocol` through `backend_info` and warns below the minimum server version (ABFC4014), and server version numbers are owned only by that repository. The backend has a CHANGELOG; the release is tagged `v2.4.0`.
 8. Metadata: reflect reads `ToolTip` and `DisplayName` through `get_metadata_tag` (done); `bp_apply` writes event tooltip, category and keywords through `event_meta` (done, clamped to 2000 code points by abfc with ABFC2072); function-graph metadata is a documented fallback (the engine drops it on import and Python cannot read compiled metadata). The route through a spawned call node was not probed: its title and tooltip come from the same function metadata, so it would not add information.
+9. Phase 7 (1.0): class-manager row writing in `bp_apply` (`class_manager_row` asset-spec key, capability `classManagerRows`, backend 2.5.0, section 18.3); the headless asset-move probe that decides `abfc mv` (section 18.2); a release layout the abfc release build can vendor (section 18.8: stdlib only, runs from an embeddable Python, no game-derived data required at runtime).
 
 ## 15. Security and safety
 
@@ -616,6 +624,8 @@ All items land in `EmekC/abf-mod-editor-mcp`. Each item is small and gated by a 
 - Nothing derived from Deep Field content is committed or published: stubs, the filter list and reflection caches are per machine and gitignored, and the public repo uses synthetic fixtures only. Docs may name base-game classes and members (as in the example in 4.3).
 - Run folders and logs can hold tokens (per the server README). abfc never copies them into the project, and prints paths, not contents.
 - Hidden processes are owned by the server (Job Object). abfc closes the server's stdin on exit and kills its process tree on Ctrl+C.
+- `abfc init` (1.0) writes only inside the target project folder and the one user-config file; it never writes into the mods folder or a mod folder, and it only links a mod that already exists. `abfc.exe` extracts its runtime only under `%LOCALAPPDATA%\abfc\runtime\`, verifies every extracted file against the sha256 list embedded at build time, and never downloads anything at run time (section 18.8).
+- Release artifacts are built from allowlists and scanned after the build for mod names, user paths and game-derived files (section 18.10).
 
 ## 16. Risks and open technical questions
 
@@ -639,10 +649,159 @@ All items land in `EmekC/abf-mod-editor-mcp`. Each item is small and gated by a 
 
 ## 17. Open questions for the user
 
-1. npm scope and package names: is `@abfc/*` acceptable (availability unchecked), and is the CLI name `abfc` final?
+1. npm scope and package names: is `@abfc/*` acceptable (availability unchecked), and is the CLI name `abfc` final? Needed before sub-milestone 7d publishes to npm (the VS Code extension id `abfc.abfc-vscode` and the installer AppId follow the answer).
 2. Release gate when `mod_audit` cannot run (fragile Mod Browser tile): fail closed with no bypass (current design), or allow `--no-audit` with a loud warning, since the upload runs the real audit anyway? Phase 2 narrowed the cause (the picker could mount an arbitrary mod from the user's mods folder; the stage audit now isolates the mods folder and verifies the mounted mod), and the stage audit passed live at the end of Phase 2 (`mounted` equal to the requested mod). The remaining risk is the fixed tile coordinate; the question stays open for a decision on a bypass flag.
 3. Manifest location: committed in the TS project (current design), so ownership travels with the source. Is the mod folder itself under version control anywhere, so the two can stay in step?
 4. Backend versioning: resolved. The user decided to use `EmekC/abf-mod-editor-mcp` entirely, with nothing from the original maintainer and no dependency on other repositories. The `backend_info` protocol number is kept as a capability check, and version numbers are owned by that repo.
+
+## 18. Public release 1.0 (Phase 7)
+
+Decisions are in docs/roadmap.md (Phase 7, "Decisions (2026-11-07)"). This section is the specification. Sub-milestones: 7a project model, `@director`, `abfc init` (18.1 to 18.5); 7b `abfc lsp` and the VS Code extension (18.6, 18.7); 7c `abfc.exe`, the bundled backend and Python, the installer (18.8, 18.9); 7d release hygiene, npm, docs and carry-overs (18.10 to 18.12).
+
+### 18.1 Derived asset paths
+
+Every `@blueprint` and `@struct` class gets its asset path from where its file is, so TypeScript source never names the mod.
+
+- Source root: `<project>\<sourceRoot>` (config `sourceRoot`, default `src`). Test files (`*.test.ts`) never define assets; their folder is free.
+- Rule: `/<mod.name>/` + the folder of the file relative to the source root (segments joined with `/`, none for a file directly in the source root) + `/` + the class name. `src/Relays/MyCustomRelay.ts` with `class MyCustomRelay` gives `/<mod>/Relays/MyCustomRelay`; `src/MyRelay.ts` gives `/<mod>/MyRelay`. Two classes in one file each derive from their own name. The object path of a struct is `<path>.<ClassName>`, the generated class of a Blueprint `<path>.<ClassName>_C` (unchanged).
+- `@blueprint()` and `@struct()` need no arguments. `@blueprint` without parentheses is a TypeScript error (the decorator is a factory).
+- Allowed characters, per folder segment and class name: ASCII letters, digits and `_` (`^[A-Za-z0-9_]+$`), at most 64 characters, not a Windows device name (`CON`, `PRN`, `AUX`, `NUL`, `COM0`-`COM9`, `LPT0`-`LPT9`, any case). The class name must not end in `_C`. The whole package path (`/<mod>/.../<Class>`) is at most 160 characters, so `<mods folder>\<mod>\Content\...\<Class>.uasset` and the staged copy stay under the Windows path limit in a normal install. A violation is error `ABFC2002` at the class name, naming the bad segment (`folder "My Relays" of src/My Relays/X.ts contains " " (Unreal allows only A-Z, a-z, 0-9 and _ in asset paths)`) with the fix "rename the folder or class, or give path:". This keeps out what Unreal refuses in long package names (space, `. , : ; ' " \ * ? < > | & ! ~ @ # $ % ^ ( ) [ ] { } = +`) and the dash and non-ASCII letters, which the backend's path checks also refuse.
+- A class file outside the source root and without `path:` is error `ABFC2003` (`src`-relative folder unknown; move the file under `src/` or give `path:`).
+- Two classes with the same asset path (compared case-insensitively, as Unreal and NTFS do) are error `ABFC2007` on the second one, naming the first one's file.
+- Case: when a manifest exists whose asset equals the derived path case-insensitively, the manifest's spelling is used (a folder renamed only in case is not a move).
+- Override `path:` (optional): relative to the mod (`path: "Relays/OldName"` gives `/<mod>/Relays/OldName`), or absolute under `/<mod.name>/` (all code before 1.0; anything else is `ABFC2001`, as before). Same character rules (`ABFC2002`). Uses: adopting a hand-made asset whose folder or name differs from the TS layout (hybrid mode, widgets), keeping an asset where it was after a move (18.2).
+- Diagnostics on `path:` (warnings, each with a quick fix): `ABFC2006` the path equals the derived one (fix: remove `path:`, and `@blueprint({})` becomes `@blueprint()`); `ABFC2005` an absolute path that names the mod (fix: rewrite it relative to the mod). When both apply, only `ABFC2006` is reported.
+- Widgets (`@blueprint({ kind: "widget" })`), hybrid classes (`interface X extends X_Manual`), `@struct` classes and the class-defaults options follow the same rule; nothing else about them changes.
+- Imports of the mod's own stubs: the specifier `@mod/<path below the mod>` (`import type { BP_X_Manual } from "@mod/Relays/BP_X"`), mapped in `.abfc/tsconfig.paths.json` to `./stubs/<profile>/Mod/<mod>/*.js`. The old `/<mod>/*` mapping stays for older code; such an import is warning `ABFC2008` with a quick fix to `@mod/...`.
+- Manifests stay keyed by the full asset path (`.abfc/manifest/<Mod>__<Dir>__<Asset>.json`). They are project state, not source. After switching `mod.name`, the other mod has its own (initially empty) ownership; nothing is carried over between mods.
+
+### 18.2 Recorded paths and moved or renamed files
+
+- Every successful build writes `source: { file: "src/Relays/MyRelay.ts", class: "MyRelay", derived: true }` into the manifest of each asset it built (`derived: false` when `path:` was given). The first build records it; later builds keep it current.
+- Move check (`abfc check`, `abfc build` before planning, `abfc lsp`): for each class without `path:` whose derived path P has no manifest, abfc looks for an orphan manifest M of the current mod (no class resolves to `M.asset`) that matches the class: `M.source.class` equals the class name, or `M.source.file` equals the class's file, or (a manifest written before 1.0, without `source`) the last segment of `M.asset` equals the class name. One match is error `ABFC5012` at the class name:
+  `MyRelay was built as /<mod>/Old/MyRelay (from src/Old/MyRelay.ts) but its file now gives /<mod>/New/MyRelay. abfc will not create a second asset or retire the first one.` Fix text: `keep the asset where it is with path: "Old/MyRelay" (quick fix), or move the asset with abfc mv` (the second half only when `abfc mv` exists). Several matches: the same error listing them, without a quick fix. The build stops before anything launches (exit 1).
+- Quick fix "Keep the existing asset path": inserts `path: "<M.asset relative to the mod>"` as the first option (`@blueprint()` becomes `@blueprint({ path: "Old/MyRelay" })`).
+- Starting a new asset on purpose: remove the class (a build retires the old asset, section 6.2 pass 4), then add it in the new place.
+- `abfc mv <asset> <new mod-relative path>` exists only if this probe passes on a staged copy of a test mod: (1) `staging_sync`; (2) in a `bp_apply` raw Python step, `unreal.EditorAssetLibrary.rename_asset(old, new)` on a struct that a Blueprint uses, then save; (3) `bp_compile_report` of the referencing Blueprint is clean and `bp_read` shows the new struct path; (4) the old path holds no asset or only an `ObjectRedirector` that a further raw step can remove (`EditorAssetLibrary.delete_asset` after fixing up referencers) with the referencer still compiling; (5) `staging_status` lists the old file as deleted and the new one as added; (6) by reading the backend code (no call), `bp_publish` can remove a file from the real mod, or a small backend change can. All six pass: `abfc mv` is built in 7d (stage move, manifest and source-map rename, `path:`-free source moved by the user beforehand, publish carries the deletion). Any fails: no `abfc mv`; ABFC5012 offers the `path:` fix and the docs explain moving the asset in the Mod Editor, then dropping `path:`. The probe result is recorded in docs/roadmap.md.
+
+### 18.3 `@director("RowName")` and class-manager rows
+
+- `import { blueprint, director } from "@abfc/runtime"`; `@director("EntityDirector_MyFeature") @blueprint() export class BPC_MyDirector extends ActorComponent {}`. Decorator order is free. Declaration: `director(row: string): ClassDecorator-compatible factory`.
+- Row asset: `/<mod>/<classManager.table>/<RowName>` (default table `DataTables/DT_ClassManager`, so `/<mod>/DataTables/DT_ClassManager/EntityDirector_MyFeature`). The row name is a string literal (`ABFC2061` otherwise) matching `^[A-Za-z0-9_]+$`, at most 64 characters (`ABFC2073`).
+- Only on a `@blueprint` class that is not a widget (`ABFC2074`); one `@director` per class; two classes with the same row are `ABFC2075`.
+- `classManagerRow` (an option of `@blueprint`) is deprecated: warning `ABFC2076`, with a quick fix to `@director("<last segment>")` when the path is `/<mod>/<table>/<Row>`. Until removed it keeps its pre-1.0 meaning (verify only). Both on one class is `ABFC2061`.
+- What the build does (class-defaults pass 5): with backend capability `classManagerRows` (backend 2.5.0), the defaults spec of the asset carries `class_manager_row: { "asset_path": "/<mod>/DataTables/DT_ClassManager/<Row>", "class_path": "/<mod>/.../<Class>.<Class>_C" }`. The backend, inside the same commandlet run on the stage: loads the row asset or, when it is missing, creates it with the class-manager row asset class (the class and its class-reference field are pinned in the backend from the 7a probe) and the row name equal to the asset name; sets the class field to the generated class (soft class reference) and changes no other field; saves; returns `rows: [{ asset, created, changed }]`. abfc records the row in the manifest (`directorRow`, part of `classDefaultsHash`) and adds the row asset to the would-publish list (section 12, item 7) when it was created or changed. A different row name later leaves the old row asset in the mod with warning `ABFC5013` (delete it in the Mod Editor). Without the capability abfc keeps the pre-1.0 check (ABFC2070 when the row does not reference the class) and adds warning `ABFC2077` (`the backend cannot write class-manager rows; update abf-mod-editor-mcp to 2.5.0 or newer`).
+- The 7a probe (read only, on the stage) fixes the unknowns before the backend step: the Python class of the existing row asset, its `row` struct type and fields, which field references the class, and which other fields hold non-default values. If a new row needs non-default values in other fields to work in game, the backend sets those fixed values on creation and the docs list them.
+
+### 18.4 Project config and user config
+
+Project `abf.config.json` (committed), schema 2:
+
+| Key | Type, default | Rule |
+| --- | --- | --- |
+| `schemaVersion` | integer, absent = 1 | `2` today. Higher than abfc knows: error `ABFC1022` (written by a newer abfc). |
+| `mod.name` | string, required | Folder name of the mod: `<mods folder>\<name>\<name>.uplugin`. `^[A-Za-z0-9_]+$`. |
+| `sourceRoot` | string, `"src"` | Project-relative folder, `/` or `\`, no `..`, not absolute. |
+| `classManager.table` | string, `"DataTables/DT_ClassManager"` | Mod-relative package folder of the class-manager rows; segments follow 18.1. |
+| `stubs.classes`, `stubs.scriptClasses`, `stubs.widgetMembers` | as before | unchanged |
+| `stubs.modAssets` | `"all"` or mod-relative paths | Schema 2: entries are mod-relative (`"Relays/BP_X"`); a leading `/` is `ABFC1021`. Schema 1: `/<mod>/X` entries are accepted and read as `X`. |
+| `stubs.scriptModules` | ignored | unchanged (ABFC3010) |
+| `backend.kind`, `backend.minProtocol` | as before | unchanged |
+| machine keys | discouraged | `editor.root`, `modsDir`, `mod.dir`, `headlessDir`, `backend.serverDir`, `backend.python`: read, `abfc doctor` warns (ABFC1021 warning). |
+
+Schema 1 (every config before 1.0) still loads in every command, with warning `ABFC1031` (`abf.config.json uses schema 1; run "abfc init" in the project to upgrade it`). Migration happens only in `abfc init` (18.5): it writes `abf.config.json.v1.bak` (only if that file does not exist), sets `schemaVersion: 2`, rewrites `stubs.modAssets` entries to mod-relative, and offers to move machine keys to the user config (moved only with consent or `--yes`). TS sources are never rewritten by init; the quick fixes of 18.1 to 18.3 and `abfc check` warnings lead the way.
+
+User config (per machine, never committed): `%APPDATA%\abfc\config.json`, or the file named by `ABFC_USER_CONFIG`. Same parser as before (all keys optional), plus `schemaVersion`. `abfc init` writes `schemaVersion: 2`, `editor.root` and `modsDir` (absolute paths), and for a source install `backend.serverDir` and `backend.python` when they were given as flags. It merges into an existing file (other keys kept, key order kept, `config.json.bak` written before an overwrite) and writes a key only when it is missing, was given as a flag, or was chosen in the prompt. It never writes `mod.dir`. Precedence stays CLI flag > environment > project > user > auto (9.1), so `ABFC_BACKEND_DIR` and other environment variables keep winning over anything init writes.
+
+### 18.5 `abfc init`
+
+`abfc init [dir] [--mod <name>] [--yes] [--no-stubs] [--mods-dir <dir>] [--editor-root <dir>] [--backend-dir <dir>] [--python <exe>] [--json]`. It runs without an existing project (the command is dispatched before the project lookup).
+
+1. Target: `dir` or the working folder, created when missing. `ABFC1020` (exit 3) inside a mod folder (unchanged rule). `ABFC1040` when an ancestor folder (not the target) holds `abf.config.json` (nested projects).
+2. Mode: no `abf.config.json` in the target: new project. Schema 1: upgrade (18.4). Schema 2: re-run (fill in missing files; switching the mod needs the prompt's confirmation or `--mod <other> --yes`).
+3. Mod Editor: `--editor-root` > `ABFC_EDITOR_ROOT`/`ABF_EDITOR_ROOT` > user config > Epic manifests > `Program Files\Epic Games\AbioticFactorModEdit*` (the order of 9.1 without the project config), validated by the profile's exe path. Not found: the prompt asks for the folder (validated, re-asked); with `--yes` it is `ABFC1001` (exit 2).
+4. Mods folder: `--mods-dir` > `ABFC_MODS_DIR` > user config `modsDir` > `<Documents>\Abiotic Factor Mods` (Documents from the Known Folder lookup of 9.1). It must exist (else the prompt asks; with `--yes` `ABFC1004`).
+5. Scan: every direct subfolder `X` of the mods folder that holds `X\X.uplugin` (case-insensitive) is a mod. Shown per mod: folder name, the `.uplugin` `FriendlyName` when the JSON reads, and the number of `.uasset` files under `Content` (walk capped at 5000). Sorted by name. Folders without a matching `.uplugin` are skipped silently.
+6. Prompt (interactive only when stdin and stdout are terminals; otherwise without `--yes` it is `ABFC1041`, exit 1, "use --mod <name> --yes"):
+   ```
+   Mod Editor: C:\Program Files\Epic Games\AbioticFactorModEditXXXX  (Epic manifest)
+   Mods folder: C:\Users\Jane\Documents\Abiotic Factor Mods  (auto)
+     1) ExampleMod        "Example Mod"         12 assets
+     2) OtherMod          "Other Mod"            3 assets
+     c) change the mods folder and rescan
+     q) quit without writing anything
+   Link which mod? [1-2, c, q]:
+   ```
+   `c` asks for a folder, validates it and rescans (the list repeats). An empty scan prints `ABFC1044` (no mods in the folder; create one in the Mod Editor first) and offers `c`/`q` only. Then a summary of the files to write and `Write these files? [y/N]`. Nothing is written before that answer.
+7. `--mod X --yes`: no prompt. X must be in the scan (case-insensitive; written with the folder's spelling), else `ABFC1042` listing the mods found (exit 1). `--mod X` without `--yes` preselects X and still asks the final question.
+8. Files (project folder): `abf.config.json` (18.4: `schemaVersion` 2, `mod.name`, `sourceRoot` `src`, `classManager.table`, `stubs` with `classes: []`, `scriptClasses` from the profile's new `initScriptClasses` list (engine classes only), `modAssets: "all"`, `widgetMembers: {}`, `backend`); `tsconfig.json` (the strict options of 4.2, `extends: "./.abfc/tsconfig.paths.json"`, `include: ["src"]`, `noEmit`, `skipLibCheck`, `types: []`, no plugins); `.gitignore` (2.1 list; existing file: missing lines appended, nothing removed); `.vscode/tasks.json` (tasks `abfc: check` with `--watch`, `abfc: build`, `abfc: test`, inline problem matcher of 2.4) and `.vscode/extensions.json` (recommends the abfc extension), each only when absent; the sample `src/Samples/BP_HelloAbfc.ts` plus `src/Samples/BP_HelloAbfc.test.ts` only when `src` holds no `.ts` file (an Actor with an own `Count!: int` field and an `@event Bump()` that adds 1; the test spawns it, calls `Bump` twice and expects 2). Then the user config (18.4).
+9. Existing files on a re-run: `tsconfig.json` is never rewritten; when it lacks the `extends` or still loads `@abfc/ts-plugin`, warning `ABFC1043` prints the exact change. `.vscode` files and the sample are left alone when present. Running init twice with the same answers changes nothing (second run: every file "kept", exit 0).
+10. Stubs: unless `--no-stubs`, init runs `abfc stubs` in-process for the new project (needs the installed editor, not an open one). A stubs failure is printed and does not undo the written files.
+11. Doctor: init ends with the `abfc doctor` checklist (in-process). Exit code: the highest of stubs and doctor (0 when both pass).
+12. `--json`: one object `{ project, mod, modsDir, editorRoot, files: [{ path, action: "written" | "kept" | "updated" }], userConfig: { path, keys }, stubs: <exit code or null>, doctor: <exit code> }`.
+
+New codes: `ABFC1022` newer schema, `ABFC1031` schema 1 (warning), `ABFC1040` nested project, `ABFC1041` no terminal, `ABFC1042` mod not found, `ABFC1043` tsconfig needs a manual change (warning), `ABFC1044` no mods in the folder.
+
+### 18.6 `abfc lsp`
+
+- `abfc lsp` (alias `abfc lsp --stdio`) speaks LSP 3.17 over stdio, built on `vscode-languageserver` (pure JS). It finds the project per document by walking up to `abf.config.json`; several projects per workspace are supported (one compiler state per project).
+- Capabilities: `textDocumentSync` incremental; `publishDiagnostics` (push) with source `abfc`, code `ABFCnnnn`, and `codeDescription.href` to the error code reference (18.11); `hoverProvider`; `codeActionProvider` (kind `quickfix`); `workspace.didChangeWatchedFiles` for `abf.config.json`, `.abfc/manifest/*.json`, `.abfc/stubs/**/stubs.lock.json` (reload). No completion, no go-to-definition, no rename: those stay with the editor's TypeScript server.
+- Diagnostics per open file: what `abfc check` reports for it (the compiler's `checkProject()` over the whole program, once per program version, then filtered to the file, exactly as the tsserver plugin did), the stub-lock codes ABFC3001 to ABFC3003 on the config, the move check (ABFC5012), and the `@abfc/eslint-plugin` recommended rules run in-process through ESLint's `Linter` class with `@typescript-eslint/parser` given the server's own `ts.Program` (no ESLint config file is read). TypeScript's own diagnostics (ABFC2000) are left out by default because the editor's TypeScript server shows them; initialization option `{ "tsDiagnostics": true }` turns them on for editors without one. Debounce 300 ms after the last change.
+- Hover: the Blueprint nodes the statement lowers to (the existing `explain` output) and, on a stub call, the description line; with `{ "tsHover": true }` also TypeScript's quick info.
+- Code actions: `idiv` (ABFC2010), `?.` (TypeScript's possibly-null errors), remove redundant `path:` (ABFC2006), relative `path:` (ABFC2005), `@mod/` import (ABFC2008), `@director` (ABFC2076), keep existing asset path (ABFC5012). Each is a pure text-edit function in `@abfc/compiler` (`frontend/fixes.ts`), unit tested without an editor.
+- TypeScript: the server uses its bundled TypeScript 6.0.3 (the compiler's own), never the workspace's, so no `typescript.tsdk` and no version match are needed.
+- The tsserver plugin is retired: not written by `abfc init`, not shipped in `abfc.exe` or the `.vsix`, not published; `scripts/plugin-parity.mjs` is retargeted to compare `abfc lsp` (driven by a scripted LSP client) with `abfc check`, and once it passes on the corpus the `packages/ts-plugin` folder is deleted (7b). Reason: it only works with the workspace TypeScript 6.0.3 from `node_modules`, which the exe install does not have, and it cannot serve other editors.
+- Editors: VS Code through the extension (18.7); Neovim (`vim.lsp.start{ cmd = {"abfc","lsp"}, root_dir = <dir with abf.config.json> }`), Helix (`languages.toml` language server entry), Zed and JetBrains (generic LSP client plugins): documented snippets only.
+
+### 18.7 VS Code extension (`.vsix`)
+
+- `packages/vscode` (private, name `abfc-vscode`, publisher placeholder `abfc`, engine `vscode ^1.90`), bundled by esbuild into `dist/extension.js`, packed with `@vscode/vsce package --no-dependencies` into `abfc-vscode-<version>.vsix`. Never published to the marketplace.
+- Activation: `workspaceContains:**/abf.config.json`. It starts `abfc lsp` with `vscode-languageclient` (stdio) for `typescript` documents under a folder with `abf.config.json`, with `{ tsDiagnostics: false, tsHover: false }`.
+- Finding abfc, first hit wins: setting `abfc.path`; `abfc.exe` on `PATH`; `%LOCALAPPDATA%\Programs\abfc\abfc.exe` (the installer default); for a source install, `node_modules\.bin\abfc.cmd` in the workspace, then `node <abfc.cliPath>` when `abfc.cliPath` names a `bin.js`. None: one notification with a link to the install docs; no retry loop.
+- Contributes: `jsonValidation` for `abf.config.json` (the schema JSON ships inside the `.vsix`), the problem matcher `$abfc` (the 2.4 pattern), commands `abfc: Build`, `abfc: Test`, `abfc: Publish (dry run)`, `abfc: Doctor` (each runs the CLI in a terminal), `abfc: Restart Language Server`, and settings `abfc.path`, `abfc.cliPath`, `abfc.trace.server`.
+
+### 18.8 `abfc.exe`
+
+- Node single executable application (Node 24 LTS, the version pinned for the release; `node --experimental-sea-config sea-config.json`, then `postject` into a copy of the official `node.exe`, fuse `NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2`). The official Node signature is removed (`signtool remove /s` when available) because injection invalidates it; abfc itself is not signed (decided).
+- Entry: esbuild bundles `packages/cli/dist/src/bin.js` with every dependency (TypeScript 6.0.3, ESLint's `Linter`, the LSP libraries) into one CommonJS file (`platform: node`, `target: node24`, `import.meta.url` replaced by a banner-defined file URL). `useCodeCache: true`, `disableExperimentalSEAWarning: true`.
+- Assets (SEA `assets`): `runtime.zip` and `runtime.sha256.json`. `runtime.zip` holds `backend\` (the pinned `abf-mod-editor-mcp` release, allowlisted files only, see 18.10), `python\` (the pinned Windows embeddable Python, its `._pth` gaining the line `..\backend`), `profiles\` (`packages/env/profiles/*.json`), `data\descriptions.json` (stubgen), `types\runtime\index.d.ts`, `types\testkit\index.d.ts`, `schema\abf.config.schema.json`, `THIRD-PARTY-NOTICES.txt`.
+- Extraction: on the first command that needs a runtime file, to `%LOCALAPPDATA%\abfc\runtime\<abfc version>-<sha8 of runtime.zip>\`: extract into a sibling temp folder, verify every file against `runtime.sha256.json`, then rename into place (atomic; a concurrent second process waits for the rename or uses the finished folder). An existing folder is re-verified by size and mtime of a marker file, fully by sha256 with `abfc doctor --deep`; a mismatch re-extracts. Older runtime folders are deleted by the installer's uninstall step and by `abfc doctor --clean-runtimes`.
+- Locating files: a new `@abfc/env` module `install.ts` (`installLayout()`) returns the paths of profiles, descriptions, runtime and testkit type files, the bundled backend and Python: from the extracted runtime when `require("node:sea").isSea()`, else from the package-relative locations used today (source install). `profile.ts`, `stubgen/describe.ts` and `cli/commands/stubs.ts` (the three `import.meta.url`/`createRequire` sites) read through it. The backend dir and Python auto-discovery of 9.1 use it.
+- Pins: `release/pins.json` (committed) holds `node` (version, download URL, sha256 of `node.exe`), `python` (embeddable zip version, URL, sha256; 3.12.x), `backend` (git tag, commit, sha256 of the `git archive` tarball), `innosetup` (version). The release build refuses any download whose sha256 differs. The backend tag pinned for 1.0 is the first one with `classManagerRows` (2.5.0).
+- Source install fallback: `npm install -g @abfc/cli` (Node 24) or a git clone plus `npm ci && npm run build`; the backend is a git checkout of the pinned tag, given once with `abfc init --backend-dir <dir>` (written to the user config) or `ABFC_BACKEND_DIR`; Python from `PATH`. Nothing is downloaded by abfc at run time.
+
+### 18.9 Installer and zip
+
+- Tool: Inno Setup 6 (classic wizard, one `.iss` script under `release/installer/`, built by `iscc` in CI). Output `abfc-setup-<version>.exe`, unsigned.
+- Installs per user, no admin: `%LOCALAPPDATA%\Programs\abfc\` with `abfc.exe`, `abfc-vscode-<version>.vsix`, `LICENSE.txt`, `THIRD-PARTY-NOTICES.txt`, `README.txt`. Adds that folder to the user `PATH` (HKCU `Environment`, with a broadcast so new terminals see it; removed on uninstall). Optional task, checked when `code.cmd` is found: `code --install-extension <vsix> --force`. Fixed `AppId` so a newer installer upgrades in place; an update is running the newer installer (no updater, no network). Uninstall removes the program folder and the PATH entry and asks before deleting `%LOCALAPPDATA%\abfc\runtime`; it never touches the user config, projects or mods.
+- Zip: `abfc-<version>-win-x64.zip` with the same files; the docs show the PATH step and the `code --install-extension` command.
+- SmartScreen: unsigned downloads show "Windows protected your PC"; the docs explain "More info" then "Run anyway", how to check the file against `SHA256SUMS.txt` from the release page (`Get-FileHash`), and that the zip avoids the installer prompt but not the first-run check.
+
+### 18.10 Release hygiene
+
+- Allowlists: `release/allowlist.json` lists, per artifact (`exe`, `zip`, `installer`, `vsix`, each npm package, the vendored backend), the files or globs that may go in. Build scripts (`scripts/release/*.mjs`) copy only allowlisted files into `build/release/<artifact>/` and fail on an allowlisted path that is missing. Never shipped: tests, fixtures, scripts, `.plans`, `.claude`, internal docs (roadmap, design), source maps of other machines, any `.abfc` folder. For the backend: `server.py` and the modules it imports, `editor/**`, `LICENSE`, `README.md`, `CHANGELOG.md`; never `data/` (game-derived file lists and the Blueprint filter list, which the user's own editor install provides at run time), `tests/`, `exports/`, run folders.
+- Scan: `scripts/release/scan-artifacts.mjs` opens every built artifact (zip and `.vsix` entries, npm tarballs from `npm pack`, the installer by its build input folder, the exe's SEA blob and its `runtime.zip`) and fails on: (a) mod names, from the CI secret `ABFC_NAME_DENYLIST` (one name per line, never committed) plus the repo's committed generic guard words; (b) user paths (`[A-Za-z]:\\Users\\<name>`, `C:/Users/<name>`, `/home/<name>`, `/Users/<name>`, where `<name>` is not `Public` or a documented placeholder such as `Jane Doe` or `<you>`); (c) game-derived files by name (`*.uasset`, `*.umap`, `*.pak`, `*.utoc`, `*.ucas`, `stubs.lock.json`, `reflect*.json`, `BlueprintFilter*`, `*-files.json.gz`) and by content (`.d.ts` with the `STUBGEN` header, JSON with `/Game/` class reflection keys). It prints every hit with artifact and entry and exits 1. It also runs on pull requests against a dry-run build.
+- npm: all public packages share one version (lockstep semver; 1.0.0 first), published from GitHub Actions on a `v*` tag with `npm publish --provenance --access public` (`id-token: write`), only after the scan passed. `@abfc/ts-plugin` is not published; the vscode package is private.
+- Versioning: semver for the CLI surface (commands, flags, exit codes, error codes, config schema, decorators). A new config schema or a removed option is a major change. `CHANGELOG.md` (Keep a Changelog) per release.
+- GitHub releases: CI creates a draft release for the tag with the exe, installer, zip, `.vsix`, `SHA256SUMS.txt` and the changelog section; a person publishes it. Tags and releases are never created by an agent without the user's go-ahead.
+
+### 18.11 Docs set (`docs/`, public)
+
+`install.md` (installer, zip, source install, PATH, the `.vsix`, SmartScreen), `first-mod.md` (Mod Editor, create the mod in the editor, `abfc init`, the sample, build, test, `abfc publish` into the mod, open the result in the editor), `cli.md` (every command and flag, exit codes, `--json` shapes), `errors.md` (every ABFC code: meaning, typical cause, fix; generated tables checked by a test that greps the source for codes), `config.md` (18.4), `backend.md` (bundled backend, source-install backend, versions and capabilities), `editors.md` (VS Code, Neovim, Helix, Zed, JetBrains), `troubleshooting.md` (OneDrive-redirected Documents, user names with spaces and the headless folder, non-English Windows and localized folder names, long paths, SmartScreen, the Epic login window of the audit, antivirus quarantining the exe, a stale runtime folder). The existing `language-service.md` and `lint-rules.md` are updated; `design.md` and `roadmap.md` stay as internal history but are not shipped.
+
+### 18.12 Carry-overs
+
+| Carry-over | Where | Decision |
+| --- | --- | --- |
+| `classManagerRow` row writing | 7a | `@director` plus backend `class_manager_row` (18.3). |
+| ABFC4012 code collision | 7d | The adapter's missing cross-wire entry becomes `ABFC4015`; `ABFC4012` stays "no `backend_info`". |
+| `no-unbounded-array-growth` false positive on one-time setup pushes | 7d | No report when the same method clears the array (`x.length = 0`) before the push, or the push is in `ReceiveBeginPlay`, `Construct` or `OnInitialized` (one-time events). RuleTester cases for both, and the Phase 5 fixture finding re-reviewed. |
+| `rpc-misuse` on calls inside server RPCs | 7d | A call to a server RPC from inside the body of a server RPC (or of a method only reachable from one) is not reported: it already runs on the server. |
+| Restore after a post-apply compile failure | 7d | abfc-only: when the post-apply compile report fails, abfc resyncs the stage (`staging_sync` with `discard_changes`); the units' `stageSyncedAt` then differs, so the next build re-applies everything on a clean stage. `--keep-failed-stage` keeps the failed state for inspection. No backend restore tool. |
+| Opt-in drift read for unchanged builds | 7d | `abfc build --drift` reads and drift-checks every owned asset (the gate-3 read), without changing what is applied. |
+| `abfc publish --full` gate 5 (ABFC7002, Epic login) | 7d | One live investigation step of the audit's hidden editor; if it stays open, it is a documented known issue and open question 2 (a bypass flag) goes back to the user. The 1.0 exit (build and default publish) does not need gate 5. |
+| Function locals (backend and lowering) | deferred (after 1.0) | abfc does not need them (temps are member variables), `functionLocals` stays false. |
+| Changing the fields of an existing struct | deferred (after 1.0) | Needs a trusted delete plus recompiling referencers; ABFC2046 and `errors.md` explain the workaround (a new struct name). |
 
 ## Credits
 

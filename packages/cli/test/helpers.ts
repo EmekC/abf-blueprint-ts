@@ -91,6 +91,20 @@ export function fakeEnvironmentFiles(o: FakeEnvOptions = {}): FakeEnvironment {
   const modDir = win32.join(modsDir, "TestMod");
   const backendDir = "C:\\Backend\\mcp";
   const projectDir = "C:\\Work\\proj";
+  const projectConfig: Record<string, unknown> = {
+    schemaVersion: 2,
+    mod: { name: "TestMod" },
+    backend: { kind: "bp_apply", minProtocol: 1 },
+    ...(o.projectConfig ?? {}),
+  };
+  // Schema 2 writes mod-relative modAssets; tests may keep passing "/TestMod/X".
+  const stubsCfg = projectConfig.stubs as { modAssets?: unknown } | undefined;
+  if (stubsCfg !== undefined && Array.isArray(stubsCfg.modAssets)) {
+    projectConfig.stubs = {
+      ...stubsCfg,
+      modAssets: (stubsCfg.modAssets as string[]).map((a) => (a.startsWith("/TestMod/") ? a.slice("/TestMod/".length) : a)),
+    };
+  }
   const files: Record<string, string> = {
     "C:\\ProgramData\\Epic\\EpicGamesLauncher\\Data\\Manifests\\A1.item": JSON.stringify({
       DisplayName: profile.editorDisplayName,
@@ -100,11 +114,7 @@ export function fakeEnvironmentFiles(o: FakeEnvOptions = {}): FakeEnvironment {
     [win32.join(editorRoot, profile.exeRelPath)]: "exe",
     [win32.join(modDir, "TestMod.uplugin")]: "{}",
     [win32.join(backendDir, "server.py")]: "# server",
-    [win32.join(projectDir, "abf.config.json")]: JSON.stringify({
-      mod: { name: "TestMod" },
-      backend: { kind: "bp_apply", minProtocol: 1 },
-      ...(o.projectConfig ?? {}),
-    }),
+    [win32.join(projectDir, "abf.config.json")]: JSON.stringify(projectConfig),
     ...(o.extraFiles ?? {}),
   };
   const env: NodeJS.ProcessEnv = {

@@ -58,6 +58,9 @@ export function resolveEnvironment(
   assertNotInModFolder(host, opts.projectDir);
   const config = loadProjectConfig(opts.projectDir, host);
   const userConfig = loadUserConfig(host.env, host);
+  if (config.schemaVersion < 2) {
+    diagnostics.push(envWarning(1031, "abf.config.json uses schema 1.", [], 'run "abfc init" in the project to upgrade it (a backup is kept).'));
+  }
 
   const nodeDiag = checkNode(host);
   if (nodeDiag) diagnostics.push(nodeDiag);
