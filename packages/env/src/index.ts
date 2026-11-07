@@ -6,3 +6,6 @@ export * from "./discover.js";
 export * from "./fingerprint.js";
 export * from "./project.js";
 export * from "./resolve.js";
+export * from "./mods.js";
+export * from "./userconfig.js";
+export * from "./migrate.js";

@@ -144,6 +144,8 @@ export interface Profile {
   modsFolderName: string;
   minProtocol: number;
   defaultHeadlessSubdir: string;
+  /** Engine classes (`/Script/...`) that `abfc init` lists in `stubs.scriptClasses` of a new project. */
+  initScriptClasses: string[];
   pins: {
     execute: string; then: string; else: string; condition: string; castFailed: string; castObject: string;
     returnValue: string; self: string; isValidObject: string; arrayLengthArray: string; getItemArray: string;
