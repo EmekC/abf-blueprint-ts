@@ -1,0 +1,124 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "abfc project configuration (abf.config.json)",
+  "description": "Settings of one abfc project. Keys that abfc does not know are ignored.",
+  "type": "object",
+  "required": ["mod"],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Layout of this file. 2 today; absent means 1 (older asset path rules)."
+    },
+    "mod": {
+      "type": "object",
+      "description": "The mod this project builds. Switching the target mod is a change of mod.name.",
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_]+$",
+          "description": "Name of the mod, for example ExampleMod."
+        },
+        "dir": {
+          "type": "string",
+          "description": "Machine-specific folder of the mod. Discouraged here: put it in the user config."
+        }
+      }
+    },
+    "sourceRoot": {
+      "type": "string",
+      "default": "src",
+      "description": "Project-relative folder that holds the class files. Asset paths derive from the folders below it."
+    },
+    "classManager": {
+      "type": "object",
+      "description": "The class-manager table the project refers to.",
+      "properties": {
+        "table": {
+          "type": "string",
+          "default": "DataTables/DT_ClassManager",
+          "description": "Mod-relative path of the class-manager data table."
+        }
+      }
+    },
+    "stubs": {
+      "type": "object",
+      "description": "Which declarations abfc stubs generates.",
+      "properties": {
+        "classes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Engine or game class paths to generate stubs for."
+        },
+        "scriptClasses": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Script class paths (/Script/Module.Class) to generate stubs for."
+        },
+        "modAssets": {
+          "description": "\"all\" for every Blueprint of the mod, or a list of mod-relative asset paths such as \"Relays/BP_Example\".",
+          "oneOf": [
+            { "type": "string", "enum": ["all"] },
+            { "type": "array", "items": { "type": "string" } }
+          ]
+        },
+        "widgetMembers": {
+          "type": "object",
+          "description": "Designer widgets of widget Blueprints that cannot be read from an export: class path to { member name: widget class path }.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          }
+        },
+        "scriptModules": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Ignored. Deprecated; use scriptClasses."
+        }
+      }
+    },
+    "backend": {
+      "type": "object",
+      "description": "How abfc reaches the Mod Editor.",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["bp_apply"],
+          "description": "The only supported backend."
+        },
+        "minProtocol": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Lowest backend protocol version this project needs."
+        },
+        "serverDir": {
+          "type": "string",
+          "description": "Machine-specific backend folder. Put it in the user config."
+        },
+        "python": {
+          "type": "string",
+          "description": "Machine-specific Python executable. Put it in the user config."
+        }
+      }
+    },
+    "editor": {
+      "type": "object",
+      "description": "Machine-specific editor settings. Put them in the user config.",
+      "properties": {
+        "root": {
+          "type": "string",
+          "description": "Machine-specific folder of the Mod Editor."
+        }
+      }
+    },
+    "headlessDir": {
+      "type": "string",
+      "description": "Machine-specific folder for headless runs. Put it in the user config."
+    },
+    "modsDir": {
+      "type": "string",
+      "description": "Machine-specific folder that holds the mods. Put it in the user config."
+    }
+  }
+}

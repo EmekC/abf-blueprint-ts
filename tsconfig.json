@@ -11,6 +11,7 @@
     { "path": "packages/cli" },
     { "path": "packages/ts-plugin" },
     { "path": "packages/eslint-plugin" },
-    { "path": "packages/lsp" }
+    { "path": "packages/lsp" },
+    { "path": "packages/vscode" }
   ]
 }
