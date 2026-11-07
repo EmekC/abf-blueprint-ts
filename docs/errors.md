@@ -1171,7 +1171,7 @@ Severity: error · Exit: 1
 
 Meaning: the stage audit (gate 5, `mod_audit`) did not pass for the mod, or it audited the real copy instead of the staged copy.
 
-Typical cause: the audit found a problem in the staged mod, or the hidden Mod Editor that runs it stopped at the Epic Games login window and gave up. The second case is a known issue under investigation: see [the Epic login window](troubleshooting.md#the-epic-login-window-of-the-stage-audit).
+Typical cause: the audit found a problem in the staged mod, or the hidden Mod Editor that runs it stopped at the Epic Games login window and gave up. The second case is a known issue (the login window did not clear in two live runs, with waits of 60 and 240 seconds): see [the Epic login window](troubleshooting.md#the-epic-login-window-of-the-stage-audit).
 
 Fix: run `mod_audit` in the Mod Editor for the details. The stage audit runs only for `abfc publish --full`; the default `abfc publish` does not need it.
 

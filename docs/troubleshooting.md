@@ -90,4 +90,12 @@ The extension shows one message when no abfc is found and does not retry. It sea
 
 `abfc publish --full` runs the stage audit (gate 5) in a hidden Mod Editor. That editor may stop at an Epic Games login window and never finish; abfc then reports [ABFC7002](errors.md#abfc7002) once the audit gives up. The default `abfc publish` (without `--full`) does not run the audit and is unaffected. The audit is part of the upload check you run before putting a mod on mod.io, which abfc never does for you.
 
-Status for 1.0: this is a known issue under investigation. If you meet it, the backend keeps a log of the hidden editor's run (and, when it detected the login window, a screenshot) in its headless folder, which helps a bug report. Until it is resolved, use the default `abfc publish`.
+Status for 1.0: this is a known issue, investigated and not fixed. On the test machine the hidden editor always stopped at the login window, which offers "Login with Epic Games Store" and "Login with Mod.io". Waiting longer did not help: the backend gives up after 60 seconds by default, and a run with `ABF_LOGIN_GRACE=240` in the environment gave up after 240 seconds with the same window. The likely cause is that the Epic Games Launcher starts your normal Mod Editor with login arguments and the hidden editor, which abfc starts directly on a private desktop and profile, gets none and has no stored login to reuse. Having the Epic Games Launcher running or the Mod Editor open does not change that.
+
+What you can do:
+
+- Use the default `abfc publish` (without `--full`). It does not run the audit.
+- Run the audit yourself in the Mod Editor before you upload: open the mod there and run the upload check (the Asset Audit). abfc never uploads for you, and this is the check that matters for mod.io.
+- If you want to help: the backend keeps the hidden editor's log and a screenshot of the login window (`login_stuck.png`) in the run folder under its headless folder (the path is in `abfc doctor`). Attach the log lines that mention Epic, EOS or Login, without any tokens, to a bug report.
+
+Signing in once in a normal Mod Editor session is the remedy the message suggests, but it did not help in the investigation. A fix needs a change in the backend (making the real local app data folder with the stored login visible to the hidden editor, or an opt-out for gate 5); it is not part of 1.0.
