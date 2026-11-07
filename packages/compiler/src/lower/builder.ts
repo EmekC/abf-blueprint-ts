@@ -52,6 +52,15 @@ const K2_SPAWN_ACTOR = "/Script/BlueprintGraph.K2Node_SpawnActorFromClass";
 /** Id of the entry node of every unit (the first node emitted, role "ev"). */
 const ENTRY_ID = "ev0";
 
+/**
+ * Escapes TS-source string text for a quoted T3D default (`DefaultValue="..."`, `NSLOCTEXT("","k","...")`), the way the engine
+ * exports it: backslash, double quote, CR, LF and tab. The backend writes pin defaults verbatim, so this is the one place it happens;
+ * only defaults that come from TS string, name and text literals and FormatText templates go through it.
+ */
+export function escapeT3dString(s: string): string {
+  return s.replace(/[\\"\r\n\t]/g, (c) => (c === "\r" ? "\\r" : c === "\n" ? "\\n" : c === "\t" ? "\\t" : "\\" + c));
+}
+
 /** Default text of a literal for a pin of the given type (undefined for null). */
 export function formatLiteral(value: string | number | boolean | null, type: string): string | undefined {
   if (value === null) return undefined;
@@ -60,7 +69,7 @@ export function formatLiteral(value: string | number | boolean | null, type: str
     if (REAL_TYPES.has(type)) return Number.isInteger(value) ? value.toFixed(1) : String(value);
     return String(value);
   }
-  return value;
+  return escapeT3dString(value);
 }
 
 /** Whether control never leaves the statement list normally: it ends in a `return`, or an `if` whose branches both do. */
@@ -223,7 +232,8 @@ export class UnitBuilder {
       const l = this.local(e.id);
       if (l.lit !== undefined) return { lit: l.lit, nulls: [] };
     }
-    if (e.k === "enumLit" || e.k === "nameLit") return { lit: e.text, nulls: [] };
+    if (e.k === "enumLit") return { lit: e.text, nulls: [] };
+    if (e.k === "nameLit") return { lit: escapeT3dString(e.text), nulls: [] };
     if (e.k === "classRef") return { obj: e.path, nulls: [] };
     if (e.k === "delegateRef") return { delegate: e.event, nulls: [] };
     const v = this.value(e);
@@ -429,6 +439,31 @@ export class UnitBuilder {
         this.feed(item, id, "ItemToFind", defaults);
         this.settle(id, defaults);
         return { pin: `${id}.${P.returnValue}`, nulls: [...arr.nulls, ...item.nulls] };
+      }
+      case "formatText": {
+        // Real exports: PinNames(i)="<arg>" on the node, Format pin DefaultValue = the format text, output pin "Result", arg pins named like the args.
+        const nulls: Exit[] = [];
+        const ops = e.args.map((a) => ({ a, o: this.operand(a.value, a.value.type === "void" || a.value.type === "null" ? undefined : a.value.type) }));
+        for (const x of ops) nulls.push(...x.o.nulls);
+        const pinTypes: Record<string, string> = {};
+        for (const x of ops) if (x.a.value.type !== "void" && x.a.value.type !== "null") pinTypes[x.a.name] = x.a.value.type;
+        const id = this.emit("fmt", this.profile.nodeClasses.formatText, e.args.map((a, i) => `PinNames(${i})="${a.name}"`), undefined, e.span,
+          { pinDefaults: { Format: escapeT3dString(e.format) }, pinTypes });
+        const defaults: Record<string, string> = {};
+        for (const x of ops) this.feed(x.o, id, x.a.name, defaults);
+        this.settle(id, defaults);
+        return { pin: `${id}.Result`, nulls };
+      }
+      case "makeStruct": {
+        const nulls: Exit[] = [];
+        const ops = e.fields.map((a) => ({ a, o: this.operand(a.value, a.value.type === "void" || a.value.type === "null" ? undefined : a.value.type) }));
+        for (const x of ops) nulls.push(...x.o.nulls);
+        const id = this.emit("mk", this.profile.nodeClasses.makeStruct,
+          ["bMadeAfterOverridePinRemoval=True", `StructType="${pinObjectText("struct", e.struct, this.classMeta)}"`], undefined, e.span);
+        const defaults: Record<string, string> = {};
+        for (const x of ops) this.feed(x.o, id, x.a.name, defaults);
+        this.settle(id, defaults);
+        return { pin: `${id}.${shortName(e.struct)}`, nulls };
       }
       case "not":
       case "and":

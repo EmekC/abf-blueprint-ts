@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadProfile } from "@abfc/env";
 import type { Environment, ProjectConfig } from "@abfc/env";
-import { checkLock, emitManual, manualFromExport, newLock, readLock, writeLock, writeTsconfigPaths } from "../src/index.js";
+import { checkLock, emitManual, manualFromExport, newLock, readLock, sortedWidgetMembers, writeLock, writeTsconfigPaths } from "../src/index.js";
 import type { StubsLock } from "../src/index.js";
 
 const profile = loadProfile();
@@ -43,7 +43,7 @@ test("lock round trip through a folder", () => {
     const l = lock();
     writeLock(stubs, l);
     assert.deepEqual(readLock(stubs), l);
-    assert.equal(l.generator, "0.1.0");
+    assert.equal(l.generator, "0.2.1");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -78,6 +78,24 @@ test("checkLock: configured classes missing from the lock warn", () => {
   const d = checkLock(lock({ scriptClasses: [] }), env(), config, "build");
   assert.deepEqual(d.map((x) => [x.code, x.severity]), [["ABFC3003", "warning"]]);
   assert.match(d[0]?.message ?? "", /FakeEngine\.Thing/);
+});
+
+test("checkLock: a changed stubs.widgetMembers is ABFC3003, key order does not matter", () => {
+  const members = { "/Game/UI/W_Hud.W_Hud_C": { Title: "/Script/UMG.TextBlock", Body: "/Script/UMG.TextBlock" } };
+  const withMembers = (m: Record<string, Record<string, string>>): ProjectConfig =>
+    ({ stubs: { ...config.stubs, widgetMembers: m } }) as unknown as ProjectConfig;
+  // lock without widgetMembers (old stubs) vs a configured member
+  const added = checkLock(lock(), env(), withMembers(members), "build");
+  assert.deepEqual(added.map((x) => [x.code, x.severity]), [["ABFC3003", "warning"]]);
+  assert.match(added[0]?.message ?? "", /widgetMembers/);
+  // the same members in another key order are equal
+  const l = lock({ widgetMembers: sortedWidgetMembers(members) });
+  assert.deepEqual(checkLock(l, env(), withMembers({ "/Game/UI/W_Hud.W_Hud_C": { Body: "/Script/UMG.TextBlock", Title: "/Script/UMG.TextBlock" } }), "build"), []);
+  // a changed widget class and a removed member both warn
+  const changed = checkLock(l, env(), withMembers({ "/Game/UI/W_Hud.W_Hud_C": { Title: "/Script/UMG.RichTextBlock", Body: "/Script/UMG.TextBlock" } }), "build");
+  assert.deepEqual(changed.map((x) => x.code), ["ABFC3003"]);
+  const removed = checkLock(l, env(), withMembers({}), "check");
+  assert.deepEqual(removed.map((x) => [x.code, x.severity]), [["ABFC3003", "warning"]]);
 });
 
 test("writeTsconfigPaths writes forward-slash absolute paths and the stub patterns", () => {

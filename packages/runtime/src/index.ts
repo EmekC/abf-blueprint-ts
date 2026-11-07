@@ -8,6 +8,11 @@ export type float = number & { readonly __bpNumber?: "float" };
 export type double = number & { readonly __bpNumber?: "double" };
 
 export type name = string & { readonly __bpString?: "name" };
+/**
+ * Localizable text. A template literal where a `text` is expected (`` `Hunger ${hunger}` ``) becomes a Format Text node: each
+ * substitution is an argument named after its identifier or property, and literal `{`, `}` are escaped for you. An object literal
+ * where a stub struct is expected (`{ Size: 12 }`) becomes a Make Struct node; spreads and computed names are not supported.
+ */
 export type text = string & { readonly __bpString?: "text" };
 
 export type TSubclassOf<T> = { readonly __bpClassOf?: T };
@@ -40,6 +45,7 @@ export interface BlueprintOptions {
   tickEnabled?: boolean;
   /** row asset path, verified (Phase 2) */
   classManagerRow?: string;
+  /** The asset is a Widget Blueprint; the class must extend a UserWidget. The designer layout (WidgetTree) stays hand-made; designer widgets are read-only members of the `_Manual` stub. */
   kind?: "widget";
 }
 

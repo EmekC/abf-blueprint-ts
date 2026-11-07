@@ -1,5 +1,5 @@
 // Hash manifest (design 8.3): `.abfc/manifest/<asset>.json`, committed with the project.
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 export interface ManifestUnit {
@@ -42,6 +42,8 @@ export interface Manifest {
   classDefaultsHash?: string;
   /** `StageStatus.syncedAt` of the stage the class defaults were applied to (a resync discards them). */
   classDefaultsStageSyncedAt?: string | null;
+  /** Unit ids a build removed from the stage that are not published yet (cleared by a successful publish). */
+  retiredUnpublished?: string[];
 }
 
 /** `/Mod/Dir/BP_X` -> `Mod__Dir__BP_X` */
@@ -82,6 +84,22 @@ export function writeManifest(dir: string, m: Manifest): string {
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, stringifySorted(m), "utf8");
   return file;
+}
+
+/** Every manifest under `.abfc/manifest`, sorted by file name. */
+export function listManifests(dir: string): Manifest[] {
+  const folder = join(dir, ".abfc", "manifest");
+  if (!existsSync(folder)) return [];
+  return readdirSync(folder)
+    .filter((x) => x.endsWith(".json"))
+    .sort()
+    .map((f) => JSON.parse(readFileSync(join(folder, f), "utf8").replace(/^﻿/, "")) as Manifest);
+}
+
+/** Removes the manifest file of an asset (no-op when there is none). */
+export function deleteManifest(dir: string, asset: string): void {
+  const file = manifestPath(dir, asset);
+  if (existsSync(file)) rmSync(file);
 }
 
 /** Owned unit ids (`event:Name`) and variable names per asset, for stub generation and the frontend. */

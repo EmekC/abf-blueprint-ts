@@ -10,6 +10,7 @@ import {
   manualReferences,
   missingStructs,
   newLock,
+  sortedWidgetMembers,
   rulesFromPairs,
   writeLock,
   writeStubs,
@@ -138,6 +139,19 @@ async function reflectAndRead(ctx: CliContext, backend: Backend): Promise<number
     }
   }
 
+  for (const [cls, members] of Object.entries(config.stubs.widgetMembers)) {
+    for (const [member, widget] of Object.entries(members)) {
+      if (data.classes[widget] === undefined) {
+        output.diag({
+          severity: "warning",
+          code: "ABFC3011",
+          message: `stubs.widgetMembers: ${cls} ${member} is a ${widget}, which is not in the stubs; it is typed UObject.`,
+          fix: `add "${widget}" to stubs.scriptClasses and run "abfc stubs".`,
+        });
+      }
+    }
+  }
+
   // Emit and write.
   const t2 = clock();
   const { files, index } = emitStubsWithIndex({
@@ -145,6 +159,7 @@ async function reflectAndRead(ctx: CliContext, backend: Backend): Promise<number
     reflect: data,
     filter: { rules: rulesFromPairs(first.filter.rules), contentVersion: first.filter.contentVersion },
     manual,
+    widgetMembers: config.stubs.widgetMembers,
     mod,
     opaque: [],
   });
@@ -161,6 +176,7 @@ async function reflectAndRead(ctx: CliContext, backend: Backend): Promise<number
       classes,
       scriptClasses: [...config.stubs.scriptClasses],
       modAssets: manual.map((m) => m.asset),
+      widgetMembers: sortedWidgetMembers(config.stubs.widgetMembers),
       createdAt: deps.now().toISOString(),
     }),
   );

@@ -595,6 +595,7 @@ export class FakeBackend implements Backend {
     this.calls.push({ tool: "bp_publish" });
     this.publishCalls.push({ mod, assets, grant });
     this.lastWarm = false;
+    if (this.publishResult.ok) this.changed.clear(); // what was published no longer differs from the mod
     return this.publishResult;
   }
 

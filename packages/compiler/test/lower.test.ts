@@ -441,3 +441,83 @@ test("array operations: Add, Remove, Clear, Find with pin types", () => {
   assert.deepEqual(clear[0]!.pinTypes, { TargetArray: "array:name" });
   assert.ok(u.wires.some((w) => w[1] === `${clear[0]!.id}.execute`));
 });
+
+// ---- Phase 3: FormatText and MakeStruct ----
+
+const phase3Dir = fileURLToPath(new URL("../../test/fixtures/phase3", import.meta.url));
+
+function lowerWidget(): IrModule {
+  const loaded = loadProgram(phase3Dir);
+  const widget = loaded.files.classes.find((f) => f.fileName.endsWith("/Widget.ts"));
+  assert.ok(widget);
+  const hir = buildHir(loaded, config, profile, [widget]);
+  assert.deepEqual(hir.diagnostics, []);
+  return lower(hir, profile);
+}
+
+const widgetIr = lowerWidget();
+const widgetUnit = (id: string): IrUnit => {
+  const u = widgetIr.assets[0]!.units.find((x) => x.id === id);
+  assert.ok(u, `unit ${id}`);
+  return u;
+};
+
+test("a template literal typed text lowers to FormatText: arg names, Format default, typed arg pin, Result output", () => {
+  assert.deepEqual(validateIrModule(widgetIr), []);
+  const u = widgetUnit("event:Join");
+  const fmt = u.nodes.filter((n) => n.t3d.class === profile.nodeClasses.formatText);
+  assert.equal(fmt.length, 1);
+  const f = fmt[0]!;
+  assert.deepEqual(f.t3d.props, ['PinNames(0)="name"']);
+  assert.deepEqual(f.pinDefaults, { Format: "+ {name}" });
+  assert.deepEqual(f.pinTypes, { name: "text" });
+  const entry = u.nodes.find((n) => n.sem?.k === "event")!;
+  const nameOut = u.wires.find((w) => w[1] === `${f.id}.name`);
+  assert.ok(nameOut, "the text parameter feeds the arg pin");
+  assert.equal(nameOut[0], `${entry.id}.name`);
+  const setText = u.nodes.find((n) => n.sem?.k === "call" && n.sem.function === "SetText")!;
+  assert.ok(u.wires.some((w) => w[0] === `${f.id}.Result` && w[1] === `${setText.id}.InText`));
+});
+
+test("FormatText escapes braces and names duplicate substitutions with a suffix", () => {
+  const u = widgetUnit("event:Tag");
+  const f = u.nodes.find((n) => n.t3d.class === profile.nodeClasses.formatText)!;
+  assert.deepEqual(f.t3d.props, ['PinNames(0)="name"', 'PinNames(1)="hint"', 'PinNames(2)="hint_2"']);
+  assert.equal(f.pinDefaults!.Format, "+ {name} `{{hint}`} {hint_2}");
+  assert.deepEqual(f.pinTypes, { name: "text", hint: "text", hint_2: "text" });
+});
+
+test("quotes, backslashes and newlines in a FormatText template or a text literal are escaped for T3D", () => {
+  assert.deepEqual(validateIrModule(widgetIr), []);
+  const u = widgetUnit("event:Quote");
+  const f = u.nodes.find((n) => n.t3d.class === profile.nodeClasses.formatText)!;
+  // TS source: `say "${name}" \\ then<LF>done` -> cooked text: say "{name}" \ then<LF>done
+  assert.equal(f.pinDefaults!.Format, 'say \\"{name}\\" \\\\ then\\ndone');
+  const lit = u.nodes.find((n) => n.sem?.k === "call" && n.sem.function === "SetText" && n.pinDefaults?.InText !== undefined)!;
+  assert.equal(lit.pinDefaults!.InText, 'He said \\"hi\\"');
+  // plain text is untouched
+  assert.deepEqual(widgetUnit("event:Join").nodes.find((n) => n.t3d.class === profile.nodeClasses.formatText)!.pinDefaults, { Format: "+ {name}" });
+});
+
+test("an object literal of a stub struct lowers to MakeStruct with one field pin per property and the struct output", () => {
+  const u = widgetUnit("event:Style");
+  const mk = u.nodes.filter((n) => n.t3d.class === profile.nodeClasses.makeStruct);
+  assert.equal(mk.length, 1);
+  const m = mk[0]!;
+  assert.deepEqual(m.t3d.props, ["bMadeAfterOverridePinRemoval=True", 'StructType="/Script/CoreUObject.ScriptStruct\'/Script/TestCore.ExampleFont\'"']);
+  const entry = u.nodes.find((n) => n.sem?.k === "event")!;
+  assert.ok(has2(u, `${entry.id}.size`, `${m.id}.Size`));
+  assert.ok(has2(u, `${entry.id}.family`, `${m.id}.Family`));
+  assert.ok(has2(u, `${entry.id}.label`, `${m.id}.Label`), "the shorthand property reads the local, which is the parameter");
+  assert.equal(wiresIntoOf(u, m.id).length, 3);
+  const setFont = u.nodes.find((n) => n.sem?.k === "call" && n.sem.function === "SetFont")!;
+  assert.ok(u.wires.some((w) => w[0] === `${m.id}.ExampleFont` && w[1] === `${setFont.id}.InFontInfo`));
+});
+
+function has2(u: IrUnit, from: string, to: string): boolean {
+  return u.wires.some((w) => w[0] === from && w[1] === to);
+}
+
+function wiresIntoOf(u: IrUnit, to: string): string[] {
+  return u.wires.filter((w) => w[1].startsWith(`${to}.`)).map((w) => w[0]);
+}

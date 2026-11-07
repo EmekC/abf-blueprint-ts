@@ -40,6 +40,11 @@ export interface T3dExport {
   nodes: Map<string, T3dNode>;
   variables: Array<{ name: string; type: string; default: string | null }>;
   parentClass: string | null;
+  /**
+   * Designer widgets of a Widget Blueprint (children of its `WidgetTree`, slots excluded) in declaration order; empty for other
+   * assets. `isVariable` is true when the definition block carries `bIsVariable=True` (the designer's "Is Variable" checkbox).
+   */
+  widgets: Array<{ name: string; cls: string; isVariable: boolean }>;
 }
 
 /** Split `k=v,k=v,...` at top level (respecting quotes and parentheses) into a map. Values keep their quotes/parentheses. */
@@ -129,9 +134,23 @@ function typeFromAttrs(a: Record<string, string>): string {
 
 const BEGIN = /^\s*Begin Object(?: Class=(\S+))? Name="([^"]+)"(?: ExportPath="([^']*)'([^']*)')?/;
 const END = /^\s*End Object\b/;
+const EVENT_GRAPH = "EventGraph";
 
 export function parseExport(text: string): T3dExport {
   const lines = text.split(/\r?\n/);
+  // Names used in the event graph: it always keeps the plain key, whatever order the engine lists the graphs in (a warm
+  // export may list the generated per-event stub graphs first, whose node names collide with the event graph's).
+  const eventGraphNames = new Set<string>();
+  {
+    const open: string[] = [];
+    for (const line of lines) {
+      const b = BEGIN.exec(line);
+      if (b) {
+        if (open.length === 2 && open[1] === EVENT_GRAPH) eventGraphNames.add(b[2] ?? "");
+        open.push(b[2] ?? "");
+      } else if (END.test(line)) open.pop();
+    }
+  }
   const nodes = new Map<string, T3dNode>();
   const byGraphName = new Map<string, string>(); // "<graph>\0<name>" -> key in `nodes`
   const variables: T3dExport["variables"] = [];
@@ -150,7 +169,8 @@ export function parseExport(text: string): T3dExport {
         const id = `${graph ?? ""}\0${name}`;
         let key = byGraphName.get(id);
         if (key === undefined) {
-          key = nodes.has(name) ? `${graph ?? ""}/${name}` : name;
+          const plain = graph === EVENT_GRAPH ? !nodes.has(name) : !nodes.has(name) && !eventGraphNames.has(name);
+          key = plain ? name : `${graph ?? ""}/${name}`;
           byGraphName.set(id, key);
           nodes.set(key, { name, cls, graph, head: [], pins: [] });
         }
@@ -185,7 +205,12 @@ export function parseExport(text: string): T3dExport {
     const pc = /^\s*ParentClass=(.*)$/.exec(line);
     if (pc && parentClass === null) parentClass = innerPath(unq(pc[1]?.trim()));
   }
-  return { nodes, variables, parentClass };
+  const widgets: T3dExport["widgets"] = [];
+  for (const n of nodes.values()) {
+    if (n.graph !== "WidgetTree" || n.cls === "" || /Slot$/.test(n.cls)) continue;
+    widgets.push({ name: n.name, cls: n.cls, isVariable: n.head.includes("bIsVariable=True") });
+  }
+  return { nodes, variables, parentClass, widgets };
 }
 
 export function pinName(node: T3dNode, pinId: string): string | null {

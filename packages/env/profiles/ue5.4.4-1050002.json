@@ -32,6 +32,8 @@
     "callArrayFunction": "/Script/BlueprintGraph.K2Node_CallArrayFunction",
     "getArrayItem": "/Script/BlueprintGraph.K2Node_GetArrayItem",
     "breakStruct": "/Script/BlueprintGraph.K2Node_BreakStruct",
+    "makeStruct": "/Script/BlueprintGraph.K2Node_MakeStruct",
+    "formatText": "/Script/BlueprintGraph.K2Node_FormatText",
     "variableGet": "/Script/BlueprintGraph.K2Node_VariableGet",
     "variableSet": "/Script/BlueprintGraph.K2Node_VariableSet",
     "customEvent": "/Script/BlueprintGraph.K2Node_CustomEvent",
