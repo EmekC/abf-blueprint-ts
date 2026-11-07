@@ -3,7 +3,7 @@ import ts from "typescript";
 import { BpTypeError, parseBpType } from "@abfc/ir";
 import type { Diagnostic, Profile, Span } from "@abfc/ir";
 import type { BpType, HirClass, HirEvent, HirField, HirExpr, HirProgram, HirStmt, HirStruct, LocalId } from "../hir.js";
-import { assetPathOf, bindPathContext } from "./assetpaths.js";
+import { assetPathOf, bindPathContext, modImportHints } from "./assetpaths.js";
 import type { AssetPathInfo, CompilerProjectConfig } from "./assetpaths.js";
 import { DiagSink, Fail, relFile, spanOf } from "./diag.js";
 import type { LoadedProgram } from "./program.js";
@@ -1620,7 +1620,28 @@ export function buildHir(loaded: LoadedProgram, config: CompilerProjectConfig, _
   bindPathContext(loaded, config);
   const b = new HirBuilder(loaded, config.mod);
   for (const sf of only ?? loaded.files.classes) {
+    b.sink.diagnostics.push(...modImportHints(sf));
     for (const st of sf.statements) if (ts.isClassDeclaration(st)) b.classDecl(st);
+  }
+  if (only === undefined) {
+    // whole program only: a subset cannot see the other file of a duplicate
+    const seen = new Map<string, { name: string; file: string }>();
+    // a class with a derived path is the established one; an explicit `path:` that lands on it is the odd one out
+    const all = [...b.classes, ...b.structs];
+    for (const x of [...all.filter((y) => y.pathDerived), ...all.filter((y) => !y.pathDerived)]) {
+      const key = x.path.toLowerCase();
+      const first = seen.get(key);
+      if (first === undefined) {
+        seen.set(key, { name: x.name, file: x.span.file });
+      } else {
+        b.sink.diagnostics.push({
+          severity: "error",
+          code: "ABFC2007",
+          message: `asset path ${x.path} of ${x.name} is already used by ${first.name} (${first.file})`,
+          span: x.span,
+        });
+      }
+    }
   }
   return { mod: config.mod, classes: b.classes, structs: orderStructs(b.structs), classMeta: b.classMeta, diagnostics: b.sink.diagnostics };
 }

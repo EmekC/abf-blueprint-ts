@@ -14,6 +14,7 @@ export function writeTsconfigPaths(abfcDir: string, profileId: string, mod: stri
         "/Script/*": [`${base}/Script/*.js`],
         "/Game/*": [`${base}/Game/*.js`],
         [`/${mod}/*`]: [`${base}/Mod/${mod}/*.js`],
+        "@mod/*": [`${base}/Mod/${mod}/*.js`],
         "@abfc/runtime": [fwd(runtimeDts)],
         "@abfc/testkit": [fwd(testkitDts)],
       },

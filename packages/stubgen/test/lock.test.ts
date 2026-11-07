@@ -107,6 +107,7 @@ test("writeTsconfigPaths writes forward-slash absolute paths and the stub patter
     assert.deepEqual(paths["/Script/*"], ["./stubs/p1/Script/*.js"]);
     assert.deepEqual(paths["/Game/*"], ["./stubs/p1/Game/*.js"]);
     assert.deepEqual(paths["/TestMod/*"], ["./stubs/p1/Mod/TestMod/*.js"]);
+    assert.deepEqual(paths["@mod/*"], ["./stubs/p1/Mod/TestMod/*.js"]);
     assert.deepEqual(paths["@abfc/runtime"], ["C:/fake/runtime/dist/src/index.d.ts"]);
     assert.deepEqual(paths["@abfc/testkit"], ["C:/fake/testkit/dist/src/index.d.ts"]);
   } finally {

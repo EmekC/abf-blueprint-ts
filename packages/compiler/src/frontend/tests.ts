@@ -2,7 +2,7 @@
 import ts from "typescript";
 import type { Diagnostic, Profile, TestCase, TestStepRecord } from "@abfc/ir";
 import { classPathOf, importOf } from "./build.js";
-import { bindPathContext } from "./assetpaths.js";
+import { bindPathContext, modImportHints } from "./assetpaths.js";
 import type { CompilerProjectConfig } from "./assetpaths.js";
 import { DiagSink, Fail, relFile, spanOf } from "./diag.js";
 import type { LoadedProgram } from "./program.js";
@@ -273,6 +273,7 @@ export function compileTests(loaded: LoadedProgram, _profile: Profile, filter?: 
   const root = loaded.projectDir;
   for (const sf of loaded.files.tests) {
     const file = relFile(root, sf.fileName);
+    diagnostics.push(...modImportHints(sf));
     for (const st of sf.statements) {
       if (ts.isImportDeclaration(st) || ts.isEmptyStatement(st)) continue;
       const call = ts.isExpressionStatement(st) && ts.isCallExpression(st.expression) ? st.expression : undefined;

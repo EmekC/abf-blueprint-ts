@@ -102,3 +102,28 @@ test("assetPathOf without a bound context accepts an absolute literal path only"
   const results = sf.statements.filter(ts.isClassDeclaration).map((s) => assetPathOf(s, "blueprint")?.path);
   assert.deepEqual(results, [undefined, "/TestMod/Moved/Abs", undefined, "/OtherMod/X"]);
 });
+
+test("ABFC2007: a second class with the same asset path (case-insensitive) is an error naming the first", () => {
+  const dups = hintedDiags.filter((d) => d.code === "ABFC2007");
+  assert.equal(dups.length, 1);
+  assert.equal(dups[0]!.severity, "error");
+  assert.match(dups[0]!.message, /^asset path \/TestMod\/Relays\/MyRelay of Dup is already used by MyRelay \(src\/Relays\/MyRelay\.ts\)$/);
+  assert.equal(dups[0]!.span!.file, "src/Dup.ts");
+  // the quiet run reports it too: it is not a migration hint
+  assert.equal(quiet.filter((d) => d.code === "ABFC2007").length, 1);
+});
+
+test("ABFC2007 is whole-program only: a subset build reports no duplicates", () => {
+  const sf = loaded.files.classes.find((f) => f.fileName.endsWith("/Dup.ts"))!;
+  const h = buildHir(loaded, { mod: "TestMod", migrationHints: true }, profile, [sf]);
+  assert.deepEqual(h.diagnostics.map((d) => d.code), []);
+});
+
+test("ABFC2008: an import by /<mod>/ is a warning with the @mod form; @mod imports are clean", () => {
+  const ds = inFile(hintedDiags, "src/Imports.ts");
+  assert.deepEqual(ds.map((d) => d.code), ["ABFC2008"]);
+  assert.equal(ds[0]!.severity, "warning");
+  assert.equal(ds[0]!.message, 'import from "/TestMod/Relays/BP_Hand" names the mod; use "@mod/Relays/BP_Hand"');
+  assert.equal(ds[0]!.span!.line, 1);
+  assert.deepEqual(codesIn(quiet, "src/Imports.ts"), []);
+});

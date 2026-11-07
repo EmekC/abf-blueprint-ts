@@ -2,6 +2,8 @@
 import { resolve } from "node:path";
 import ts from "typescript";
 import { DEFAULT_CLASS_MANAGER_TABLE, DEFAULT_SOURCE_ROOT, classNameProblem, joinModPath, modRelativeProblem, packagePathProblem, segmentProblem, toModRelative } from "@abfc/ir";
+import type { Diagnostic } from "@abfc/ir";
+import { spanOf } from "./diag.js";
 import type { LoadedProgram } from "./program.js";
 
 /** What the frontend needs from the project config to derive asset paths. */
@@ -51,6 +53,30 @@ export function bindPathContext(loaded: LoadedProgram, config: CompilerProjectCo
 /** The path context bound to a source file, if any. */
 export function pathContextOf(sf: ts.SourceFile): PathContext | undefined {
   return contexts.get(sf);
+}
+
+/**
+ * Warning ABFC2008 for every import of the mod's own stubs by `/<mod>/...` (use `@mod/...`). Empty unless the file has a path
+ * context with `migrationHints`.
+ */
+export function modImportHints(sf: ts.SourceFile): Diagnostic[] {
+  const ctx = contexts.get(sf);
+  if (ctx === undefined || !ctx.migrationHints) return [];
+  const prefix = `/${ctx.mod}/`.toLowerCase();
+  const out: Diagnostic[] = [];
+  for (const st of sf.statements) {
+    if (!ts.isImportDeclaration(st) || !ts.isStringLiteral(st.moduleSpecifier)) continue;
+    const spec = st.moduleSpecifier;
+    if (!spec.text.toLowerCase().startsWith(prefix)) continue;
+    out.push({
+      severity: "warning",
+      code: "ABFC2008",
+      message: `import from "${spec.text}" names the mod; use "@mod/${spec.text.slice(prefix.length)}"`,
+      span: spanOf(spec, ctx.projectDir),
+      fix: 'import the stub through "@mod/..." (quick fix)',
+    });
+  }
+  return out;
 }
 
 export interface AssetPathProblem {
