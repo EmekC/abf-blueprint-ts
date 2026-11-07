@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { AbfcError } from "@abfc/env";
 import type { Backend, ReflectData, ReflectRequest, ReflectResult } from "@abfc/backend";
 import { main } from "../src/index.js";
 import { ALL_TOOLS, captureDeps, fakeEnvironmentFiles, fixInfo, scriptedBackend } from "./helpers.js";
@@ -70,7 +71,10 @@ async function fakeBackend(withReflect: boolean, calls: ReflectRequest[], reads:
     stageStatus: async () => ({ mod: "TestMod", stagingPath: "C:\\Stage", syncedAt: "t", changed: [], added: [], removed: [], conflicts: [] }),
     read: async (_mod, asset) => {
       reads.push(asset);
-      if (asset.endsWith("Missing")) throw new Error("not a blueprint");
+      if (asset.endsWith("Missing")) throw new Error("read failed");
+      if (asset.endsWith("Data")) {
+        throw new AbfcError({ severity: "error", code: "ABFC4002", message: `backend tool "bp_read" failed: ${asset} is not a Blueprint (DataAsset)` });
+      }
       return { asset, run: "C:\\Runs\\r1", exportPath: EXPORT_PATH, structure: { blueprint: { class: "Blueprint" }, functions: [] }, seconds: 1 };
     },
     applySpecs: async () => {
@@ -108,11 +112,12 @@ function setup(tmp: string, modAssets: "all" | string[]) {
       [EXPORT_PATH]: EXPORT,
     },
   });
-  // Mod assets on the (fake) disk: one real blueprint, one scratch folder entry that must be skipped, one non-blueprint.
+  // Mod assets on the (fake) disk: one real blueprint, one scratch folder entry that must be skipped, one that fails to read, one that is not a Blueprint.
   const content = `${fake.modDir}\\Content`;
   fake.files[`${content}\\Items\\BP_Hand.uasset`] = "x";
   fake.files[`${content}\\_McpTest\\BP_Scratch.uasset`] = "x";
   fake.files[`${content}\\Items\\Missing.uasset`] = "x";
+  fake.files[`${content}\\Items\\Data.uasset`] = "x";
   return fake;
 }
 
@@ -132,8 +137,11 @@ test("abfc stubs: reflect closure, mod assets, files, lock, paths and timings", 
     assert.deepEqual(calls[0]?.classes, ["/Game/Fake/BP_Fake.BP_Fake_C", THING]);
     assert.deepEqual(calls[0]?.castTargets, ["/Game/Fake/BP_Fake.BP_Fake_C"]);
     assert.deepEqual(calls[1]?.structs, [VEC]);
-    assert.deepEqual(reads, ["/TestMod/Items/BP_Hand", "/TestMod/Items/Missing"]);
+    assert.deepEqual(reads, ["/TestMod/Items/BP_Hand", "/TestMod/Items/Data", "/TestMod/Items/Missing"]);
     assert.match(out, /warning ABFC4002: could not read \/TestMod\/Items\/Missing/);
+    // An asset the backend says is not a Blueprint is skipped without a warning.
+    assert.doesNotMatch(out, /Items\/Data/);
+    assert.equal((out.match(/ABFC4002/g) ?? []).length, 1, out);
 
     const dir = join(tmp, ".abfc", "stubs", "ue5.4.4-1050002");
     const script = readFileSync(join(dir, "Script", "FakeEngine.d.ts"), "utf8");

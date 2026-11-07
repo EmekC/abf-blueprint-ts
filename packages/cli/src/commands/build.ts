@@ -137,7 +137,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   for (const c of [...fe.hir.classes, ...fe.hir.structs]) sources.set(c.path, { file: c.span.file, class: c.name, derived: c.pathDerived });
   // Mod-defined structs (UserDefinedStruct): created from the TS, never read; planned first.
   const structAssets = ir.assets.filter((a) => a.structFields !== undefined);
-  const owned = ir.assets.filter((a) => a.units.length > 0 || a.classDefaults !== undefined || a.classManagerRow !== undefined || a.director !== undefined || a.variables.some((v) => v.temp !== true));
+  const owned = ir.assets.filter((a) => a.units.length > 0 || a.classDefaults !== undefined || a.classManagerRow !== undefined || a.director !== undefined || a.variables.some((v) => v.temp !== true) || (a.director === undefined && readManifest(projectDir, a.path)?.directorRow !== undefined));
   // A class whose TypeScript is gone but whose manifest still lists units: its units are retired like those of a removed event.
   for (const m of listManifests(projectDir)) {
     if (!m.asset.startsWith(`/${mod}/`) || m.units.length === 0 || owned.some((a) => a.path === m.asset)) continue;
@@ -353,7 +353,9 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     const classDefaultsHash = defaultsDone ? a.defaults!.hash : old?.classDefaultsHash;
     const classDefaultsStageSyncedAt = defaultsDone ? stage.syncedAt : old?.classDefaultsStageSyncedAt;
     // The class-manager row the backend wrote for `@director` (recorded with the defaults hash, only after pass 5 succeeded).
-    const directorRow = defaultsDone && outcome.directorRow !== undefined ? outcome.directorRow.asset : old?.directorRow;
+    // A class that no longer has a `@director` drops the record once the pass ran (the row asset itself stays in the mod).
+    const lostDirector = defaultsDone && a.defaults!.director === undefined && old?.directorRow !== undefined;
+    const directorRow = defaultsDone && outcome.directorRow !== undefined ? outcome.directorRow.asset : lostDirector ? undefined : old?.directorRow;
     if (defaultsDone && outcome.directorRow !== undefined && (outcome.directorRow.created || outcome.directorRow.changed)) {
       output.info(`class-manager row ${outcome.directorRow.asset}: ${outcome.directorRow.created ? "created" : "updated"}`);
     }
@@ -363,6 +365,14 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
         code: "ABFC5013",
         asset: a.asset,
         message: `the previous class-manager row ${old.directorRow} stays in the mod; delete it in the Mod Editor`,
+      });
+    }
+    if (lostDirector) {
+      output.diag({
+        severity: "warning",
+        code: "ABFC5013",
+        asset: a.asset,
+        message: `the class has no @director any more; its class-manager row ${old!.directorRow} stays in the mod; delete it in the Mod Editor`,
       });
     }
     const appliedIds = new Set(a.units.map((p) => p.unit.id));

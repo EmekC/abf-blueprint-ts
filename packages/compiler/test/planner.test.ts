@@ -278,6 +278,28 @@ test("a director row is part of the defaults item (with the class path) and of i
   assert.deepEqual(planBuild(bare, input2(done, snapshot)).plan.assets, []);
 });
 
+test("a manifest directorRow without a director in the IR makes the defaults stale (and is read); a class with a director is unaffected", () => {
+  const snapshot = snapshot2();
+  const row = "/TestMod/DataTables/DT_ClassManager/EntityDirector_Test";
+  const { classDefaults: _unused, ...noDefaults } = ir2.assets[0]!;
+  const withDirector = { ...ir2, assets: [{ ...noDefaults, director: { row: "EntityDirector_Test", asset: row } }] };
+  const built = planBuild(withDirector, input2(appliedManifest(snapshot), snapshot)).plan.assets[0]!.defaults!;
+  const applied = appliedManifest(snapshot, { classDefaultsHash: built.hash, classDefaultsStageSyncedAt: "T1", directorRow: row });
+  assert.deepEqual(planBuild(withDirector, input2(applied, snapshot)).plan.assets, []);
+
+  // the decorator is gone: the same manifest is stale; the item has no director and no values
+  const removed = { ...ir2, assets: [noDefaults] };
+  const plan = planBuild(removed, input2(applied, snapshot)).plan.assets;
+  assert.equal(plan.length, 1);
+  assert.equal(plan[0]!.defaults?.director, undefined);
+  assert.deepEqual(plan[0]!.defaults?.values, {});
+  assert.ok(assetsNeedingRead(removed, { manifests: new Map([[asset2, applied]]), stage }).has(asset2));
+  // without a recorded row there is nothing to clear
+  const bareApplied = appliedManifest(snapshot);
+  assert.deepEqual(planBuild(removed, input2(bareApplied, snapshot)).plan.assets, []);
+  assert.equal(assetsNeedingRead(removed, { manifests: new Map([[asset2, bareApplied]]), stage }).has(asset2), false);
+});
+
 test("a changed delegate target replans the unit that takes its delegate; the reverse does not", () => {
   const snapshot = snapshot2();
   const hash = planBuild(ir2, input2(appliedManifest(snapshot), snapshot)).plan.assets[0]!.defaults!.hash;

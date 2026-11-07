@@ -201,9 +201,11 @@ function wouldPublish(ctx: CliContext, stage: StageStatus | null): PublishList {
     if (!m.asset.startsWith(`/${ctx.config.mod.name}/`)) continue;
     if (m.units.length > 0 || (m.retiredUnpublished?.length ?? 0) > 0) owned.add(m.asset);
   }
-  // Class-manager rows abfc wrote for `@director` classes (published only when the stage lists them as changed or added).
-  for (const m of listManifests(ctx.projectDir)) {
-    if (m.directorRow !== undefined && m.directorRow.startsWith(`/${ctx.config.mod.name}/`)) owned.add(m.directorRow);
+  // Class-manager rows abfc wrote for classes that still have a `@director` (published only when the stage lists them as changed or added).
+  for (const a of fe.ir?.assets ?? []) {
+    if (a.director === undefined) continue;
+    const row = readManifest(ctx.projectDir, a.path)?.directorRow;
+    if (row !== undefined && row.startsWith(`/${ctx.config.mod.name}/`)) owned.add(row);
   }
   const ownedKeys = new Set([...owned].map((p) => p.split("/").slice(2).join("/").toLowerCase()));
   const mine = (f: string): boolean => isContentFile(f) && !isHelperFile(f) && ownedKeys.has(contentKey(f));

@@ -79,6 +79,8 @@ function tagsOf(snapshot: Map<string, T3dNode>, unitId: string, graph: string): 
 
 /** Does the asset's class defaults pass need to run (hash or stage changed)? */
 function defaultsStale(asset: IrModule["assets"][number], manifest: Manifest | null, stage: StageInfo, directorRows = false): boolean {
+  // The `@director` is gone but the manifest still records its row: the pass runs once more so the build can clear the record.
+  if (manifest?.directorRow !== undefined && asset.director === undefined) return true;
   if (asset.classDefaults === undefined && asset.classManagerRow === undefined && asset.director === undefined) return false;
   const hash = classDefaultsHash(asset.classDefaults ?? {}, asset.classManagerRow, asset.director?.asset);
   if (manifest?.classDefaultsHash !== hash || (manifest.classDefaultsStageSyncedAt ?? null) !== stage.syncedAt) return true;
@@ -370,7 +372,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
     }
 
     let defaults: AssetPlan["defaults"];
-    if (asset.classDefaults !== undefined || asset.classManagerRow !== undefined || asset.director !== undefined) {
+    if (asset.classDefaults !== undefined || asset.classManagerRow !== undefined || asset.director !== undefined || (manifest?.directorRow !== undefined && asset.director === undefined)) {
       const values = asset.classDefaults ?? {};
       const hash = classDefaultsHash(values, asset.classManagerRow, asset.director?.asset);
       if (defaultsStale(asset, manifest, input.stage, input.directorRows === true)) {

@@ -24,6 +24,9 @@ import { ensureStage } from "./stage.js";
 /** Folders of the mod's Content that are never stubbed. */
 const SKIPPED_FOLDERS = ["_McpTest", "_McpTmp"];
 
+/** The backend's refusal to read an asset of another class (`<asset> is not a Blueprint (<Class>)`, `<asset> is a <Class>, not a Blueprint`). */
+const NOT_A_BLUEPRINT = /not a Blueprint/i;
+
 /** Every `*.uasset` below `<modDir>\Content`, as `/<mod>/<path without extension>`. */
 function listModAssets(ctx: CliContext, modDir: string): string[] {
   const host = ctx.deps.host;
@@ -94,6 +97,8 @@ async function reflectAndRead(ctx: CliContext, backend: Backend): Promise<number
         manual.push(manualFromExport(asset, text, snap.structure, owned[asset] ?? { units: [], variables: [] }));
       } catch (e) {
         if (e instanceof AbfcError && e.diagnostic.code !== "ABFC4002" && e.diagnostic.code !== "ABFC4100") throw e;
+        // The mod also holds assets that are not Blueprints (mod config, class-manager rows, structs, metadata): the backend says so, and they have no stub to make.
+        if (e instanceof AbfcError && e.diagnostic.code === "ABFC4002" && NOT_A_BLUEPRINT.test(e.diagnostic.message)) continue;
         output.diag({
           severity: "warning",
           code: "ABFC4002",

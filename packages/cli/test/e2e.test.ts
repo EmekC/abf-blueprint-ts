@@ -1683,6 +1683,36 @@ test("(row1) @director with the classManagerRows capability: the spec carries cl
   });
 });
 
+test("(row3) removing @director: the defaults pass runs again, the manifest drops directorRow, ABFC5013 warns, publish no longer lists the row", async () => {
+  await withRig({ handMadeEvent: false, classManagerRows: true }, async (r) => {
+    addDirector(r.dir);
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)?.directorRow, DIRECTOR_ROW);
+    let p = await r.run(["publish", "--dry-run"]);
+    assert.match(p.out, /DataTables\/DT_ClassManager\/EntityDirector_Test\.uasset/);
+
+    const file = join(r.dir, "src", "Relay.ts");
+    writeFileSync(file, readFileSync(file, "utf8").replace(/@director\("[^"]*"\)\n/, ""), "utf8");
+    const before = r.backend.calls.filter((c) => c.tool === "bp_apply" && c.label === "defaults").length;
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /up to date/);
+    const defaults = r.backend.calls.filter((c) => c.tool === "bp_apply" && c.label === "defaults");
+    assert.equal(defaults.length, before + 1, "the defaults pass ran again");
+    assert.equal(defaults[defaults.length - 1]!.specs![0]!.class_manager_row, undefined);
+    assert.match(x.out, /warning ABFC5013: the class has no @director any more; its class-manager row \/TestMod\/DataTables\/DT_ClassManager\/EntityDirector_Test stays in the mod; delete it in the Mod Editor/);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)?.directorRow, undefined);
+
+    p = await r.run(["publish", "--dry-run"]);
+    assert.doesNotMatch(p.out, /EntityDirector_Test/);
+
+    x = await r.run(["build"]);
+    assert.match(x.out, /up to date/);
+    assert.doesNotMatch(x.out, /ABFC5013/);
+  });
+});
+
 test("(row2) @director without the capability keeps the verify route and warns ABFC2077; no directorRow is recorded", async () => {
   await withRig({ handMadeEvent: false }, async (r) => {
     addDirector(r.dir);
