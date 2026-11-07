@@ -12,7 +12,8 @@
   "scripts": {
     "build": "tsc -b",
     "test": "node --test \"packages/*/dist/test/**/*.test.js\"",
-    "clean": "tsc -b --clean"
+    "clean": "tsc -b --clean",
+    "vsix": "npm run build && npm run package -w abfc-vscode"
   },
   "devDependencies": {
     "@types/node": "24.19.2",
