@@ -8,6 +8,8 @@ const INSTALL_DOCS = "https://github.com/EmekC/abf-blueprint-ts/blob/main/docs/i
 
 let client: LanguageClient | undefined;
 let output: vscode.OutputChannel | undefined;
+/** The message of the last failed lookup, shown instead of the generic one. */
+let lastMessage: string | undefined;
 
 function isFile(p: string): boolean {
   try {
@@ -31,8 +33,12 @@ function locate(): AbfcLaunch | null {
     workspaceFolders: (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath),
     platform: process.platform,
     isFile,
+    trusted: vscode.workspace.isTrusted,
   });
+  lastMessage = found.message;
   if (found.launch === null) {
+    if (found.message !== undefined) log(found.message);
+    if (!vscode.workspace.isTrusted) log("The workspace is not trusted: abfc.path, abfc.cliPath and the workspace node_modules are not used.");
     log("abfc was not found. Paths checked:");
     for (const t of found.tried) log(`  ${t}`);
   } else {
@@ -42,7 +48,8 @@ function locate(): AbfcLaunch | null {
 }
 
 function notFound(): void {
-  void vscode.window.showErrorMessage("abfc was not found. Install abfc or set abfc.path.", "Open install docs").then((choice) => {
+  void vscode.window
+    .showErrorMessage(lastMessage ?? "abfc was not found. Install abfc or set abfc.path.", "Open install docs").then((choice) => {
     if (choice === "Open install docs") void vscode.env.openExternal(vscode.Uri.parse(INSTALL_DOCS));
   });
 }
@@ -151,6 +158,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (e.affectsConfiguration("abfc.path") || e.affectsConfiguration("abfc.cliPath")) void restart();
     }),
   );
+
+  context.subscriptions.push(vscode.workspace.onDidGrantWorkspaceTrust(() => void restart()));
 
   await start();
 }

@@ -18,6 +18,16 @@
   "activationEvents": [
     "workspaceContains:**/abf.config.json"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "restrictedConfigurations": [
+        "abfc.path",
+        "abfc.cliPath"
+      ],
+      "description": "In an untrusted workspace abfc.path, abfc.cliPath and the workspace node_modules are not used; abfc is only looked up on PATH, in the npm global folder and in the installer folder."
+    }
+  },
   "contributes": {
     "jsonValidation": [
       {
@@ -85,12 +95,14 @@
         "abfc.path": {
           "type": "string",
           "default": "",
+          "scope": "machine-overridable",
           "description": "Path to abfc.exe, or to a .js entry started with node"
         },
         "abfc.cliPath": {
           "type": "string",
           "default": "",
-          "description": "Source install: path to packages/cli/dist/src/bin.js"
+          "scope": "machine-overridable",
+          "description": "Source install:path to packages/cli/dist/src/bin.js"
         },
         "abfc.trace.server": {
           "type": "string",

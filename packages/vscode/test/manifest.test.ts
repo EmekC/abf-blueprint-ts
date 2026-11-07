@@ -19,12 +19,13 @@ interface Manifest {
   engines: { vscode: string };
   main: string;
   activationEvents: string[];
+  capabilities: { untrustedWorkspaces: { supported: string; restrictedConfigurations: string[]; description: string } };
   contributes: {
     jsonValidation: { fileMatch: string; url: string }[];
     problemMatchers: { name: string; owner: string; fileLocation: string[]; pattern: Record<string, unknown> }[];
     taskDefinitions: { type: string; required: string[] }[];
     commands: { command: string; title: string }[];
-    configuration: { title: string; properties: Record<string, { type: string; default: unknown; enum?: string[] }> };
+    configuration: { title: string; properties: Record<string, { type: string; default: unknown; enum?: string[]; scope?: string }> };
   };
   scripts: Record<string, string>;
   dependencies: Record<string, string>;
@@ -101,4 +102,14 @@ test("commands and settings", () => {
   assert.equal(p["abfc.cliPath"]?.default, "");
   assert.deepEqual(p["abfc.trace.server"]?.enum, ["off", "messages", "verbose"]);
   assert.equal(p["abfc.trace.server"]?.default, "off");
+});
+
+test("Workspace Trust: limited support, the two path settings are restricted and machine-overridable", () => {
+  const t = manifest.capabilities.untrustedWorkspaces;
+  assert.equal(t.supported, "limited");
+  assert.deepEqual(t.restrictedConfigurations, ["abfc.path", "abfc.cliPath"]);
+  assert.ok(t.description.length > 0);
+  const p = manifest.contributes.configuration.properties;
+  assert.equal(p["abfc.path"]?.scope, "machine-overridable");
+  assert.equal(p["abfc.cliPath"]?.scope, "machine-overridable");
 });

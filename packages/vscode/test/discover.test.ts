@@ -64,6 +64,32 @@ test("abfc.cmd without bin.js beside it is skipped", () => {
   assert.ok(r.tried.includes(`C:\\npm\\${BIN}`));
 });
 
+test("an abfc.path naming a .cmd shim is mapped to the bin.js beside it and started with node", () => {
+  const bin = `C:\\npm\\${BIN}`;
+  for (const shim of ["C:\\npm\\abfc.cmd", "C:\\npm\\abfc.BAT"]) {
+    const r = findAbfc(input([shim, bin], { abfcPath: shim }));
+    assert.deepEqual(r.launch, { command: "node", args: [bin], source: "abfc.path" });
+  }
+});
+
+test("an abfc.path naming a .cmd shim without bin.js is not started and says what to do", () => {
+  const r = findAbfc(input(["C:\\npm\\abfc.cmd", "C:\\bin\\abfc.exe"], { abfcPath: "C:\\npm\\abfc.cmd", env: { PATH: "C:\\bin" } }));
+  assert.equal(r.launch, null);
+  assert.match(r.message ?? "", /abfc\.exe or bin\.js/);
+  assert.ok(r.tried.includes(`C:\\npm\\${BIN}`));
+});
+
+test("an untrusted workspace ignores abfc.path, the workspace bin.js and abfc.cliPath", () => {
+  const files = ["C:\\a\\abfc.exe", `C:\\w\\${BIN}`, "C:\\cli\\bin.js", "C:\\b\\abfc.exe"];
+  const base = { abfcPath: "C:\\a\\abfc.exe", workspaceFolders: ["C:\\w"], cliPath: "C:\\cli\\bin.js" };
+  const only = findAbfc(input(files.slice(0, 3), { ...base, trusted: false }));
+  assert.equal(only.launch, null);
+  assert.deepEqual(only.tried, []);
+  const machine = findAbfc(input(files, { ...base, env: { PATH: "C:\\b" }, trusted: false }));
+  assert.deepEqual(machine.launch, { command: "C:\\b\\abfc.exe", args: [], source: "PATH" });
+  assert.equal(findAbfc(input(files, { ...base, env: { PATH: "C:\\b" }, trusted: true })).launch?.source, "abfc.path");
+});
+
 test("the installer folder", () => {
   const exe = "C:\\Users\\Someone\\AppData\\Local\\Programs\\abfc\\abfc.exe";
   const r = findAbfc(input([exe], { env: { LOCALAPPDATA: "C:\\Users\\Someone\\AppData\\Local" } }));

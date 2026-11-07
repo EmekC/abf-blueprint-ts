@@ -19,6 +19,8 @@ export interface DiscoverInput {
   workspaceFolders: string[];
   platform: string;
   isFile: (p: string) => boolean;
+  /** False in an untrusted workspace: the steps that read the opened repo (settings, workspace node_modules) are skipped. Default true. */
+  trusted?: boolean | undefined;
 }
 
 export const CONFIG_FILE_NAME = "abf.config.json";
@@ -50,11 +52,14 @@ function pathDirs(i: DiscoverInput): string[] {
 /**
  * Looks for abfc, first hit wins: the `abfc.path` setting, `abfc` on `PATH`, an npm global install, the installer's
  * default folder, `node_modules/@abfc/cli` in a workspace folder, the `abfc.cliPath` setting. `.js` entries start as
- * `node <file>`; a `.cmd` shim is never started. `tried` lists every path that was checked.
+ * `node <file>`; a `.cmd`/`.bat` shim is never started (an `abfc.path` naming one is mapped to the `bin.js` beside it, or
+ * rejected with `message`). In an untrusted workspace only `PATH`, the npm global install and the installer folder are
+ * used. `tried` lists every path that was checked.
  */
-export function findAbfc(i: DiscoverInput): { launch: AbfcLaunch | null; tried: string[] } {
+export function findAbfc(i: DiscoverInput): { launch: AbfcLaunch | null; tried: string[]; message?: string } {
   const p = pathModule(i.platform);
   const win = i.platform === "win32";
+  const trusted = i.trusted !== false;
   const tried: string[] = [];
   const exists = (file: string): boolean => {
     tried.push(file);
@@ -63,7 +68,16 @@ export function findAbfc(i: DiscoverInput): { launch: AbfcLaunch | null; tried: 
 
   // 1. the setting
   const abfcPath = i.abfcPath?.trim() ?? "";
-  if (abfcPath !== "" && exists(abfcPath)) {
+  if (trusted && abfcPath !== "" && exists(abfcPath)) {
+    if (/\.(cmd|bat)$/i.test(abfcPath)) {
+      const bin = p.join(p.dirname(abfcPath), ...BIN_JS_PARTS);
+      if (exists(bin)) return { launch: nodeLaunch(bin, "abfc.path"), tried };
+      return {
+        launch: null,
+        tried,
+        message: "abfc.path names a .cmd or .bat shim, which cannot be started. Point abfc.path at abfc.exe or bin.js.",
+      };
+    }
     return {
       launch: isScript(abfcPath) ? nodeLaunch(abfcPath, "abfc.path") : { command: abfcPath, args: [], source: "abfc.path" },
       tried,
@@ -96,14 +110,14 @@ export function findAbfc(i: DiscoverInput): { launch: AbfcLaunch | null; tried: 
   }
 
   // 5. a source install inside a workspace folder
-  for (const folder of i.workspaceFolders) {
+  for (const folder of trusted ? i.workspaceFolders : []) {
     const bin = p.join(folder, ...BIN_JS_PARTS);
     if (exists(bin)) return { launch: nodeLaunch(bin, "workspace"), tried };
   }
 
   // 6. the cliPath setting
   const cliPath = i.cliPath?.trim() ?? "";
-  if (cliPath !== "" && exists(cliPath)) return { launch: nodeLaunch(cliPath, "abfc.cliPath"), tried };
+  if (trusted && cliPath !== "" && exists(cliPath)) return { launch: nodeLaunch(cliPath, "abfc.cliPath"), tried };
 
   return { launch: null, tried };
 }
