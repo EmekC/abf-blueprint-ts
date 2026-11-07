@@ -83,11 +83,55 @@ export function loadedFromProgram(projectDir: string, program: ts.Program, diagn
   return { projectDir: root, program, checker: program.getTypeChecker(), files: { classes, tests }, diagnostics };
 }
 
+export type TsProgram = ts.Program;
+export type TsSourceFile = ts.SourceFile;
+
+/** Keeps parsed source files between programs: the same `SourceFile` object comes back while a file's text is unchanged. */
+export class SourceFileCache {
+  private readonly files = new Map<string, { text: string; sf: ts.SourceFile }>();
+
+  private static keyOf(fileName: string, langOpts: ts.ScriptTarget | ts.CreateSourceFileOptions): string {
+    const o = typeof langOpts === "number" ? String(langOpts) : `${langOpts.languageVersion}:${langOpts.impliedNodeFormat ?? ""}:${langOpts.jsDocParsingMode ?? ""}`;
+    return `${fileName.replaceAll("\\", "/").toLowerCase()}|${o}`;
+  }
+
+  /** The cached source file when `text` is unchanged, else a freshly parsed one (which replaces the entry). */
+  get(fileName: string, text: string, langOpts: ts.ScriptTarget | ts.CreateSourceFileOptions): ts.SourceFile {
+    const key = SourceFileCache.keyOf(fileName, langOpts);
+    const hit = this.files.get(key);
+    if (hit !== undefined && hit.text === text) return hit.sf;
+    const sf = ts.createSourceFile(fileName, text, langOpts, true);
+    this.files.set(key, { text, sf });
+    return sf;
+  }
+
+  /** Drops the entries whose file is not part of `program`. */
+  retain(program: ts.Program): void {
+    const keep = new Set<string>();
+    for (const sf of program.getSourceFiles()) keep.add(sf.fileName.replaceAll("\\", "/").toLowerCase());
+    // An entry key is `<file>|<options>`; the file part decides, every option variant of a kept file stays.
+    for (const key of [...this.files.keys()]) {
+      if (!keep.has(key.slice(0, key.lastIndexOf("|")))) this.files.delete(key);
+    }
+  }
+
+  get size(): number {
+    return this.files.size;
+  }
+}
+
+export interface LoadProgramOptions {
+  /** Text for a file that differs from the disk (open editor buffers); undefined = read the disk. */
+  overlay?: (fileName: string) => string | undefined;
+  /** Reuses source files between calls. */
+  cache?: SourceFileCache;
+}
+
 /**
  * `<projectDir>/tsconfig.json` -> program. Class files are the root files not ending `.test.ts`; test files end `.test.ts`.
  * `oldProgram` lets TypeScript reuse unchanged files and structure (watch mode).
  */
-export function loadProgram(projectDir: string, oldProgram?: ts.Program): LoadedProgram {
+export function loadProgram(projectDir: string, oldProgram?: ts.Program, opts: LoadProgramOptions = {}): LoadedProgram {
   const root = resolve(projectDir);
   const configPath = resolve(root, "tsconfig.json");
   const fatal: ts.Diagnostic[] = [];
@@ -118,13 +162,20 @@ export function loadProgram(projectDir: string, oldProgram?: ts.Program): Loaded
     diagnostics.push({ severity: "warning", code: "ABFC2000", message: `ignoring unreadable ${file}: ${why}; run abfc stubs to rewrite it` }),
   );
   const host = ts.createCompilerHost(parsed.options);
-  if (filter !== null) {
-    const getSourceFile = host.getSourceFile.bind(host);
-    host.getSourceFile = (fileName, languageVersionOrOptions, onError, shouldCreate) => {
-      const sf = getSourceFile(fileName, languageVersionOrOptions, onError, shouldCreate);
-      if (sf === undefined) return sf;
-      const text = filter(fileName, sf.text);
-      return text === sf.text ? sf : ts.createSourceFile(fileName, text, languageVersionOrOptions, true);
+  const { overlay, cache } = opts;
+  if (filter !== null || overlay !== undefined || cache !== undefined) {
+    const readFile = host.readFile.bind(host);
+    const fileExists = host.fileExists.bind(host);
+    host.readFile = (f) => overlay?.(f) ?? readFile(f);
+    host.fileExists = (f) => overlay?.(f) !== undefined || fileExists(f);
+    host.getSourceFile = (fileName, languageVersionOrOptions, onError) => {
+      let text = overlay?.(fileName) ?? ts.sys.readFile(fileName);
+      if (text === undefined) {
+        onError?.("cannot read " + fileName);
+        return undefined;
+      }
+      if (filter !== null) text = filter(fileName, text);
+      return cache ? cache.get(fileName, text, languageVersionOrOptions) : ts.createSourceFile(fileName, text, languageVersionOrOptions, true);
     };
   }
   const program = ts.createProgram({
