@@ -170,7 +170,7 @@ function printInfo(ctx: CliContext, info: BackendInfo): void {
   const bc = c.backendContainerTypes;
   output.info(
     `  containers: backend ${bc ? `array: ${bc.array}, map: ${bc.map}, set: ${bc.set}` : "not reported"}; ` +
-      `abfc array: ${c.containerTypes.array}, map: ${c.containerTypes.map}, set: ${c.containerTypes.set} (Phase 1)`,
+      `abfc array: ${c.containerTypes.array}, map: ${c.containerTypes.map}, set: ${c.containerTypes.set}, struct: ${c.createKinds.includes("UserDefinedStruct")}`,
   );
   output.info(
     `  reflect: ${yn(c.reflect)}, compile node refs: ${yn(c.compileErrorNodeRefs)}, game test: ${yn(c.gameTest)}, audit: ${yn(c.audit)}`,

@@ -189,3 +189,35 @@ test("unitStateHash changes with a default or a link, and flags missing nodes", 
   assert.notEqual(unitStateHash(e.nodes, ["Fake_Event_0", "Fake_Cast_0", "Gone"]), base);
   assert.notEqual(unitStateHash(e.nodes, ["Gone"]), unitStateHash(e.nodes, ["Fake_Event_0"]));
 });
+
+test("map and set variables, pins and user pins parse to grammar types with their value type", () => {
+  const mapPin = (id: string, name: string, value: string): string =>
+    `CustomProperties Pin (PinId=${id},PinName="${name}",PinType.PinCategory="name",PinType.PinSubCategory="",PinType.PinSubCategoryObject=None,` +
+    `PinType.PinSubCategoryMemberReference=(),PinType.PinValueType=${value},PinType.ContainerType=Map,PinType.bIsReference=False,` +
+    "PersistentGuid=00000000000000000000000000000000,bHidden=False,)";
+  const text = [
+    `Begin Object Class=/Script/Engine.Blueprint Name="BP_Host" ExportPath="/Script/Engine.Blueprint'${BP}'"`,
+    `   NewVariables(0)=(VarName="Counts",VarGuid=4F1E9FD0FD104258BE5D5D30A551C609,VarType=(PinCategory="name",PinValueType=(TerminalCategory="int"),ContainerType=Map),FriendlyName="Counts",PropertyFlags=5)`,
+    `   NewVariables(1)=(VarName="Tags",VarGuid=4F1E9FD0FD104258BE5D5D30A551C60A,VarType=(PinCategory="name",ContainerType=Set),FriendlyName="Tags",PropertyFlags=5)`,
+    `   NewVariables(2)=(VarName="Refs",VarGuid=4F1E9FD0FD104258BE5D5D30A551C60B,VarType=(PinCategory="string",PinValueType=(TerminalCategory="object",TerminalSubCategoryObject="/Script/CoreUObject.Class'/Script/Engine.Actor'"),ContainerType=Map),FriendlyName="Refs",PropertyFlags=5)`,
+    `   NewVariables(3)=(VarName="Broken",VarGuid=4F1E9FD0FD104258BE5D5D30A551C60C,VarType=(PinCategory="name",ContainerType=Map),FriendlyName="Broken",PropertyFlags=5)`,
+    `   Begin Object Class=/Script/Engine.EdGraph Name="EventGraph" ExportPath="/Script/Engine.EdGraph'${BP}:EventGraph'"`,
+    `      Begin Object Class=/Script/BlueprintGraph.K2Node_CallFunction Name="K2Node_CallFunction_0" ExportPath="/Script/BlueprintGraph.K2Node_CallFunction'${BP}:EventGraph.K2Node_CallFunction_0'"`,
+    "         " + mapPin("DDDD0000000000000000000000000001", "TargetMap", '(TerminalCategory="int")'),
+    "         " + mapPin("DDDD0000000000000000000000000002", "Empty", "()"),
+    '         CustomProperties UserDefinedPin (PinName="Lookup",PinType=(PinCategory="name",PinValueType=(TerminalCategory="int"),ContainerType=Map),DesiredPinDirection=EGPD_Input)',
+    "      End Object",
+    "   End Object",
+    "End Object",
+  ].join("\n");
+  const ex = parseExport(text);
+  assert.deepEqual(ex.variables.map((v) => v.type), ["map:name:int", "set:name", "map:string:object:/Script/Engine.Actor", "unsupported:name:Map"]);
+  const node = ex.nodes.get("K2Node_CallFunction_0")!;
+  assert.deepEqual(node.pins[0]!.valueType, { category: "int", subCategory: "", subCategoryObject: null });
+  assert.equal(node.pins[0]!.container, "Map");
+  assert.equal(node.pins[1]!.valueType, null);
+  assert.deepEqual(userPins(node).ins, [{ name: "Lookup", type: "map:name:int" }]);
+  // a map pin's value type stays out of the semantic hash, so units applied before value types were parsed keep their stored hash
+  const other = parseExport(text.replace('PinType.PinValueType=(TerminalCategory="int"),PinType.ContainerType=Map', 'PinType.PinValueType=(TerminalCategory="bool"),PinType.ContainerType=Map'));
+  assert.equal(unitStateHash(ex.nodes, ["K2Node_CallFunction_0"]), unitStateHash(other.nodes, ["K2Node_CallFunction_0"]));
+});

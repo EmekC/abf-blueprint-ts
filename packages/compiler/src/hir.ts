@@ -5,6 +5,9 @@ import type { Diagnostic, Span } from "@abfc/ir";
 /** bp_apply type grammar, e.g. "int", "object:/Script/Engine.Actor", "array:name". */
 export type BpType = string;
 
+/** An own member variable (`Name!: T;` in the TS class); abfc declares it in the asset. */
+export interface HirField { name: string; type: BpType; span: Span }
+
 export interface HirClass {
   name: string;
   /** Package path, e.g. "/Mod/Dir/BP_X". */
@@ -15,6 +18,8 @@ export interface HirClass {
   parent: string;
   span: Span;
   events: HirEvent[];
+  /** Own member variables (`Name!: T;`), in declaration order. */
+  fields: HirField[];
   /** Hand-made functions/events of the asset that the TS class sees through `<X>_Manual` (tag `@bpHandMade`). */
   manualUnits: string[];
   /** Class defaults from the `@blueprint` options (pin names -> T3D text); filled by the class-defaults pass. */
@@ -52,7 +57,9 @@ export type HirStmt =
   /** `for (let i = A; cond; i++ | i--)` with an int counter; the counter is only visible in `cond` and `body`. */
   | { k: "forCount"; counter: LocalId; name: string; init: HirExpr; cond: HirExpr; step: 1 | -1; body: HirStmt[]; span: Span }
   /** Mutation of an own array variable: `push(x)`, `splice(i, 1)` (removeAt), `length = 0` (clear). `array.type` is the array type, e.g. "array:name". */
-  | { k: "arrayOp"; op: "push" | "removeAt" | "clear"; array: { self: string; type: BpType }; value?: HirExpr; index?: HirExpr; span: Span };
+  | { k: "arrayOp"; op: "push" | "removeAt" | "clear"; array: { self: string; type: BpType }; value?: HirExpr; index?: HirExpr; span: Span }
+  /** Mutation of an own map/set variable: Map `set`/`delete`/`clear`, Set `add`/`delete`/`clear`. `target.type` is e.g. "map:name:int" or "set:name". */
+  | { k: "containerOp"; container: "map" | "set"; op: "add" | "remove" | "clear"; target: { self: string; type: BpType }; key?: HirExpr; value?: HirExpr; span: Span };
 
 export type HirExpr = (
   | { k: "self" }
@@ -102,15 +109,33 @@ export type HirExpr = (
   | { k: "index"; array: HirExpr; index: HirExpr; elem: BpType }
   /** `arr.indexOf(x)`: Array_Find (-1 when absent). `elem` is the element type. */
   | { k: "arrayFind"; array: HirExpr; value: HirExpr; elem: BpType }
+  /** Pure query of an own map/set: `has` (Map_Contains/Set_Contains, bool), `get` (Map_Find `Value`, the value type), `size` (Map_Length/Set_Length, int). `key` is the key or element. */
+  | { k: "containerQuery"; container: "map" | "set"; op: "has" | "get" | "size"; target: HirExpr; targetType: BpType; key?: HirExpr }
   /** Template literal where a `text` is expected: FormatText. `format` already has `{`, `}` and backticks escaped. */
   | { k: "formatText"; format: string; args: Array<{ name: string; value: HirExpr }> }
   /** Object literal of a stub struct (`@bpKind struct`): MakeStruct. `struct` is the struct path. */
   | { k: "makeStruct"; struct: string; fields: Array<{ name: string; value: HirExpr }> }
 ) & { type: BpType | "void" | "null"; span: Span };
 
+/** A field of a mod-defined struct (`Name!: T;`); `memberName` is the Blueprint member name `<Name>_<index>_<GUID>`. */
+export interface HirStructField { name: string; type: BpType; memberName: string; span: Span }
+
+/** A mod-defined struct (`@struct({ path })`, a UserDefinedStruct created by abfc). */
+export interface HirStruct {
+  name: string;
+  /** Package path, e.g. "/Mod/Dir/S_X". */
+  path: string;
+  /** `<path>.<AssetName>`. */
+  objectPath: string;
+  fields: HirStructField[];
+  span: Span;
+}
+
 export interface HirProgram {
   mod: string;
   classes: HirClass[];
+  /** Mod-defined structs, ordered so that a struct comes after the structs its fields use. */
+  structs: HirStruct[];
   classMeta: Record<string, string>;
   diagnostics: Diagnostic[];
 }

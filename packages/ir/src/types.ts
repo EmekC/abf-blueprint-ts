@@ -156,6 +156,10 @@ export interface Profile {
 
 export interface AssetPlan {
   asset: string;
+  /** The asset does not exist in the stage yet: the first `bp_apply` spec creates it (`create: { class, parent, if_missing: true }`). */
+  create?: { class: "Blueprint" | "WidgetBlueprint"; parent: string };
+  /** A mod-defined struct (UserDefinedStruct) to create with these fields (`name` is the full member name `<Field>_<i>_<GUID>`); units and variables are empty. */
+  struct?: { fields: IrVariable[] };
   graphNodes: Record<string /* graph */, Array<{ name: string; pos: [number, number] }>>;
   variables: IrVariable[];
   units: Array<{ unit: IrUnit; removeNodes: string[]; origin: [number, number] }>;

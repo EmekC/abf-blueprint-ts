@@ -91,6 +91,7 @@ export async function applyTwoPhase(
       throw fail("ABFC4004", `patched ${patched} of ${x.patches.length} wildcard pins in ${x.spec.asset}.`, "the editor export format may have changed, so the two-phase wildcard-pin route could not match every pin; resolve the pin types in the backend (native node kinds) or update the patcher.");
     }
     const spec: BpApplyAssetSpec = { asset: x.spec.asset, raw };
+    if (x.spec.create) spec.create = x.spec.create;
     if (x.spec.variables) spec.variables = x.spec.variables;
     return spec;
   });

@@ -521,3 +521,106 @@ function has2(u: IrUnit, from: string, to: string): boolean {
 function wiresIntoOf(u: IrUnit, to: string): string[] {
   return u.wires.filter((w) => w[1].startsWith(`${to}.`)).map((w) => w[0]);
 }
+
+test("own fields lower to non-temp variables with their types", () => {
+  const dir4 = fileURLToPath(new URL("../../test/fixtures/phase4", import.meta.url));
+  const loaded = loadProgram(dir4);
+  const sf = loaded.files.classes.find((f) => f.fileName.endsWith("/Fields.ts"));
+  assert.ok(sf);
+  const mod = lower(buildHir(loaded, config, profile, [sf]), profile);
+  const fields = mod.assets[0]!.variables.filter((v) => v.temp !== true);
+  assert.deepEqual(fields.map((v) => [v.name, v.type]), [
+    ["Score", "int"],
+    ["Counts", "map:name:int"],
+    ["Seen", "set:name"],
+    ["Names", "array:name"],
+  ]);
+  assert.ok(mod.assets[0]!.variables.filter((v) => v.temp === true).every((v) => v.name.startsWith("abfc_")));
+  assert.deepEqual(validateIrModule(mod), []);
+});
+
+test("every asset carries the create entry (Blueprint or WidgetBlueprint, with its parent)", () => {
+  const dir4 = fileURLToPath(new URL("../../test/fixtures/phase4", import.meta.url));
+  const loaded = loadProgram(dir4);
+  const sf = loaded.files.classes.find((f) => f.fileName.endsWith("/Fields.ts"));
+  assert.ok(sf);
+  const mod = lower(buildHir(loaded, config, profile, [sf]), profile);
+  assert.deepEqual(mod.assets[0]!.create, { kind: "Blueprint", parent: "/Script/FakeEngine.Actor" });
+  assert.deepEqual(validateIrModule(mod), []);
+});
+
+test("a widget class creates a WidgetBlueprint with its UserWidget parent", () => {
+  assert.deepEqual(widgetIr.assets[0]!.create, { kind: "WidgetBlueprint", parent: "/Script/UMG.UserWidget" });
+});
+
+test("native Map and Set lower to library calls with typed pins and an exec chain", () => {
+  const dir4 = fileURLToPath(new URL("../../test/fixtures/phase4", import.meta.url));
+  const loaded = loadProgram(dir4);
+  const sf = loaded.files.classes.find((f) => f.fileName.endsWith("/Maps.ts"));
+  assert.ok(sf);
+  const hir = buildHir(loaded, config, profile, [sf]);
+  assert.deepEqual(hir.diagnostics, []);
+  const mod = lower(hir, profile);
+  assert.deepEqual(validateIrModule(mod), []);
+  const asset = mod.assets[0]!;
+  assert.deepEqual(asset.variables.filter((v) => v.temp !== true).map((v) => [v.name, v.type]), [
+    ["Counts", "map:name:int"],
+    ["Seen", "set:name"],
+    ["Size", "int"],
+  ]);
+  const MAPLIB = "/Script/Engine.BlueprintMapLibrary";
+  const SETLIB = "/Script/Engine.BlueprintSetLibrary";
+  const byFn = (u: IrUnit, cls: string, fn: string): IrNode[] => u.nodes.filter((n) => n.sem?.k === "call" && n.sem.class === cls && n.sem.function === fn);
+
+  const bump = asset.units.find((u) => u.id === "event:Bump")!;
+  const adds = byFn(bump, MAPLIB, "Map_Add");
+  assert.equal(adds.length, 2);
+  assert.deepEqual(adds[0]!.pinTypes, { TargetMap: "map:name:int", Key: "name", Value: "int" });
+  const find = byFn(bump, MAPLIB, "Map_Find");
+  assert.equal(find.length, 1);
+  assert.deepEqual(find[0]!.pinTypes, { TargetMap: "map:name:int", Key: "name", Value: "int" });
+  assert.ok(find[0]!.t3d.props.includes("bIsPureFunc=True"));
+  // the found Value (not the ReturnValue) feeds the addition
+  const findId = find[0]!.id;
+  const arith = bump.wires.filter((w) => w[0] === `${findId}.Value`);
+  assert.equal(arith.length, 1);
+  assert.equal(bump.wires.some((w) => w[0] === `${findId}.ReturnValue`), false);
+  assert.equal(byFn(bump, MAPLIB, "Map_Contains").length, 1);
+  assert.equal(byFn(bump, MAPLIB, "Map_Length").length, 1);
+  assert.equal(byFn(bump, SETLIB, "Set_Length").length, 1);
+  assert.deepEqual(byFn(bump, SETLIB, "Set_Add")[0]!.pinTypes, { TargetSet: "set:name", NewItem: "name" });
+  assert.deepEqual(byFn(bump, SETLIB, "Set_Length")[0]!.pinTypes, { TargetSet: "set:name" });
+
+  const forget = asset.units.find((u) => u.id === "event:Forget")!;
+  const chain = ["Map_Remove", "Set_Remove", "Map_Clear", "Set_Clear"].map((fn) => forget.nodes.find((n) => n.sem?.k === "call" && n.sem.function === fn)!);
+  assert.ok(chain.every((n) => n !== undefined));
+  assert.deepEqual(chain[0]!.pinTypes, { TargetMap: "map:name:int", Key: "name" });
+  assert.deepEqual(chain[1]!.pinTypes, { TargetSet: "set:name", Item: "name" });
+  assert.deepEqual(chain[2]!.pinTypes, { TargetMap: "map:name:int" });
+  const execLinked = (a: IrNode, b: IrNode): boolean => forget.wires.some((w) => w[0] === `${a.id}.then` && w[1] === `${b.id}.execute`);
+  assert.ok(execLinked(chain[0]!, chain[1]!) && execLinked(chain[1]!, chain[2]!) && execLinked(chain[2]!, chain[3]!));
+  assert.equal(forget.nodes.find((n) => n.sem?.k === "call" && n.sem.function === "Set_Contains")!.t3d.props.includes("bIsPureFunc=True"), true);
+});
+
+test("a @struct asset lowers to a UserDefinedStruct with its fields and no variables, ahead of the classes", () => {
+  const dir4 = fileURLToPath(new URL("../../test/fixtures/phase4", import.meta.url));
+  const loaded = loadProgram(dir4);
+  const sf = loaded.files.classes.find((f) => f.fileName.endsWith("/Structs.ts"));
+  assert.ok(sf);
+  const hir = buildHir(loaded, config, profile, [sf]);
+  assert.deepEqual(hir.diagnostics, []);
+  const mod = lower(hir, profile);
+  assert.deepEqual(validateIrModule(mod), []);
+  const entry = mod.assets.find((a) => a.path === "/TestMod/Phase4/S_Entry");
+  assert.ok(entry);
+  assert.equal(entry.create?.kind, "UserDefinedStruct");
+  assert.deepEqual(entry.variables, []);
+  assert.deepEqual(entry.units, []);
+  assert.deepEqual(entry.structFields?.map((f) => f.type), ["int", "name", "bool"]);
+  assert.ok(entry.structFields?.every((f) => /_\d+_[0-9A-F]{32}$/.test(f.name)));
+  const user = mod.assets.findIndex((a) => a.path === "/TestMod/Phase4/BP_StructUser");
+  assert.ok(user > mod.assets.indexOf(entry), "structs come before the classes");
+  const outer = mod.assets.find((a) => a.path === "/TestMod/Phase4/S_Outer");
+  assert.ok(outer && mod.assets.indexOf(entry) < mod.assets.indexOf(outer), "a struct comes after the structs it contains");
+  assert.equal(outer.structFields?.[0]?.type, "struct:/TestMod/Phase4/S_Entry.S_Entry");
+});

@@ -47,11 +47,65 @@ test("parseBpType fields", () => {
 });
 
 test("parseBpType refusals", () => {
-  for (const t of ["", "  ", "array:array:int", "set:int", "map:name:int", "object", "struct:", "wibble", "object: "]) {
+  for (const t of ["", "  ", "array:array:int", "object", "struct:", "wibble", "object: "]) {
     assert.throws(() => parseBpType(t), BpTypeError, JSON.stringify(t));
   }
   assert.throws(() => bpTypeFromPin({ category: "delegate", subCategory: "", subCategoryObject: null, container: "None" }), BpTypeError);
   assert.throws(() => bpTypeFromPin({ category: "int", subCategory: "", subCategoryObject: null, container: "Map" }), BpTypeError);
+});
+
+test("map and set grammar", () => {
+  assert.deepEqual(parseBpType("map:name:int"), {
+    cat: "name", sub: "", path: null, container: "Map", value: { cat: "int", sub: "", path: null, container: "None" },
+  });
+  assert.deepEqual(parseBpType("map:string:struct:/Script/Fake.Pair"), {
+    cat: "string", sub: "", path: null, container: "Map",
+    value: { cat: "struct", sub: "", path: "/Script/Fake.Pair", container: "None" },
+  });
+  assert.deepEqual(parseBpType("set:int64"), { cat: "int64", sub: "", path: null, container: "Set" });
+  assert.equal("value" in parseBpType("set:name"), false);
+  assert.equal("value" in parseBpType("array:name"), false);
+});
+
+test("map and set refusals", () => {
+  for (const t of [
+    "map:", "map:name", "map:name:", "map:name:array:int", "map:name:map:name:int", "map:name:set:int", "map:name:exec",
+    "map:bool:int", "map:text:int", "map:float:int", "map:object:/Script/Engine.Actor:int", "map:wibble:int", "map:name:wibble",
+    "set:", "set:bool", "set:float", "set:array:int", "set:exec", "set:object:/Script/Engine.Actor", "set:set:int", "array:map:name:int", "array:set:int",
+  ]) {
+    assert.throws(() => parseBpType(t), BpTypeError, JSON.stringify(t));
+  }
+});
+
+test("map and set round trip through pins", () => {
+  const toPin = (t: string) => {
+    const p = parseBpType(t);
+    return bpTypeFromPin({
+      category: p.cat, subCategory: p.sub, subCategoryObject: p.path, container: p.container,
+      valueType: p.value ? { category: p.value.cat, subCategory: p.value.sub, subCategoryObject: p.value.path } : null,
+    });
+  };
+  for (const t of [
+    "map:name:int", "map:int:name", "map:string:bool", "map:int64:float", "map:byte:text", "map:name:object:/Script/Engine.Actor",
+    "map:name:struct:/Script/Fake.Pair", "map:name:enum:/Script/Fake.Kind", "set:name", "set:int", "set:string", "set:byte", "set:int64",
+  ]) {
+    assert.equal(toPin(t), t, t);
+  }
+  assert.equal(toPin("map:name:double"), "map:name:real");
+  // maps need a value type; unsupported keys and values are refused
+  assert.throws(() => bpTypeFromPin({ category: "name", subCategory: "", subCategoryObject: null, container: "Map" }), BpTypeError);
+  assert.throws(
+    () => bpTypeFromPin({ category: "bool", subCategory: "", subCategoryObject: null, container: "Set" }),
+    BpTypeError,
+  );
+  assert.throws(
+    () => bpTypeFromPin({
+      category: "name", subCategory: "", subCategoryObject: null, container: "Map",
+      valueType: { category: "delegate", subCategory: "", subCategoryObject: null },
+    }),
+    BpTypeError,
+  );
+  assert.throws(() => bpTypeFromPin({ category: "int", subCategory: "", subCategoryObject: null, container: "Wibble" }), BpTypeError);
 });
 
 test("bpTypeFromPin maps real/float and byte", () => {
@@ -94,7 +148,9 @@ test("validateIrModule", () => {
   assert.equal(validateIrModule(mod(unit([node("entry")], []))).length, 1);
   assert.equal(validateIrModule(mod(unit([node("1bad")], []))).length, 1);
   assert.equal(validateIrModule(mod(unit([node("a1")], []), "/Other/BP_A")).length, 1);
-  assert.equal(validateIrModule(mod(unit([node("a1", { pinTypes: { Object: "map:name:int" } })], []))).length, 1);
+  assert.equal(validateIrModule(mod(unit([node("a1", { pinTypes: { Object: "map:name:array:int" } })], []))).length, 1);
+  assert.equal(validateIrModule(mod(unit([node("a1", { pinTypes: { Object: "set:bool" } })], []))).length, 1);
+  assert.deepEqual(validateIrModule(mod(unit([node("a1", { pinTypes: { TargetMap: "map:name:int", TargetSet: "set:name" } })], []))), []);
   assert.deepEqual(validateIrModule(mod(unit([node("a1", { pinTypes: { Object: "object:/Script/Engine.Actor" } })], []))), []);
 });
 

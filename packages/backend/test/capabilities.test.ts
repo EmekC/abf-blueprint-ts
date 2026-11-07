@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BP_APPLY_P1_BASE, capabilitiesFrom } from "../src/index.js";
+import { BP_APPLY_P1_BASE, NATIVE_POLICY, capabilitiesFrom } from "../src/index.js";
 import type { RawBackendInfo } from "../src/index.js";
 
 const ALL_TOOLS = [
@@ -25,12 +25,12 @@ const FIX_INFO: RawBackendInfo = {
 
 const EXT = { features: ["reflect", "compile_node_refs", "bp_read_seconds"] };
 
-test("fix-shaped backend_info and extensions: native pin types, abfc container policy stays", () => {
+test("fix-shaped backend_info and extensions: native pin types, native map on, set off (backend lacks it)", () => {
   const c = capabilitiesFrom(ALL_TOOLS, FIX_INFO, EXT);
   assert.equal(c.protocol, 1);
   assert.equal(c.pinTypes, true);
   assert.equal(c.castObjectPin, true);
-  assert.deepEqual(c.containerTypes, { array: true, set: false, map: false });
+  assert.deepEqual(c.containerTypes, { array: true, set: false, map: true });
   assert.deepEqual(c.backendContainerTypes, { array: true, set: false, map: true });
   assert.equal(c.reflect, true);
   assert.equal(c.compileErrorNodeRefs, true);
@@ -42,6 +42,37 @@ test("fix-shaped backend_info and extensions: native pin types, abfc container p
   // the shared base is not mutated
   assert.deepEqual(BP_APPLY_P1_BASE.containerTypes, { array: true, set: false, map: false });
   assert.equal(BP_APPLY_P1_BASE.pinTypes, false);
+});
+
+test("native policy is ANDed with the backend report, pin types and the struct_fields feature", () => {
+  const info: RawBackendInfo = {
+    protocol: 1,
+    capabilities: { pinTypes: true, containerTypes: { array: true, map: true, set: true } },
+    bpApply: { features: ["pin_types", "map_types", "set_types", "struct_fields"], nodeKinds: [] },
+  };
+  const all = { map: true, set: true, struct: true };
+  const c = capabilitiesFrom(ALL_TOOLS, info, null, all);
+  assert.deepEqual(c.containerTypes, { array: true, set: true, map: true });
+  assert.deepEqual(c.createKinds, ["Blueprint", "WidgetBlueprint", "BlueprintInterface", "UserDefinedStruct"]);
+  // policy off: the backend alone is not enough
+  const none = capabilitiesFrom(ALL_TOOLS, info, null, { map: false, set: false, struct: false });
+  assert.deepEqual(none.containerTypes, { array: true, set: false, map: false });
+  assert.equal(none.createKinds.includes("UserDefinedStruct"), false);
+  // backend off: the policy alone is not enough
+  const noBackend: RawBackendInfo = {
+    protocol: 1,
+    capabilities: { pinTypes: true, containerTypes: { array: true, map: false, set: false } },
+    bpApply: { features: ["pin_types"], nodeKinds: [] },
+  };
+  const b = capabilitiesFrom(ALL_TOOLS, noBackend, null, all);
+  assert.deepEqual(b.containerTypes, { array: true, set: false, map: false });
+  assert.equal(b.createKinds.includes("UserDefinedStruct"), false);
+  // no native pin types: containers stay off even when the backend reports them
+  const noPins: RawBackendInfo = { ...info, capabilities: { pinTypes: false, containerTypes: { array: true, map: true, set: true } } };
+  assert.deepEqual(capabilitiesFrom(ALL_TOOLS, noPins, null, all).containerTypes, { array: true, set: false, map: false });
+  // the shared base and the default policy are untouched
+  assert.deepEqual(BP_APPLY_P1_BASE.createKinds, ["Blueprint", "WidgetBlueprint", "BlueprintInterface"]);
+  assert.deepEqual(NATIVE_POLICY, { map: true, set: true, struct: true });
 });
 
 test("no backend_info: fallback capabilities", () => {

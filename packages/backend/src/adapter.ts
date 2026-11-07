@@ -33,6 +33,9 @@ export interface BpGraphSpec {
 
 export interface BpApplyAssetSpec {
   asset: string;
+  create?: { class: "Blueprint" | "WidgetBlueprint"; parent: string; if_missing: true } | { class: "UserDefinedStruct"; if_missing: true };
+  /** Fields of a UserDefinedStruct (valid only with `create.class` UserDefinedStruct): `name` is `<friendly>_<index>_<guid>`. */
+  struct_fields?: Array<{ name: string; friendly: string; guid: string; type: string }>;
   variables?: Array<{ name: string; type: string; flags: number }>;
   graphs?: BpGraphSpec[];
   raw?: Array<{ kind: "graph"; graph: string; text: string } | { kind: "python"; code: string }>;
@@ -49,7 +52,7 @@ function refused(n: IrNode, what: string): AbfcError {
 
 /**
  * The pin types to send for a node: the IR `pinTypes` minus the cast `Object` pin when the backend types it itself.
- * Throws ABFC4010 for what the backend refuses (exec, map, set types; any entry on a self or macro node).
+ * Throws ABFC4010 for what the backend refuses (exec; map/set types without the matching container capability; any entry on a self or macro node).
  */
 export function effectivePinTypes(n: IrNode, caps: BackendCapabilities, profile: Profile): Record<string, string> {
   const entries = Object.entries(n.pinTypes ?? {});
@@ -57,7 +60,11 @@ export function effectivePinTypes(n: IrNode, caps: BackendCapabilities, profile:
   if (n.sem?.k === "self" || /K2Node_MacroInstance$/.test(n.t3d.class)) throw refused(n, "on a self/macro node");
   const out: Record<string, string> = {};
   for (const [pin, type] of entries) {
-    if (/(^|:)exec($|:)/.test(type) || /(^|:)(map|set):/.test(type)) throw refused(n, `"${type}"`);
+    if (
+      /(^|:)exec($|:)/.test(type) ||
+      (!caps.containerTypes.map && /(^|:)map:/.test(type)) ||
+      (!caps.containerTypes.set && /(^|:)set:/.test(type))
+    ) throw refused(n, `"${type}"`);
     parseBpType(type);
     if (n.sem?.k === "cast" && caps.castObjectPin && pin === profile.pins.castObject) continue;
     out[pin] = type;
@@ -123,9 +130,23 @@ function toBpNode(unit: IrUnit, n: IrNode, origin: [number, number], caps: Backe
   return out;
 }
 
+/** `<Field>_<index>_<GUID>` -> the backend's struct_fields entry (friendly name = the field, guid = the 32 hex digits). */
+function structFieldSpec(name: string, type: string): { name: string; friendly: string; guid: string; type: string } {
+  const m = /^(.+)_\d+_([0-9A-F]{32})$/.exec(name);
+  if (m === null) throw new AbfcError({ severity: "error", code: "ABFC4010", message: `struct member name ${name} is not <Field>_<index>_<GUID>.` }, 2);
+  return { name, friendly: m[1]!, guid: m[2]!, type };
+}
+
 /** Main apply spec of one asset: variables plus, per graph, the nodes to remove, the new nodes and their wires. */
 export function renderMainSpec(a: AssetPlan, caps: BackendCapabilities, profile: Profile): BpApplyAssetSpec {
   const spec: BpApplyAssetSpec = { asset: a.asset };
+  if (a.struct !== undefined) {
+    spec.create = { class: "UserDefinedStruct", if_missing: true };
+    spec.struct_fields = a.struct.fields.map((f) => structFieldSpec(f.name, f.type));
+    return spec;
+  }
+  // A missing asset is created by the first spec that names it; `if_missing` keeps a repeated apply (the fallback route runs two) idempotent.
+  if (a.create !== undefined) spec.create = { class: a.create.class, parent: a.create.parent, if_missing: true };
   if (a.variables.length > 0) {
     spec.variables = a.variables.map((v) => ({
       name: v.name,
@@ -297,8 +318,8 @@ export async function applyPlan(
   o: ApplyOptions,
 ): Promise<ApplyOutcome> {
   if (plan.assets.length === 0) return { ok: true, perAsset: [] };
-  // Assets that only carry class defaults have no graph work: they take part in pass 5 only.
-  const unitAssets = plan.assets.filter((a) => a.units.length > 0 || (a.removeUnits?.length ?? 0) > 0 || (a.removeTags?.length ?? 0) > 0);
+  // Assets that only carry class defaults have no graph work: they take part in pass 5 only (new own fields still go through the main spec).
+  const unitAssets = plan.assets.filter((a) => a.create !== undefined || a.struct !== undefined || a.units.length > 0 || a.variables.length > 0 || (a.removeUnits?.length ?? 0) > 0 || (a.removeTags?.length ?? 0) > 0);
   if (unitAssets.length === 0) {
     const only: AssetApplyOutcome[] = plan.assets.map((a) => ({ asset: a.asset, nodeIds: {}, finalText: null, compile: [], tagName: null, tagNames: {}, defaultsApplied: false, defaultsWarnings: [] }));
     await applyDefaultsPass(backend, plan, only, o);

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { Diagnostic, Profile } from "@abfc/ir";
 import { buildHir, checkSubset, compileTests, loadProgram } from "../src/index.js";
 import type { HirExpr, HirStmt } from "../src/index.js";
+import { udsGuid, udsMemberName } from "../src/index.js";
 
 // compiled to packages/compiler/dist/test/ -> packages/compiler/test/fixtures/project
 const projectDir = fileURLToPath(new URL("../../test/fixtures/project", import.meta.url));
@@ -525,4 +526,93 @@ test("compileTests: test.liveHud keeps the checklist and its body; test.liveHud 
   assert.equal(live.span.line, 4);
   assert.deepEqual(live.steps.map((s) => s.step["op"]), ["widget", "call", "wait"]);
   assert.equal("liveHud" in cases[1]!, false);
+});
+
+const phase4Dir = fileURLToPath(new URL("../../test/fixtures/phase4", import.meta.url));
+
+test("own fields: Name!: T becomes a variable and is usable as this.Name; bad declarations are ABFC2047 at their line", () => {
+  const loaded4 = loadProgram(phase4Dir);
+  const sf = loaded4.files.classes.find((f) => f.fileName.endsWith("/Fields.ts"));
+  assert.ok(sf, "Fields.ts is a root file");
+  const hir = buildHir(loaded4, config, profile, [sf]);
+  const cls = hir.classes[0]!;
+  assert.deepEqual(cls.fields.map((f) => [f.name, f.type]), [
+    ["Score", "int"],
+    ["Counts", "map:name:int"],
+    ["Seen", "set:name"],
+    ["Names", "array:name"],
+  ]);
+  const text = readFileSync(`${phase4Dir}/src/Fields.ts`, "utf8").split(/\r?\n/);
+  const expected = text.flatMap((l, i) => (/\/\/ ABFC2043/.test(l) ? [`${i + 1}:ABFC2043`] : /\/\/ ABFC2047/.test(l) ? [`${i + 1}:ABFC2047`] : []));
+  assert.deepEqual(hir.diagnostics.map((d) => `${d.span?.line}:${d.code}`), expected);
+  const body = cls.events[0]!.body;
+  assert.deepEqual(body.map((s) => s.k), ["setSelf", "arrayOp"]);
+  const set = body[0]!;
+  assert.ok(set.k === "setSelf" && set.name === "Score" && set.type === "int");
+  const push = body[1]!;
+  assert.ok(push.k === "arrayOp" && push.array.self === "Names" && push.array.type === "array:name");
+});
+
+test("native Map and Set: operations build containerOp/containerQuery", () => {
+  const loaded4 = loadProgram(phase4Dir);
+  const sf = loaded4.files.classes.find((f) => f.fileName.endsWith("/Maps.ts"));
+  assert.ok(sf, "Maps.ts is a root file");
+  const hir = buildHir(loaded4, config, profile, [sf]);
+  assert.deepEqual(hir.diagnostics, []);
+  const [bump, forget] = hir.classes[0]!.events;
+  const ops = (b: typeof bump): string[] => b!.body.flatMap((s) => (s.k === "containerOp" ? [`${s.container}.${s.op}`] : []));
+  assert.deepEqual(ops(forget), ["map.remove", "set.remove", "map.clear", "set.clear"]);
+  const iff = bump!.body[0]!;
+  assert.ok(iff.k === "if" && iff.cond.k === "containerQuery" && iff.cond.op === "has" && iff.cond.type === "bool");
+  assert.deepEqual(iff.then.map((s) => s.k), ["containerOp"]);
+  const add = iff.then[0]!;
+  assert.ok(add.k === "containerOp" && add.op === "add" && add.target.type === "map:name:int" && add.value?.k === "arith");
+  const size = bump!.body[2]!;
+  assert.ok(size.k === "setSelf" && size.value.k === "arith" && size.value.a.k === "containerQuery" && size.value.a.op === "size" && size.value.a.type === "int");
+});
+
+test("native Map and Set: unsupported forms are ABFC2040/2042/2043/2099 at their line", () => {
+  const loaded4 = loadProgram(phase4Dir);
+  const sf = loaded4.files.classes.find((f) => f.fileName.endsWith("/Bad.ts"));
+  assert.ok(sf, "Bad.ts is a root file");
+  const hir = buildHir(loaded4, config, profile, [sf]);
+  const text = readFileSync(`${phase4Dir}/src/Bad.ts`, "utf8").split(/\r?\n/);
+  const expected = text.flatMap((l, i) => {
+    const m = /\/\/ (ABFC\d{4})/.exec(l);
+    return m ? [`${i + 1}:${m[1]}`] : [];
+  });
+  const got = hir.diagnostics.filter((d) => d.severity === "error").map((d) => `${d.span?.line}:${d.code}`);
+  assert.deepEqual([...got].sort(), [...expected].sort());
+});
+
+test("@struct: member names, topological order, Break/Make pins use <Field>_<index>_<GUID>; bad structs are ABFC2046 at their line", () => {
+  const loaded4 = loadProgram(phase4Dir);
+  const sf = loaded4.files.classes.find((f) => f.fileName.endsWith("/Structs.ts"));
+  assert.ok(sf, "Structs.ts is a root file");
+  const hir = buildHir(loaded4, config, profile, [sf]);
+  assert.deepEqual(hir.diagnostics, []);
+  assert.deepEqual(hir.structs.map((s) => s.objectPath), ["/TestMod/Phase4/S_Entry.S_Entry", "/TestMod/Phase4/S_Outer.S_Outer"]);
+  const entry = hir.structs[0]!;
+  assert.equal(udsMemberName(entry.objectPath, "Count", 0), "Count_0_3F70D0D71A9C98101CC97B836AB365CC");
+  assert.deepEqual(entry.fields.map((f) => [f.name, f.type, f.memberName]), [
+    ["Count", "int", "Count_0_3F70D0D71A9C98101CC97B836AB365CC"],
+    ["Label", "name", "Label_1_8BA0182DFAD609FCAD1E4B65D8EBA684"],
+    ["Seen", "bool", `Seen_2_${udsGuid(entry.objectPath, "Seen")}`],
+  ]);
+  assert.equal(hir.structs[1]!.fields[0]!.type, "struct:/TestMod/Phase4/S_Entry.S_Entry");
+  const body = hir.classes[0]!.events[0]!.body;
+  const set = body[0]!;
+  assert.ok(set.k === "setSelf" && set.value.k === "arith" && set.value.a.k === "field" && set.value.a.name === "Count_0_3F70D0D71A9C98101CC97B836AB365CC");
+  const lit = body[1]!;
+  assert.ok(lit.k === "setSelf" && lit.value.k === "makeStruct");
+  assert.deepEqual(lit.value.fields.map((f) => f.name), entry.fields.map((f) => f.memberName));
+
+  const bad = loaded4.files.classes.find((f) => f.fileName.endsWith("/BadStructs.ts"));
+  assert.ok(bad);
+  const badHir = buildHir(loaded4, config, profile, [bad]);
+  const text = readFileSync(`${phase4Dir}/src/BadStructs.ts`, "utf8").split(/\r?\n/);
+  const expected = text.flatMap((l, i) => (/\/\/ ABFC2046/.test(l) ? [`${i + 1}:ABFC2046`] : []));
+  const got = badHir.diagnostics.filter((d) => d.severity === "error").map((d) => `${d.span?.line}:${d.code}`);
+  assert.deepEqual([...got].sort(), [...expected].sort());
+  assert.deepEqual(badHir.structs, []);
 });
