@@ -8,6 +8,7 @@
 // - abfc.exe in the zip has the sha256 recorded in build-info.json
 // - build-info.json is a release build (release:true); --allow-dev accepts a --dev build
 // - no user paths in the shipped text files, and no user path or .claude folder in any binary (abfc.exe and every other zip entry, every runtime.zip entry; scanned after decompression) as latin1 or UTF-16LE
+// - build/vsix/abfc-vscode-<version>.vsix exists, its entries pass allowlist.vsix and installer-input holds the same file
 // - the installer exe, when present, is between 20 MB and 250 MB
 // Exit 1 on any mismatch.
 import { existsSync, readFileSync, statSync } from "node:fs";
@@ -107,6 +108,18 @@ function main() {
   for (const e of zipEntries) if (!listing.some((l) => l.name === e.name)) bad(`zip: ${e.name} is not in installer-input`);
   checkAllowlist("zip", zipEntries.map((e) => e.name), allow.zip);
   checkAllowlist("installer", listing.map((l) => l.name), allow.installer);
+
+  // the .vsix: exists, its entries are on allow.vsix, and the installer input ships this very file
+  const vsixName = `abfc-vscode-${version}.vsix`;
+  const vsixFile = join(repoRoot, "build", "vsix", vsixName);
+  if (need(vsixFile)) {
+    const vsixBuf = readFileSync(vsixFile);
+    checkAllowlist("vsix", readZip(vsixBuf).map((e) => e.name), allow.vsix);
+    const shipped = listing.find((l) => l.name === vsixName);
+    if (shipped === undefined) bad(`installer-input does not hold ${vsixName}`);
+    else if (shipped.sha256 !== sha256Buf(vsixBuf)) bad(`installer-input ${vsixName} differs from build/vsix/${vsixName}`);
+    rows.push(["vsix", vsixName, vsixBuf.length, sha256Buf(vsixBuf)]);
+  }
 
   // runtime.zip vs its manifest
   const rtBuf = readFileSync(runtimeZipFile);

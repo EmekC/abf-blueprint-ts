@@ -1,8 +1,24 @@
 {
   "name": "@abfc/eslint-plugin",
-  "version": "0.1.0",
+  "version": "1.0.0",
+  "description": "ESLint rules of abfc for Blueprint-targeted TypeScript.",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EmekC/abf-blueprint-ts.git",
+    "directory": "packages/eslint-plugin"
+  },
+  "homepage": "https://github.com/EmekC/abf-blueprint-ts#readme",
+  "bugs": {
+    "url": "https://github.com/EmekC/abf-blueprint-ts/issues"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "exports": {
     ".": {
       "types": "./dist/src/index.d.ts",
@@ -10,7 +26,8 @@
     }
   },
   "files": [
-    "dist/src"
+    "dist/src/**/*.js",
+    "dist/src/**/*.d.ts"
   ],
   "dependencies": {
     "@typescript-eslint/utils": "8.72.1"

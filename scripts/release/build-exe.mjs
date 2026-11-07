@@ -50,6 +50,10 @@ function parseArgv(argv) {
   }
   if (!SEMVER.test(o.version)) fail(`--version must be a semver like 1.0.0 or 1.0.0-rc.0\n${USAGE}`);
   if (o.backendRepo === "") fail(`--backend-repo (or ABFC_BACKEND_REPO) is required\n${USAGE}`);
+  const cliVersion = JSON.parse(readFileSync(join(repoRoot, "packages", "cli", "package.json"), "utf8")).version;
+  if (o.version !== cliVersion && !o.dev) {
+    fail(`--version ${o.version} differs from the package version ${cliVersion}; run scripts/release/set-version.mjs or pass --dev`);
+  }
   return o;
 }
 

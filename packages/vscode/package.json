@@ -2,7 +2,7 @@
   "name": "abfc-vscode",
   "displayName": "abfc",
   "description": "abfc language server for Abiotic Factor TypeScript mods",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "publisher": "abfc",
   "private": true,
   "license": "MIT",

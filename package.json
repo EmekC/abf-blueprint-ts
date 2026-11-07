@@ -17,7 +17,9 @@
     "release:exe": "node scripts/release/build-exe.mjs",
     "release:installer": "node scripts/release/build-installer.mjs",
     "release:inspect": "node scripts/release/inspect.mjs",
-    "release:fetch": "node scripts/release/fetch-pins.mjs"
+    "release:fetch": "node scripts/release/fetch-pins.mjs",
+    "release:version": "node scripts/release/set-version.mjs",
+    "release:npm": "node scripts/release/pack-npm.mjs"
   },
   "devDependencies": {
     "@types/node": "24.19.2",

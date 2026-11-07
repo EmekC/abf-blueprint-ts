@@ -39,7 +39,9 @@ test("identity and engine", () => {
   assert.equal(manifest.displayName, "abfc");
   // the game's name is assembled from pieces so this file does not trip the repository's name guard
   assert.equal(manifest.description, `abfc language server for ${["Abi", "otic"].join("")} Factor TypeScript mods`);
-  assert.equal(manifest.version, "0.1.0");
+  // lockstep with the abfc version (scripts/release/set-version.mjs)
+  const cliVersion = (JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "cli", "package.json"), "utf8")) as { version: string }).version;
+  assert.equal(manifest.version, cliVersion);
   assert.equal(manifest.private, true);
   assert.equal(manifest.license, "MIT");
   assert.deepEqual(manifest.repository, { type: "git", url: "https://github.com/EmekC/abf-blueprint-ts" });

@@ -1,8 +1,24 @@
 {
   "name": "@abfc/cli",
-  "version": "0.1.0",
+  "version": "1.0.0",
+  "description": "abfc command line: compiles TypeScript to Abiotic Factor Blueprint graphs, tests and publishes them.",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EmekC/abf-blueprint-ts.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/EmekC/abf-blueprint-ts#readme",
+  "bugs": {
+    "url": "https://github.com/EmekC/abf-blueprint-ts/issues"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "exports": {
     ".": {
       "types": "./dist/src/index.d.ts",
@@ -10,20 +26,21 @@
     }
   },
   "files": [
-    "dist/src",
+    "dist/src/**/*.js",
+    "dist/src/**/*.d.ts",
     "schema"
   ],
   "bin": {
     "abfc": "./dist/src/bin.js"
   },
   "dependencies": {
-    "@abfc/runtime": "0.1.0",
-    "@abfc/ir": "0.1.0",
-    "@abfc/env": "0.1.0",
-    "@abfc/testkit": "0.1.0",
-    "@abfc/compiler": "0.1.0",
-    "@abfc/backend": "0.1.0",
-    "@abfc/stubgen": "0.1.0",
-    "@abfc/lsp": "0.1.0"
+    "@abfc/runtime": "1.0.0",
+    "@abfc/ir": "1.0.0",
+    "@abfc/env": "1.0.0",
+    "@abfc/testkit": "1.0.0",
+    "@abfc/compiler": "1.0.0",
+    "@abfc/backend": "1.0.0",
+    "@abfc/stubgen": "1.0.0",
+    "@abfc/lsp": "1.0.0"
   }
 }
