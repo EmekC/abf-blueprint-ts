@@ -9,3 +9,6 @@ export * from "./resolve.js";
 export * from "./mods.js";
 export * from "./userconfig.js";
 export * from "./migrate.js";
+export * from "./zip.js";
+export * from "./runtime.js";
+export * from "./install.js";
