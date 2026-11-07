@@ -225,17 +225,105 @@ test("(b) an edit of an owned node in the stage stops the build with ABFC5001 an
   });
 });
 
+/** The number of `staging_sync` calls after the last `bp_compile_report` call. */
+function syncsAfterCompile(backend: FakeBackend): number {
+  const tools = backend.calls.map((c) => c.tool);
+  const last = tools.lastIndexOf("bp_compile_report");
+  return last < 0 ? 0 : tools.slice(last + 1).filter((t) => t === "staging_sync").length;
+}
+
+test("(b1k) build --keep-failed-stage leaves the stage as it is after a failed compile", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    r.backend.reportMessages = [{ severity: "error", asset: RELAY_ASSET, message: "boom" }];
+    const x = await r.run(["build", "--keep-failed-stage"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, /error ABFC6002/);
+    assert.equal(syncsAfterCompile(r.backend), 0, "no staging_sync after the compile report");
+    assert.match(x.out, /keeps the graphs/);
+    assert.doesNotMatch(x.out, /re-synced from the mod/);
+    const unit = readManifest(r.dir, RELAY_ASSET)!.units[0]!;
+    assert.equal(unit.irHash, "", "the IR hash is recorded only after the compile passed");
+    assert.ok(unit.nodes.length > 0, "the manifest still describes what is on the stage");
+  });
+});
+
+test("(b1w) a failing re-sync after a failed compile is the warning ABFC4016; the exit code stays the compile failure's", async () => {
+  await withRig({ handMadeEvent: false, failResync: true }, async (r) => {
+    r.backend.reportMessages = [{ severity: "error", asset: RELAY_ASSET, message: "boom" }];
+    const x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, /error ABFC6002/);
+    assert.match(x.out, /warning ABFC4016/);
+    assert.doesNotMatch(x.out, /re-synced from the mod/);
+    assert.equal(syncsAfterCompile(r.backend), 1, "the re-sync was tried once");
+    // the code is the compile failure's (the same as without the failing re-sync)
+    assert.equal(x.code, 1);
+  });
+});
+
+test("(d1) build --drift reads every owned asset, a plain build of an up-to-date project reads none", async () => {
+  await withRig({}, async (r) => {
+    assert.equal((await r.run(["adopt", RELAY_ASSET, "UpdateTarget", "--yes"])).code, 0);
+    assert.equal((await r.run(["build"])).code, 0);
+    const reads = (): number => r.backend.calls.filter((c) => c.tool === "bp_read").length;
+
+    let before = reads();
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /up to date/);
+    assert.equal(reads(), before, "a plain build of an up-to-date project reads nothing");
+
+    before = reads();
+    x = await r.run(["build", "--drift"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /up to date/);
+    assert.equal(reads() - before, 1, "--drift reads the one owned asset");
+  });
+});
+
+test("(d2) after an editor edit of an unchanged unit, build is up to date but build --drift exits 3 with ABFC5001", async () => {
+  await withRig({}, async (r) => {
+    assert.equal((await r.run(["adopt", RELAY_ASSET, "UpdateTarget", "--yes"])).code, 0);
+    assert.equal((await r.run(["build"])).code, 0);
+    const ir = lowerProject(r.dir);
+    const real = readManifest(r.dir, RELAY_ASSET)!.units[0]!.nodeIds[irNode(ir, "EqualEqual_DoubleDouble").id];
+    assert.ok(real);
+    r.backend.setPinDefault(RELAY_ASSET, real, "B", "5.0");
+
+    const before = r.backend.applyLabels().length;
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /up to date/);
+    x = await r.run(["build", "--drift"]);
+    assert.equal(x.code, 3, x.out);
+    assert.match(x.out, /error ABFC5001/);
+    assert.equal(r.backend.applyLabels().length, before, "no bp_apply after the drift");
+  });
+});
+
+test("(u1) --drift is an option of build only; --keep-failed-stage of build, test and publish", async () => {
+  await withRig({}, async (r) => {
+    let x = await r.run(["test", "--drift"]);
+    assert.equal(x.code, 2, x.out);
+    assert.match(x.out, /--drift is an option of abfc build only/);
+    x = await r.run(["check", "--keep-failed-stage"]);
+    assert.equal(x.code, 2, x.out);
+    assert.match(x.out, /--keep-failed-stage is an option of abfc build, test and publish/);
+  });
+});
+
 test("(b1) a build that applies but fails Unreal's compile is repeated by the next unchanged build, and publish --full gate 3 fails on it", async () => {
   await withRig({ handMadeEvent: false, stageAudit: true }, async (r) => {
     r.backend.reportMessages = [{ severity: "error", asset: RELAY_ASSET, message: "boom" }];
     let x = await r.run(["build"]);
     assert.notEqual(x.code, 0, x.out);
     assert.match(x.out, /error ABFC6002/);
+    assert.ok(syncsAfterCompile(r.backend) >= 1, "the failed compile re-syncs the stage");
+    assert.match(x.out, /re-synced from the mod/);
     const applies = r.backend.applyLabels().length;
     assert.ok(applies > 0);
-    const unit = readManifest(r.dir, RELAY_ASSET)!.units[0]!;
-    assert.equal(unit.irHash, "", "the IR hash is recorded only after the compile passed");
-    assert.ok(unit.nodes.length > 0, "the manifest still describes what is on the stage");
+    // the re-synced stage does not hold the unit (never published): the manifest forgets it, the next build applies it again
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.units.length, 0);
 
     // nothing changed in TypeScript: the next build re-applies and reports the error again; it is not "up to date"
     x = await r.run(["build"]);

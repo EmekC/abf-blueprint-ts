@@ -106,6 +106,8 @@ export interface FakeBackendOptions {
   backendInfo?: boolean;
   /** The initial asset holds a hand-made `UpdateTarget` event (default true). */
   handMadeEvent?: boolean;
+  /** `staging_sync` with discardChanges (a resync) fails; the first sync of a missing stage still works (default false). */
+  failResync?: boolean;
   /** `backend_info` reports the stageAudit capability (default false: mod_audit audits the real mod). */
   stageAudit?: boolean;
   /** The initial asset also holds a hand-made engine override event (`ReceiveTick`, calling HideAll). */
@@ -456,6 +458,7 @@ export class FakeBackend implements Backend {
 
   async stage(_modDir: string, o: { discardChanges: boolean }): Promise<StageReport> {
     this.calls.push({ tool: "staging_sync" });
+    if (o.discardChanges && this.options.failResync === true) throw new Error("fake staging_sync failed");
     if (!this.staged || (o.discardChanges && !this.keepAssetsOnSync)) {
       this.assets = new Map([[RELAY_ASSET, initialAsset(this.withUpdateTarget, this.options)]]);
       this.changed.clear();

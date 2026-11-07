@@ -430,6 +430,46 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     if (!hasError(output.diagnostics)) {
       output.diag({ severity: "error", code: "ABFC6002", message: "[Unreal] the compile report lists errors that could not be mapped." });
     }
+    // The stage now holds graphs Unreal could not compile. Re-sync it from the mod so a later build starts from a clean copy
+    // (the next build applies the units again, as it does after `--resync`).
+    let stageResynced = false;
+    if (!args.flags.keepFailedStage && env.modDir.value !== null) {
+      const tR = performance.now();
+      try {
+        await backend.stage(env.modDir.value, { discardChanges: true });
+        stageResynced = true;
+        // Units abfc applied that the mod does not hold (never published) are gone from the re-synced stage: forget them, or the next
+        // build would report their nodes as missing (ABFC5002) instead of applying them again. Adopted units keep their entry.
+        for (const asset of appliedAssets) {
+          try {
+            const m = readManifest(projectDir, asset);
+            if (m === null) continue;
+            let held: Set<string>;
+            try {
+              held = new Set((await readAsset(ctx, backend, asset)).parsed.nodes.keys());
+            } catch {
+              held = new Set();
+            }
+            const kept = m.units.filter((u) => u.adopt !== null || u.nodes.every((n) => held.has(n)));
+            if (kept.length !== m.units.length) writeManifest(projectDir, { ...m, units: kept });
+          } catch {
+            // the manifest stays as it is; the next build reports what it finds
+          }
+        }
+        output.info("the stage was re-synced from the mod: the graphs that failed to compile were discarded; the next build applies the units again (--keep-failed-stage keeps them for inspection)");
+      } catch (e) {
+        output.diag({
+          severity: "warning",
+          code: "ABFC4016",
+          message: `the stage could not be re-synced after the failed compile: ${e instanceof Error ? e.message : String(e)}`,
+          fix: "run abfc build --resync before the next build.",
+        });
+      }
+      rec.record("build.resync", since(tR), stageResynced);
+    } else if (args.flags.keepFailedStage) {
+      output.info("the stage keeps the graphs that failed to compile (--keep-failed-stage); abfc build --resync discards them");
+    }
+    output.json({ applied: [], compileFailed: true, stageResynced });
     return false;
   }
   for (const m of finals) writeManifest(projectDir, m);
@@ -447,7 +487,7 @@ export async function build(ctx: CliContext): Promise<number> {
   const rec = new Recorder(ctx);
   const session = new BackendSession(ctx, rec);
   try {
-    await runBuild(ctx, session, rec);
+    await runBuild(ctx, session, rec, { readAll: ctx.args.flags.drift });
   } finally {
     await session.close();
     rec.print();

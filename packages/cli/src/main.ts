@@ -35,6 +35,7 @@ const USAGE = [
   "commands: init, lsp, version, " + Object.keys(COMMANDS).join(", "),
   "options: --json --verbose --project <dir> --editor-root <dir> --mods-dir <dir> --mod-dir <dir>",
   "         --backend-dir <dir> --python <exe> --headless-dir <dir> --timings --resync --no-build --yes --dry-run --full --discard-editor-changes --cold --watch (check)",
+  "         --drift (build) --keep-failed-stage (build, test, publish)",
   "doctor:  abfc doctor [--deep] [--clean-runtimes]",
   "init:    abfc init [dir] [--mod <name>] [--yes] [--no-stubs] [--mods-dir <dir>] [--editor-root <dir>] [--backend-dir <dir>] [--python <exe>]",
   "lsp:     abfc lsp [--stdio]   language server over stdio (docs/language-service.md)",
