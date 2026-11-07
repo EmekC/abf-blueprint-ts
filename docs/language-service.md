@@ -19,7 +19,7 @@ and install it:
 ```
 npm install
 npm run vsix
-code --install-extension build/vsix/abfc-vscode-0.1.0.vsix
+code --install-extension build/vsix/abfc-vscode-<version>.vsix
 ```
 
 The extension starts when a workspace contains an `abf.config.json`. It runs `abfc lsp` for TypeScript files; one server

@@ -32,7 +32,10 @@ The installer offers to install it when VS Code is found. By hand:
 
 Documentation
 -------------
-https://github.com/EmekC/abf-blueprint-ts
+Install, updating and uninstalling:
+https://github.com/EmekC/abf-blueprint-ts/blob/main/docs/install.md
+Your first mod:
+https://github.com/EmekC/abf-blueprint-ts/blob/main/docs/first-mod.md
 
 Windows SmartScreen
 -------------------
