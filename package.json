@@ -20,7 +20,8 @@
     "release:fetch": "node scripts/release/fetch-pins.mjs",
     "release:version": "node scripts/release/set-version.mjs",
     "release:npm": "node scripts/release/pack-npm.mjs",
-    "release:scan": "node scripts/release/scan-artifacts.mjs"
+    "release:scan": "node scripts/release/scan-artifacts.mjs",
+    "release:github": "node scripts/release/stage-github.mjs"
   },
   "devDependencies": {
     "@types/node": "24.19.2",
