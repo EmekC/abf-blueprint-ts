@@ -198,11 +198,16 @@ async function askFolder(s: Session, question: string, problem: (abs: string) =>
   }
 }
 
+/** A machine key of a schema-1 project config being upgraded: it seeds discovery, since the upgrade carries it over. */
+function upgradedValue(s: Session, pick: (c: ProjectConfig) => string | undefined): string | undefined {
+  return s.existing !== null && s.existing.schemaVersion < 2 ? pick(s.existing) : undefined;
+}
+
 /** Step 3: the Mod Editor; when it is not found and there is a prompt, asks for the folder (validated, re-asked). */
 async function locateEditorRoot(s: Session, profile: Profile): Promise<ReturnType<typeof findEditorRoot>> {
   const host = s.deps.host;
   const find = (flag?: string): ReturnType<typeof findEditorRoot> =>
-    findEditorRoot(host, profile, flag, undefined, s.userConfig?.editor?.root);
+    findEditorRoot(host, profile, flag, upgradedValue(s, (c) => c.editor?.root), s.userConfig?.editor?.root);
   try {
     return find(s.args.flags.editorRoot);
   } catch (e) {
@@ -219,7 +224,7 @@ async function locateEditorRoot(s: Session, profile: Profile): Promise<ReturnTyp
 /** Step 4: the mods folder; when it does not exist and there is a prompt, asks for it (validated, re-asked). */
 async function locateModsDir(s: Session, profile: Profile, documents: Resolved<string> | null): Promise<Resolved<string>> {
   const host = s.deps.host;
-  const find = (flag?: string): Resolved<string> => findModsDir(host, profile, documents, flag, undefined, s.userConfig?.modsDir);
+  const find = (flag?: string): Resolved<string> => findModsDir(host, profile, documents, flag, upgradedValue(s, (c) => c.modsDir), s.userConfig?.modsDir);
   try {
     return find(s.args.flags.modsDir);
   } catch (e) {
@@ -379,7 +384,7 @@ function buildPlan(s: Session, sel: Selection): Plan {
     const raw = deps.host.readFile(cfgAbs);
     let text = raw;
     if (existing.schemaVersion < 2) {
-      const m = migrateProjectConfigText(raw);
+      const m = migrateProjectConfigText(raw, userConfigFile(host.env) !== null);
       text = m.text;
       machineKeys = m.machineKeys;
       if (m.droppedModAssets.length > 0) {
@@ -472,14 +477,8 @@ function buildPlan(s: Session, sel: Selection): Plan {
   if (bd !== undefined) patch.backendDir = bd;
   const py = flags.python !== undefined ? flags.python : machineKeys["backend.python"];
   if (py !== undefined) patch.python = py;
-  const moved = Object.keys(machineKeys).filter((k) => k === "editor.root" || k === "modsDir" || k.startsWith("backend."));
+  const moved = Object.keys(machineKeys);
   if (moved.length > 0) notes.push(`moved ${moved.join(", ")} from ${PROJECT_CONFIG_FILE} to the user config`);
-  const lost = Object.entries(machineKeys).filter(([k]) => !moved.includes(k));
-  if (lost.length > 0) {
-    notes.push(
-      `removed from ${PROJECT_CONFIG_FILE} (set them in the user config by hand if you need them): ${lost.map(([k, v]) => `${k} = ${v}`).join(", ")}`,
-    );
-  }
 
   const userPath = userConfigFile(host.env);
   let userOp: FileOp | null = null;

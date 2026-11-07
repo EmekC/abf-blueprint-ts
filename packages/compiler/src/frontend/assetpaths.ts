@@ -185,7 +185,7 @@ export function assetPathOf(decl: ts.ClassDeclaration, decorator: "blueprint" | 
   // an explicit path wins; derived problems do not matter (that is what the override is for)
   let rel: string;
   if (ex.form === "absolute") {
-    if (!ex.text.startsWith(`/${ctx.mod}/`) || ex.text.endsWith("/")) {
+    if (toModRelative(ctx.mod, ex.text) === null || ex.text.endsWith("/")) {
       info.problems.push({ severity: "error", code: "ABFC2001", message: `${kind} path of ${name ?? "(anonymous)"} must be a string literal under "/${ctx.mod}/"`, node: here });
       return info;
     }

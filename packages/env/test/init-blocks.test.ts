@@ -128,8 +128,6 @@ test("migrateProjectConfigText: schema 1 with machine keys", () => {
   assert.deepEqual(r.machineKeys, {
     "editor.root": "C:\\Editor",
     modsDir: "D:\\Mods",
-    headlessDir: "C:\\h",
-    "mod.dir": "D:\\Mods\\TestMod",
     "backend.serverDir": "D:\\be",
     "backend.python": "C:\\py\\python.exe",
   });
@@ -138,15 +136,28 @@ test("migrateProjectConfigText: schema 1 with machine keys", () => {
   assert.equal(Object.keys(parsed)[0], "schemaVersion");
   assert.deepEqual(parsed, {
     schemaVersion: 2,
-    mod: { name: "TestMod" },
+    mod: { name: "TestMod", dir: "D:\\Mods\\TestMod" },
     stubs: { classes: ["/Script/Engine.Actor"], modAssets: ["Relays/BP_X", "Y", "Z"] },
     backend: { kind: "bp_apply", minProtocol: 1 },
+    headlessDir: "C:\\h",
   });
   assert.ok(r.text.endsWith("}\n"));
   // The result loads as a schema 2 project config.
   const cfg = loadProjectConfig("D:\\p", fakeHost({ files: { "D:\\p\\abf.config.json": r.text } }));
   assert.equal(cfg.schemaVersion, 2);
   assert.deepEqual(cfg.stubs.modAssets, ["/TestMod/Relays/BP_X", "/TestMod/Y", "/TestMod/Z"]);
+});
+
+test("migrateProjectConfigText: with no user config nothing is removed", () => {
+  const r = migrateProjectConfigText(JSON.stringify(schema1), false);
+  assert.deepEqual(r.machineKeys, {});
+  const parsed = JSON.parse(r.text) as Record<string, unknown>;
+  assert.equal(parsed.modsDir, "D:\\Mods");
+  assert.deepEqual(parsed.editor, { root: "C:\\Editor" });
+  assert.equal((parsed.backend as Record<string, unknown>).serverDir, "D:\\be");
+  const cfg = loadProjectConfig("D:\\p", fakeHost({ files: { "D:\\p\\abf.config.json": r.text } }));
+  assert.equal(cfg.mod.dir, "D:\\Mods\\TestMod");
+  assert.equal(cfg.headlessDir, "C:\\h");
 });
 
 test("migrateProjectConfigText: schema 1 with `all` and no machine keys", () => {

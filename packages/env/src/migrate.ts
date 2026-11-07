@@ -17,23 +17,26 @@ export interface MigratedConfig {
   droppedModAssets: string[];
 }
 
-/** Dotted machine keys: top-level name, or `group.key`. */
+/**
+ * Dotted machine keys that `abfc init` writes to the user config: top-level name, or `group.key`. `mod.dir` and
+ * `headlessDir` are not here: init never writes them to the user config, so they stay in the project config
+ * (schema 2 still reads them; `abfc doctor` warns).
+ */
 const MACHINE_KEYS: Array<[group: string | null, key: string]> = [
   ["editor", "root"],
   [null, "modsDir"],
-  [null, "headlessDir"],
-  ["mod", "dir"],
   ["backend", "serverDir"],
   ["backend", "python"],
 ];
 
 /**
  * Upgrades the text of a schema-1 `abf.config.json` to schema 2 (docs/design.md 18.4): `schemaVersion` becomes the
- * first key, `stubs.modAssets` entries `/<mod>/X` become `X`, and the machine keys move out (returned with dotted
- * names so `abfc init` can offer them to the user config). Other keys and their order stay. Schema 2 input is
- * returned unchanged. ABFC1021 when the text is not a JSON object.
+ * first key, `stubs.modAssets` entries `/<mod>/X` become `X`, and the machine keys `abfc init` writes to the user
+ * config move out when `moveToUserConfig` is true (returned with dotted names). With false (no user config file
+ * exists on this machine) nothing is removed and `machineKeys` is empty. `mod.dir` and `headlessDir` always stay.
+ * Other keys and their order stay. Schema 2 input is returned unchanged. ABFC1021 when the text is not a JSON object.
  */
-export function migrateProjectConfigText(text: string): MigratedConfig {
+export function migrateProjectConfigText(text: string, moveToUserConfig = true): MigratedConfig {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text.replace(/^﻿/, ""));
@@ -62,7 +65,7 @@ export function migrateProjectConfigText(text: string): MigratedConfig {
   const machineKeys: Record<string, string> = {};
   const droppedModAssets: string[] = [];
 
-  for (const [group, key] of MACHINE_KEYS) {
+  for (const [group, key] of moveToUserConfig ? MACHINE_KEYS : []) {
     const holder = group === null ? root : root[group];
     if (!isObj(holder)) continue;
     const value = holder[key];

@@ -54,6 +54,13 @@ test("migration hints: ABFC2005 for an absolute path, ABFC2006 for the derived p
   assert.deepEqual(ds.filter((d) => d.span!.line === abs[0]!.span!.line).map((d) => d.code), ["ABFC2005"]);
 });
 
+test("an absolute path names the mod case-insensitively: ABFC2005 with a relative fix, not ABFC2001", () => {
+  const ds = inFile(hintedDiags, "src/CasedPath.ts");
+  assert.deepEqual(ds.map((d) => d.code), ["ABFC2005"]);
+  assert.match(ds[0]!.message, /write it relative: "Cased\/CasedAbs"/);
+  assert.equal(pathOf("CasedAbs"), "/TestMod/Cased/CasedAbs");
+});
+
 test("without migration hints there is no ABFC2005 / ABFC2006", () => {
   assert.equal(quiet.filter((d) => d.code === "ABFC2005" || d.code === "ABFC2006").length, 0);
 });

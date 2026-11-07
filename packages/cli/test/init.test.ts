@@ -185,6 +185,71 @@ test("a schema-1 project is upgraded with a .v1.bak and its machine keys move to
   assert.doesNotMatch(s.cap.text(), /ABFC1031/);
 });
 
+test("a schema-1 upgrade keeps mod.dir and headlessDir in the project config (init never writes them to the user config)", async () => {
+  const v1 = JSON.stringify({
+    mod: { name: "ModA", dir: "D:\\Custom\\ModA" },
+    headlessDir: "C:\\abfc-headless",
+    modsDir: "D:\\OtherMods",
+    stubs: { classes: [], scriptClasses: [], modAssets: "all" },
+  });
+  const s = setup({ [win32.join(TARGET, "abf.config.json")]: v1, [win32.join(TARGET, "src", "A.ts")]: "export {};\n" });
+  s.fake.files[win32.join("D:\\OtherMods", "ModA", "ModA.uplugin")] = "{}";
+  const code = await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs"], s.cap.deps);
+  assert.equal(code, 0, s.cap.text());
+  const cfg = JSON.parse(read(s, "abf.config.json")) as { schemaVersion: number; mod: { name: string; dir?: string }; headlessDir?: string; modsDir?: string };
+  assert.equal(cfg.schemaVersion, 2);
+  assert.equal(cfg.mod.dir, "D:\\Custom\\ModA");
+  assert.equal(cfg.headlessDir, "C:\\abfc-headless");
+  assert.equal(cfg.modsDir, undefined, "modsDir moved to the user config");
+  const user = JSON.parse(s.fake.files[USER_CONFIG] as string) as Record<string, unknown>;
+  assert.equal(user.modsDir, "D:\\OtherMods");
+  assert.equal(user.headlessDir, undefined);
+  assert.equal(user.mod, undefined);
+  assert.doesNotMatch(s.cap.text(), /removed from/);
+});
+
+test("a schema-1 upgrade without any user config file removes no machine key from the project config", async () => {
+  const v1 = JSON.stringify({
+    mod: { name: "ModA" },
+    modsDir: "D:\\OtherMods",
+    stubs: { classes: [], scriptClasses: [], modAssets: "all" },
+  });
+  const s = setup({ [win32.join(TARGET, "abf.config.json")]: v1, [win32.join(TARGET, "src", "A.ts")]: "export {};\n" });
+  s.fake.files[win32.join("D:\\OtherMods", "ModA", "ModA.uplugin")] = "{}";
+  delete s.fake.env.ABFC_USER_CONFIG;
+  delete s.fake.env.APPDATA;
+  await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs"], s.cap.deps);
+  const cfg = JSON.parse(read(s, "abf.config.json")) as { schemaVersion: number; modsDir?: string };
+  assert.equal(cfg.schemaVersion, 2);
+  assert.equal(cfg.modsDir, "D:\\OtherMods");
+  assert.doesNotMatch(s.cap.text(), /moved/);
+});
+
+test("--yes on a schema-1 project finds the Mod Editor and mods folder from its own machine keys", async () => {
+  const exeRel = loadProfile().exeRelPath;
+  const v1 = JSON.stringify({
+    mod: { name: "ModA" },
+    editor: { root: "C:\\Epic\\OtherEdit" },
+    modsDir: "D:\\OtherMods",
+    stubs: { classes: [], scriptClasses: [], modAssets: "all" },
+  });
+  const modsRoot = win32.dirname(setup().fake.modDir).replace(/[\\.]/g, "\\$&");
+  const s = setup(
+    {
+      [win32.join(TARGET, "abf.config.json")]: v1,
+      [win32.join("C:\\Epic\\OtherEdit", exeRel)]: "exe",
+      [win32.join("D:\\OtherMods", "ModA", "ModA.uplugin")]: "{}",
+    },
+    new RegExp(`ModEdit_X1\\\\.*\\.exe$|^${modsRoot}\\\\`, "i"),
+  );
+  const code = await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs"], s.cap.deps);
+  assert.doesNotMatch(s.cap.text(), /ABFC1001|ABFC1003/);
+  assert.equal(code, 0, s.cap.text());
+  const user = JSON.parse(s.fake.files[USER_CONFIG] as string) as { editor: { root: string }; modsDir: string };
+  assert.equal(user.editor.root, "C:\\Epic\\OtherEdit");
+  assert.equal(user.modsDir, "D:\\OtherMods");
+});
+
 test("an existing user config is merged: other keys stay and a .bak is written", async () => {
   const s = setup({ [USER_CONFIG]: JSON.stringify({ custom: 1, headlessDir: "C:\\abfc-headless" }) });
   const code = await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs"], s.cap.deps);
