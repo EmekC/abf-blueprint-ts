@@ -46,6 +46,8 @@ export interface Manifest {
   structFieldsHash?: string;
   /** Unit ids a build removed from the stage that are not published yet (cleared by a successful publish). */
   retiredUnpublished?: string[];
+  /** Where the asset came from at the last build (docs/design.md 18.2); absent in manifests written before 1.0. */
+  source?: { file: string; class: string; derived: boolean };
 }
 
 /** `/Mod/Dir/BP_X` -> `Mod__Dir__BP_X` */

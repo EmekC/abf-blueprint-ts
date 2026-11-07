@@ -172,6 +172,7 @@ test("(a) adopt needs --yes; build on the fallback route writes manifest, hashes
     assert.match(unit.tag ?? "", /^EdGraphNode_Comment_\d+$/);
     assert.equal(unit.stageSyncedAt, "sync-1");
     assert.notEqual(unit.adopt, null, "the adoption record is kept");
+    assert.deepEqual(readManifest(r.dir, RELAY_ASSET)!.source, { file: "src/Relay.ts", class: "BP_Relay", derived: false }, "the manifest records where the class lives");
     const sm = readSourceMap(r.dir, RELAY_ASSET)!;
     const nodes = Object.values(sm.units["event:UpdateTarget"]!.nodes);
     assert.equal(nodes.length, 52);
@@ -1445,6 +1446,31 @@ test("(h) test.liveHud: skipped hidden with ABFC6105, listed in manual-checks.md
     assert.match(x.out, /warning ABFC6105/);
     assert.equal(r.started.count, before, "the backend is not started");
     assert.equal(r.backend.gameTestCalls, 0);
+  });
+});
+
+test("(p3) a class file whose derived path changed: ABFC5012 stops the build before the backend starts, and path: keeps the asset", async () => {
+  await withRig({}, async (r) => {
+    assert.equal((await r.run(["adopt", RELAY_ASSET, "UpdateTarget", "--yes"])).code, 0);
+    assert.equal((await r.run(["build"])).code, 0);
+    const src = join(r.dir, "src", "Relay.ts");
+    const text = readFileSync(src, "utf8");
+    writeFileSync(src, text.replace('@blueprint({ path: "/TestMod/Relay/BP_Relay" })', "@blueprint()"), "utf8");
+    const starts = r.started.count;
+    const applies = r.backend.applyLabels().length;
+    let x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, /error ABFC5012: BP_Relay was built as \/TestMod\/Relay\/BP_Relay \(from src\/Relay\.ts\) but its file now gives \/TestMod\/BP_Relay/);
+    assert.match(x.out, /path: "Relay\/BP_Relay"/);
+    assert.equal(r.started.count, starts, "the backend is not started");
+    assert.equal(r.backend.applyLabels().length, applies);
+    x = await r.run(["check"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, /ABFC5012/);
+    writeFileSync(src, text.replace('{ path: "/TestMod/Relay/BP_Relay" }', '{ path: "Relay/BP_Relay" }'), "utf8");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.source?.derived, false);
   });
 });
 

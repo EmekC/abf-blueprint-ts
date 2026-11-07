@@ -26,6 +26,7 @@ export {
   writeRetired,
 } from "./ownership/manifest.js";
 export type { Manifest, ManifestUnit } from "./ownership/manifest.js";
+export { movedClassDiagnostics } from "./ownership/moved.js";
 export { deleteSourceMap, mapCompileMessages, readSourceMap, sourceMapPath, writeSourceMap } from "./ownership/sourcemap.js";
 export type { CompileMessageLike, SourceMapFile } from "./ownership/sourcemap.js";
 export { assetsNeedingRead, planBuild } from "./plan/planner.js";

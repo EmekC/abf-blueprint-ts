@@ -72,6 +72,8 @@ export interface Diagnostic {
   asset?: string;
   tried?: Array<{ source: string; detail: string }>;
   fix?: string;
+  /** Machine-readable facts for a quick fix (for example ABFC5012: the path to keep). */
+  data?: Record<string, string>;
 }
 
 export interface BackendCapabilities {

@@ -132,6 +132,9 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   rec.record("build.frontend", since(tFront), fe.ir !== null, fe.ir === null ? 0 : countUnits(fe.ir));
   if (fe.ir === null) return false;
   const ir = fe.ir;
+  // Where each asset comes from (recorded in its manifest, docs/design.md 18.2).
+  const sources = new Map<string, NonNullable<Manifest["source"]>>();
+  for (const c of [...fe.hir.classes, ...fe.hir.structs]) sources.set(c.path, { file: c.span.file, class: c.name, derived: c.pathDerived });
   // Mod-defined structs (UserDefinedStruct): created from the TS, never read; planned first.
   const structAssets = ir.assets.filter((a) => a.structFields !== undefined);
   const owned = ir.assets.filter((a) => a.units.length > 0 || a.classDefaults !== undefined || a.classManagerRow !== undefined || a.director !== undefined || a.variables.some((v) => v.temp !== true));
@@ -219,7 +222,18 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   if (emitAll(ctx, planned.diagnostics)) return false;
   for (const a of skipped) for (const u of a.units) planned.upToDate.push(`${a.path} ${u.id}`);
 
+  // Manifests of assets this build does not touch still learn where their class lives now (an older manifest has no source yet).
+  const refreshSources = (touched: ReadonlySet<string>): void => {
+    for (const [p, m] of manifests) {
+      const s = sources.get(p);
+      if (m === null || s === undefined || touched.has(p)) continue;
+      if (m.source?.file === s.file && m.source.class === s.class && m.source.derived === s.derived) continue;
+      writeManifest(projectDir, { ...m, source: s });
+    }
+  };
+
   if (planned.plan.assets.length === 0) {
+    refreshSources(new Set());
     writeCache(ctx, owned, cache, stubLockHash, caps.eventMeta === true);
     output.info(`up to date (${planned.upToDate.length} unit(s) unchanged)`);
     output.json({ applied: [], upToDate: planned.upToDate });
@@ -279,7 +293,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     const outcome = applied.perAsset[i]!;
     if (a.struct !== undefined) {
       // The struct exists in the stage now (the backend compiled it): record the field hash that guards later changes.
-      writeManifest(projectDir, { asset: a.asset, compiler: COMPILER_ID, profile: profile.id, units: [], variables: [], structFieldsHash: structFieldsHash(a.struct.fields) });
+      writeManifest(projectDir, { asset: a.asset, compiler: COMPILER_ID, profile: profile.id, units: [], variables: [], structFieldsHash: structFieldsHash(a.struct.fields), ...(sources.has(a.asset) ? { source: sources.get(a.asset)! } : {}) });
       createdStructs.push(a.asset.slice(a.asset.lastIndexOf("/") + 1));
       continue;
     }
@@ -340,6 +354,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     const appliedIds = new Set(a.units.map((p) => p.unit.id));
     // Removed from the stage, not published yet: `abfc publish` lists the asset until a publish clears this.
     const retiredUnpublished = [...new Set([...(old?.retiredUnpublished ?? []), ...retired])].sort();
+    const source = sources.get(a.asset) ?? old?.source;
     const finalManifest: Manifest = {
       asset: a.asset,
       compiler: COMPILER_ID,
@@ -349,6 +364,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
       ...(classDefaultsHash !== undefined ? { classDefaultsHash } : {}),
       ...(classDefaultsStageSyncedAt !== undefined ? { classDefaultsStageSyncedAt } : {}),
       ...(retiredUnpublished.length > 0 ? { retiredUnpublished } : {}),
+      ...(source !== undefined ? { source } : {}),
     };
     finals.push(finalManifest);
     writeManifest(projectDir, {
@@ -360,6 +376,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
       ...(old?.classDefaultsHash !== undefined ? { classDefaultsHash: old.classDefaultsHash } : {}),
       ...(old?.classDefaultsStageSyncedAt !== undefined ? { classDefaultsStageSyncedAt: old.classDefaultsStageSyncedAt } : {}),
       ...(retiredUnpublished.length > 0 ? { retiredUnpublished } : {}),
+      ...(source !== undefined ? { source } : {}),
     });
     writeSourceMap(projectDir, sourceMapOf(irAsset, { ...previousNames(old), ...outcome.nodeIds }));
     appliedAssets.push(a.asset);
@@ -390,6 +407,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     return false;
   }
   for (const m of finals) writeManifest(projectDir, m);
+  refreshSources(new Set(planned.plan.assets.map((a) => a.asset)));
   for (const m of report.messages) if (m.severity === "warning" && args.flags.verbose) output.info(`[Unreal warning] ${m.message}`);
 
   writeCache(ctx, owned, cache, stubLockHash, caps.eventMeta === true);

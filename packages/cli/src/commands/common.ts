@@ -1,7 +1,7 @@
 // Pieces shared by check, build, test, status, adopt and publish: timings, lock check, frontend, backend session.
 import { win32 } from "node:path";
 import type { Backend } from "@abfc/backend";
-import { buildHir, loadProgram, lowerChecked } from "@abfc/compiler";
+import { buildHir, listManifests, loadProgram, lowerChecked, movedClassDiagnostics } from "@abfc/compiler";
 import type { CompilerProjectConfig, HirProgram, LoadedProgram } from "@abfc/compiler";
 import { AbfcError } from "@abfc/env";
 import type { ProjectConfig } from "@abfc/env";
@@ -83,6 +83,8 @@ export function compileFrontend(ctx: CliContext): Frontend {
   const loaded = loadProgram(ctx.projectDir);
   const hir = buildHir(loaded, compilerConfigOf(ctx.config), ctx.env.profile);
   const diags = [...loaded.diagnostics, ...hir.diagnostics];
+  // A class file that moved since its asset was built stops here, before anything is planned or the backend starts (ABFC5012).
+  if (!hasError(diags)) diags.push(...movedClassDiagnostics(hir, listManifests(ctx.projectDir), ctx.config.mod.name));
   emitAll(ctx, diags);
   if (hasError(diags)) return { loaded, hir, ir: null };
   const lowered = lowerChecked(hir, ctx.env.profile);
