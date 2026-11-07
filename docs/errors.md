@@ -714,3 +714,547 @@ Meaning: a value in a test (a name, path or similar argument) is not a string li
 Typical cause: a computed or concatenated string.
 
 Fix: write the value as a plain string literal.
+
+## 3xxx stubs
+
+The stubs are the `.d.ts` files `abfc stubs` writes from the Mod Editor; the lock file next to them records which editor build and configuration they belong to. These codes mean the stubs are missing, out of date or incomplete. They all exit with 2.
+
+### ABFC3001
+
+Severity: error in `abfc build` and `abfc publish`, warning in `abfc check` · Exit: 2 (error), - (warning)
+
+Meaning: the stubs were generated for a different Mod Editor install than the one abfc finds now.
+
+Typical cause: the Mod Editor was updated or reinstalled after `abfc stubs` ran.
+
+Fix: run `abfc stubs` again.
+
+### ABFC3002
+
+Severity: error · Exit: 2
+
+Meaning: there is no abfc profile for the Mod Editor build that was found, or the stubs belong to a different profile than the one abfc uses now.
+
+Typical cause: a Mod Editor build newer than this abfc release knows, or stubs copied from a project that used another profile. `abfc doctor` shows a similar warning when it cannot confirm the build at all.
+
+Fix: update abfc when the build is unknown to it, then run `abfc stubs`. `abfc doctor` shows which build was detected.
+
+### ABFC3003
+
+Severity: error when the stubs do not exist, warning when a configured class is missing from them · Exit: 2 (error), - (warning)
+
+Meaning: there is no `stubs.lock.json` for this editor build, or the stubs do not cover every class listed in `stubs.classes` and `stubs.scriptClasses`.
+
+Typical cause: `abfc stubs` was never run in this project, or a class was added to the config afterwards.
+
+Fix: run `abfc stubs`.
+
+### ABFC3004
+
+Severity: warning in `abfc stubs`, error in a build · Exit: 2 (error), - (warning)
+
+Meaning: abfc could not determine the cast pin for a class, so a cast to that class (`as`, or a type test that casts) cannot be built.
+
+Typical cause: the class is not in the stubs, or the backend did not report how to cast to it.
+
+Fix: add the class to `stubs.classes` or `stubs.scriptClasses` and run `abfc stubs`. If the warning stays, report the class name.
+
+### ABFC3010
+
+Severity: warning · Exit: -
+
+Meaning: `stubs.scriptModules` in the config is ignored in this version.
+
+Typical cause: whole-module reflection is too slow to offer, so the setting has no effect yet.
+
+Fix: list the classes you need in `stubs.scriptClasses` instead. See [config.md](config.md).
+
+### ABFC3011
+
+Severity: warning · Exit: -
+
+Meaning: an entry in `stubs.widgetMembers` names a widget class that is not in the stubs, so the member is typed as a plain `UObject`.
+
+Typical cause: the widget class is missing from `stubs.scriptClasses`.
+
+Fix: add the class named in the message to `stubs.scriptClasses` and run `abfc stubs`.
+
+## 4xxx backend
+
+The backend is the part of abfc that talks to the Mod Editor (the bundled one in `abfc.exe`, or an abf-mod-editor-mcp checkout in a source install). See [backend.md](backend.md). Except ABFC4090, these codes exit with 2.
+
+### ABFC4001
+
+Severity: error · Exit: 2
+
+Meaning: the backend speaks an older protocol than this abfc needs.
+
+Typical cause: a source install that uses an old abf-mod-editor-mcp checkout.
+
+Fix: update the checkout, or use `abfc.exe`, which bundles a matching backend. `abfc doctor` shows the backend it found.
+
+### ABFC4002
+
+Severity: error, or warning in `abfc stubs` · Exit: 2 (error), - (warning)
+
+Meaning: a backend tool failed, or the command hit an unexpected failure. The message carries the backend's own text.
+
+Typical cause: the Mod Editor is not reachable, a path in the request does not exist, or the backend raised an error. `abfc stubs` shows it as a warning for a mod asset that is not a Blueprint.
+
+Fix: read the text after `[backend]` or `failed:`. Run `abfc doctor --verbose` to check the backend folder and Python, and try again. If the message is about the stage, `abfc build --resync` rebuilds it.
+
+### ABFC4003
+
+Severity: error · Exit: 2
+
+Meaning: the two-phase fallback (the slower route abfc uses for wildcard pins on a backend without `backend_info`) needed a file that the backend did not write.
+
+Typical cause: an old backend checkout.
+
+Fix: update the backend (see [backend.md](backend.md)), or use `abfc.exe`.
+
+### ABFC4004
+
+Severity: error · Exit: 2
+
+Meaning: the two-phase fallback could not match every wildcard pin, or found no real node name for a planned node.
+
+Typical cause: the editor's export text differs from what the patcher expects, usually with an old backend.
+
+Fix: update the backend. If it persists with a current one, report it with the message.
+
+### ABFC4010
+
+Severity: error · Exit: 2
+
+Meaning: abfc built a pin type that the backend refuses (internal error).
+
+Typical cause: an abfc bug or a version mismatch between abfc and the backend.
+
+Fix: report it with the message and the node it names. Updating abfc and the backend to matching versions may help.
+
+### ABFC4011
+
+Severity: error · Exit: 2
+
+Meaning: the backend has no `reflect` tool, which `abfc stubs` needs.
+
+Typical cause: a source install with an old abf-mod-editor-mcp checkout.
+
+Fix: update the checkout (see [backend.md](backend.md)) or use `abfc.exe`.
+
+### ABFC4012
+
+Severity: warning · Exit: -
+
+Meaning: the backend has no `backend_info` tool, so abfc cannot read its capabilities.
+
+Typical cause: an old abf-mod-editor-mcp checkout.
+
+Fix: update the backend. Until then abfc uses the slower two-phase route for wildcard pins, which costs about 10 to 20 seconds more per build.
+
+### ABFC4013
+
+Severity: error · Exit: 2
+
+Meaning: the code calls an event that is new in this build, and the backend cannot create and call a new event in one step.
+
+Typical cause: an older backend, without the `self_event_calls` feature of `bp_apply`.
+
+Fix: update the backend, or build once without the call and add the call in a second build.
+
+### ABFC4014
+
+Severity: warning · Exit: -
+
+Meaning: the backend is older than the minimum version this abfc is built for (2.4.0).
+
+Typical cause: a source install with an old abf-mod-editor-mcp checkout.
+
+Fix: update the checkout, or use `abfc.exe`. See [backend.md](backend.md).
+
+### ABFC4015
+
+Severity: error · Exit: 2
+
+Meaning: a unit needs an event to supply a delegate, and that event is neither in this build nor recorded as built earlier.
+
+Typical cause: the event belongs to a unit that was removed, or that failed to build in an earlier run.
+
+Fix: declare the event in TypeScript again, or remove the use of it, then run `abfc build`. If the event comes from a hand-made unit, adopt it first (`abfc adopt`).
+
+### ABFC4016
+
+Severity: warning · Exit: -
+
+Meaning: a build failed to compile in Unreal, and abfc then could not restore the staged copy from the mod. The build had already failed; this is an extra problem.
+
+Typical cause: the mod folder is locked, the backend stopped responding or the disk is full.
+
+Fix: run `abfc build --resync` before the next build. That discards unpublished work in the staged copy, which the next build applies again. `--keep-failed-stage` keeps the failed stage for inspection instead (see [cli.md](cli.md)).
+
+### ABFC4020
+
+Severity: error · Exit: 2
+
+Meaning: the staged copy of the mod conflicts with the real mod, so abfc will not write on top of it.
+
+Typical cause: the mod's files changed after the stage was made, for example the mod was saved in the Mod Editor, or published by hand.
+
+Fix: run `abfc build --resync`. It replaces the staged copy with the real mod and discards unpublished work in the stage, which the next build applies again.
+
+### ABFC4090
+
+Severity: error · Exit: 3
+
+Meaning: abfc refused to call a backend tool outside its allowlist, or to publish outside `abfc publish` or for another mod than the project's own.
+
+Typical cause: this should not happen in normal use. It is a safety check that protects the real mod from commands that must not write to it.
+
+Fix: use the command that does the work (`abfc publish` to write the mod). If you did not ask for anything unusual, report the message.
+
+### ABFC4100
+
+Severity: error · Exit: 2
+
+Meaning: the backend refused to write one asset graph in memory.
+
+Typical cause: the graph has a shape the in-memory writer does not support yet.
+
+Fix: report it with the run folder named in the message. Building a smaller unit may avoid it meanwhile.
+
+## 5xxx ownership and drift
+
+abfc only replaces what it built itself. It records which nodes of an asset belong to which unit; when the asset no longer matches the record, abfc stops instead of overwriting. Codes 5001-5007 need your decision and exit with 3; the rest exit with 1 (errors) or do not end the command (warnings). The workflow is described in [first-mod.md](first-mod.md) and the commands in [cli.md](cli.md).
+
+### ABFC5001
+
+Severity: error · Exit: 3
+
+Meaning: a unit that abfc built was edited in the Mod Editor since the last build, or the staged copy differs from what abfc applied. abfc will not overwrite it. The message counts the nodes and links that changed.
+
+Typical cause: you changed, moved or reconnected a generated node in the Blueprint editor, or the stage was re-synced from a mod that holds a different version.
+
+Fix: undo the edit in the editor, or move the change into the `.ts` file and run `abfc adopt <asset> <unit> --yes --discard-editor-changes`. The next build then replaces the edited nodes.
+
+### ABFC5002
+
+Severity: error · Exit: 3
+
+Meaning: nodes that abfc owns are missing from the asset, so the unit cannot be updated safely. The same code is used by `abfc adopt` when the unit to adopt does not exist in the asset.
+
+Typical cause: you deleted generated nodes in the editor, or the stage was re-synced from a mod that never had them.
+
+Fix: undo the deletion in the editor, or restore the stage with `abfc build --resync` after reverting the unit in the real mod. For `abfc adopt`, check the name of the event.
+
+### ABFC5003
+
+Severity: error · Exit: 3
+
+Meaning: an event or override declared in TypeScript already exists in the asset as a hand-made event.
+
+Typical cause: the event was made in the Blueprint editor before it was written in TypeScript.
+
+Fix: run the `abfc adopt` command shown in the fix line, which takes the existing nodes over. Or rename the TypeScript method.
+
+### ABFC5004
+
+Severity: error · Exit: 3
+
+Meaning: a hand-made unit that was adopted earlier changed in the real mod, so the recorded adoption no longer matches.
+
+Typical cause: someone edited the adopted nodes in the editor after `abfc adopt` recorded them.
+
+Fix: review the change in the editor, then run `abfc adopt` again for this unit.
+
+### ABFC5005
+
+Severity: error · Exit: 3
+
+Meaning: the unit cannot be adopted because it shares nodes with another unit, has links to nodes outside it, or an outside node uses its entry as a delegate.
+
+Typical cause: hand-made graphs often reuse nodes between events.
+
+Fix: split the shared nodes in the editor, or adopt the unit that holds the delegate user first, then run `abfc adopt` again.
+
+### ABFC5006
+
+Severity: error · Exit: 3
+
+Meaning: `abfc adopt` shows what it would take over and stops, because it was not told to go on. Nothing was written.
+
+Typical cause: `--yes` was not given.
+
+Fix: check the number of nodes in the message, then run the command from the fix line with `--yes`.
+
+### ABFC5007
+
+Severity: error · Exit: 3
+
+Meaning: the unit was already applied by abfc, so adopting it again would replace the generated nodes and discard edits made to them in the editor. Nothing was written.
+
+Typical cause: `abfc adopt` was run for a unit that abfc built itself.
+
+Fix: if you really want the hand-made version, run the command from the fix line with `--yes --discard-editor-changes`. Otherwise, leave the unit to abfc.
+
+### ABFC5008
+
+Severity: error · Exit: 1
+
+Meaning: `--remove-node` named a node that does not exist, or one that is not a comment box and has linked pins.
+
+Typical cause: a mistyped node name, or a node that is still part of the graph.
+
+Fix: use the name of a comment box or of a node with no links, as listed in the message.
+
+### ABFC5009
+
+Severity: error · Exit: 1
+
+Meaning: a unit that is no longer declared in TypeScript is still called by another unit.
+
+Typical cause: a method or event was deleted or renamed while a call to it remains.
+
+Fix: change the call in the unit named in the message, or declare the method again.
+
+### ABFC5010
+
+Severity: warning · Exit: -
+
+Meaning: a Blueprint class is no longer declared in TypeScript. abfc removes the units it owns, but the class defaults it set stay as they are.
+
+Typical cause: the class file was deleted.
+
+Fix: nothing is required. Clean up the asset in the Mod Editor if you do not want it.
+
+### ABFC5011
+
+Severity: warning · Exit: -
+
+Meaning: a field that was declared in TypeScript before is gone, but the variable stays in the Blueprint.
+
+Typical cause: a property was deleted from the class.
+
+Fix: delete the variable in the Mod Editor, or declare the field again.
+
+### ABFC5012
+
+Severity: error · Exit: 1
+
+Meaning: a class file now gives a different asset path than the one it was built as (the file moved or the class was renamed), and the old asset is still recorded. abfc will not create a second asset or retire the first.
+
+Typical cause: a `.ts` file was moved, or a class renamed, without a `path` option in `@blueprint`.
+
+Fix: keep the old asset with `path: "<path below the mod>"` in the class options (the editor quick fix does it), or move the file back. The language server offers the quick fix on the diagnostic.
+
+### ABFC5013
+
+Severity: warning · Exit: -
+
+Meaning: the class-manager row that a previous build wrote for a `@director` class stays in the mod, because the class no longer names that row.
+
+Typical cause: the row name in `@director` was changed or removed.
+
+Fix: delete the old row in the Mod Editor.
+
+### ABFC5101
+
+Severity: warning · Exit: -
+
+Meaning: the pass that adds abfc's ownership comment boxes failed for an asset. The units were applied but carry no comment box.
+
+Typical cause: a temporary backend or compile problem during the second pass.
+
+Fix: run `abfc build` again. The pass is repeated.
+
+### ABFC5102
+
+Severity: warning · Exit: -
+
+Meaning: the pass that sets class defaults failed for an asset, or the backend did not confirm the class-manager row. The defaults are not applied or not confirmed.
+
+Typical cause: a temporary backend or compile problem during the defaults pass.
+
+Fix: run `abfc build` again. The pass is repeated.
+
+## 6xxx tests
+
+Codes 6001 and 6002 are Unreal compile errors reported after a build applied the Blueprints. 6101-6201 come from `abfc test` and from the test gate of `abfc publish`. They exit with 1 when they are errors. Writing tests is covered in [first-mod.md](first-mod.md).
+
+### ABFC6001
+
+Severity: error · Exit: 1
+
+Meaning: Unreal reported a compile error for generated nodes, and abfc found the TypeScript line that made them. The message starts with `[Unreal]`.
+
+Typical cause: a construct that compiles in TypeScript but not in Blueprint, for example a type that does not fit a pin.
+
+Fix: fix the line shown. `abfc build --keep-failed-stage` keeps the failed stage so you can look at the Blueprint.
+
+### ABFC6002
+
+Severity: error · Exit: 1
+
+Meaning: Unreal reported a compile error that abfc could not map to a TypeScript line, or one in a hand-made node.
+
+Typical cause: an error in a node abfc does not own, or a message without a node.
+
+Fix: read the message. For a hand-made node, fix it in the Mod Editor. After a failed compile abfc re-syncs the stage from the mod, so the next build applies your units again; `--keep-failed-stage` keeps the failed stage instead.
+
+### ABFC6101
+
+Severity: error · Exit: 1
+
+Meaning: a test step failed: the value read from the game did not match the expected one.
+
+Typical cause: the code under test does not behave as the test expects.
+
+Fix: the message shows the expectation and the value that was read, and the diagnostic points at the failing step. Fix the code or the test. For a bug you want to keep for now, mark the step with `knownIssue(reason)` on the assertion.
+
+### ABFC6102
+
+Severity: warning · Exit: -
+
+Meaning: a step marked as a known issue still fails.
+
+Typical cause: the pre-existing problem is still there.
+
+Fix: nothing is required. The warning keeps the issue visible.
+
+### ABFC6103
+
+Severity: warning · Exit: -
+
+Meaning: a step marked as a known issue passes now.
+
+Typical cause: the underlying problem was fixed.
+
+Fix: remove the `knownIssue` mark from the step.
+
+### ABFC6104
+
+Severity: error · Exit: 1
+
+Meaning: a test did not finish (it was incomplete or timed out), or one or more tests failed, so a command that needs tests to pass (`abfc publish`) stops.
+
+Typical cause: the test waits for something that never happens, or the game test run was interrupted. A summary line is added when tests fail.
+
+Fix: read the message for the test name and the reason, and run `abfc test <name>` alone. Fix the code the test waits for.
+
+### ABFC6105
+
+Severity: warning · Exit: -
+
+Meaning: a `liveHud` test is skipped, because it needs a live HUD and cannot run hidden.
+
+Typical cause: the test was written with `test.liveHud`.
+
+Fix: nothing is required. abfc lists the test and its checklist in `.abfc/reports/manual-checks.md` for a manual check in Play In Editor. Skipped live tests do not stop `abfc publish`.
+
+### ABFC6201
+
+Severity: warning · Exit: -
+
+Meaning: the game printed a log line (a warning or error) while a test ran.
+
+Typical cause: a runtime problem in the code under test, such as an access to a null reference.
+
+Fix: read the log line. It is shown even when the test passes, because it may point at a real problem.
+
+## 7xxx publish
+
+`abfc publish` runs seven gates and then copies the staged copy into the real mod. These codes explain why a gate or the copy stopped. See [troubleshooting.md](troubleshooting.md#publish-is-refused) for the recovery steps and [cli.md](cli.md) for the gates.
+
+### ABFC7002
+
+Severity: error · Exit: 1
+
+Meaning: the stage audit (gate 5, `mod_audit`) did not pass for the mod, or it audited the real copy instead of the staged copy.
+
+Typical cause: the audit found a problem in the staged mod, or the hidden Mod Editor that runs it stopped at the Epic Games login window and gave up. The second case is a known issue under investigation: see [the Epic login window](troubleshooting.md#the-epic-login-window-of-the-stage-audit).
+
+Fix: run `mod_audit` in the Mod Editor for the details. The stage audit runs only for `abfc publish --full`; the default `abfc publish` does not need it.
+
+### ABFC7003
+
+Severity: warning · Exit: -
+
+Meaning: the backend audits the real mod, not the staged copy, so the audit does not cover the staged changes.
+
+Typical cause: an older backend without the `stageAudit` capability.
+
+Fix: update the backend ([backend.md](backend.md)), or audit the mod in the editor after publishing.
+
+### ABFC7004
+
+Severity: error · Exit: 1
+
+Meaning: the backend refused to publish because the staged copy has compile errors.
+
+Typical cause: an earlier build left errors in the stage.
+
+Fix: fix the errors listed, run `abfc build`, then run `abfc publish` again.
+
+### ABFC7005
+
+Severity: error · Exit: 3
+
+Meaning: the backend refused to copy the files because the mod or the open Mod Editor is in a state that needs your action: the mod changed outside abfc, assets have unsaved changes, assets are open in the editor, Play In Editor is running, or a file is locked.
+
+Typical cause: you saved the mod in the Mod Editor after the stage was made, or left an asset editor tab open.
+
+Fix: the fix line names the case. Typical steps: `abfc build --resync` after the mod changed, save or revert the assets in the Mod Editor, stop Play In Editor, or close the asset tabs, then run `abfc publish` again. abfc never closes your Mod Editor.
+
+### ABFC7006
+
+Severity: error · Exit: 2
+
+Meaning: the publish could not complete because of the Mod Editor or the machine: the editor did not respond, is in a bad state, a backup or copy failed, or the reload failed.
+
+Typical cause: a dialog is open in the Mod Editor, two Mod Editors run, or the disk is full.
+
+Fix: close any dialog in the Mod Editor, run only one editor, check the free disk space and the headless folder, then run `abfc publish` again. When a copy failed and the mod was not restored, the message names the backup folder to copy the files back from.
+
+### ABFC7010
+
+Severity: error · Exit: 1
+
+Meaning: the mod or stage folder holds a `.md` file, which mod.io rejects when the mod is uploaded.
+
+Typical cause: a README or notes file in the mod folder.
+
+Fix: move the file out of the mod folder.
+
+### ABFC7011
+
+Severity: error · Exit: 1
+
+Meaning: the code uses a member that the Blueprint filter blocks. The upload check of the Mod Editor would reject a node for it.
+
+Typical cause: a stub member tagged `@deprecated Blocked by Blueprint filter`.
+
+Fix: use another member. If you know the audit accepts it, report the member so it can be added to the profile's `filterOverrides`.
+
+### ABFC7012
+
+Severity: warning · Exit: -
+
+Meaning: the mod or stage folder holds a file of a type the templates do not contain, or a file inside an editor working folder. It would be zipped and uploaded with the mod.
+
+Typical cause: leftover files from a tool or a backup copy.
+
+Fix: remove the file if you do not want to ship it.
+
+### ABFC7013
+
+Severity: warning · Exit: -
+
+Meaning: after the publish, the open Mod Editor logged Blueprint compile errors while it reloaded the published assets. The files on disk are fine; the errors are in the editor's memory.
+
+Typical cause: the editor reloaded assets that other loaded assets still referenced.
+
+Fix: open the listed Blueprints and compile them again, or restart the Mod Editor.
+
+## Lint rules
+
+The rules of the ESLint plugin (`abfc/no-heavy-call-in-tick` and the others) report under their rule name and have no `ABFC` code. They are described in [lint-rules.md](lint-rules.md).

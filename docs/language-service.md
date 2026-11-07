@@ -11,10 +11,17 @@ file, so cross-file checks match. `scripts/lsp-parity.mjs` compares the two on a
 The server uses the compiler's own TypeScript, so it needs no `typescript.tsdk` setting and no matching workspace
 TypeScript. It never starts Python or the backend, and it never writes into a project.
 
+## Editors
+
+This page is the editors page of abfc: [VS Code](#vs-code) has an extension, and every other editor can use `abfc lsp`
+directly ([Other editors](#other-editors)). The installer offers to install the extension; the other ways to install it
+are in [install.md](install.md#vs-code-extension). The commands and the diagnostics are the same as in the terminal
+([cli.md](cli.md), [errors.md](errors.md)).
+
 ## VS Code
 
-The extension is a `.vsix` (it is not on the marketplace). Install the file from the release, or build it from a checkout
-and install it:
+The extension is a `.vsix` (it is not on the marketplace). Install the file from the release (see
+[install.md](install.md#vs-code-extension)), or build it from a checkout and install it:
 
 ```
 npm install

@@ -2,21 +2,27 @@
 
 abfc does not touch Blueprint assets itself. It talks to a headless Mod Editor backend, the MCP server in https://github.com/EmekC/abf-mod-editor-mcp. That repository is the only supported backend, and it owns its version numbers. abfc spawns the server (`python -I -X utf8 <backend dir>\server.py`), speaks MCP JSON-RPC over stdio and calls its tools (`bp_apply`, `staging_sync`, `bp_compile_report`, `bp_game_test`, `mod_audit`, `bp_publish`, `reflect`, `backend_info`). See [design.md](design.md) section 7 for the transport and the mapping from the IR to `bp_apply`.
 
+## The bundled backend
+
+`abfc.exe` (the installer and the zip, see [install.md](install.md)) carries a copy of this backend and its own Python. There is nothing to install or configure: the first command that needs them unpacks them into the runtime folder, and `abfc doctor` prints the backend version it uses. A release of abfc is built with one pinned backend version, so the exe and the backend always match. The rest of this page is about the settings and capabilities that apply to every install, and about the source install, where you provide the backend yourself.
+
 ## Requirements
 
 | What | Value |
 | --- | --- |
-| Minimum server version | 2.4.0 (tag `v2.4.0`); class-manager rows (`@director`) need 2.5.0 |
+| Minimum server version | 2.4.0 (tag `v2.4.0`) for a source install; class-manager rows (`@director`) need 2.5.0 (tag `v2.5.0`). `abfc.exe` bundles a current version |
 | Protocol | 1 or higher (`backend_info.protocol`) |
 | Python | 3.9 or newer on the PC (the editor uses its own Python internally) |
 | Mod Editor | installed from the Epic Games Launcher |
 
-An older server still works where it can: abfc gates every feature on a capability and prints a warning, not an error, below 2.4.0. A protocol below 1 is an error.
+An older server still works where it can: abfc gates every feature on a capability and prints a warning, not an error, below 2.4.0. With a server older than 2.5.0 the build warns with [ABFC2077](errors.md#abfc2077) and writes no class-manager row for `@director`. A protocol below 1 is an error.
 
-## Install
+## Source install
+
+Only a source install needs this (see [install.md](install.md#source-install)); `abfc.exe` does not.
 
 1. Clone the repository: `git clone https://github.com/EmekC/abf-mod-editor-mcp <backend dir>`.
-2. Check out the release: `git -C <backend dir> checkout v2.4.0` (or a newer tag).
+2. Check out the release: `git -C <backend dir> checkout v2.5.0` (the tag the abfc release is built with; `v2.4.0` is the minimum, and then `@director` rows are not written).
 3. Make sure Python 3.9 or newer is on `PATH` (not the Microsoft Store alias), or tell abfc where it is (see below).
 
 To update, fetch and check out a newer tag. abfc never modifies the checkout.
@@ -90,12 +96,16 @@ Warnings and errors from the backend check use the codes below. `abfc doctor` ex
 
 | Code | Severity | Meaning | Fix |
 | --- | --- | --- | --- |
-| ABFC4001 | error | the backend reports a protocol below the one abfc needs | update the checkout to the tag named above |
-| ABFC4012 | warning | the backend has no `backend_info` tool (an old checkout); abfc uses the two-phase wildcard route, about 10-20 s more per build | update to 2.4.0 or newer |
-| ABFC4014 | warning | the server version is older than the minimum (2.4.0); it may miss capabilities abfc uses. Versions that do not parse (for example in test doubles) never warn | check out tag `v2.4.0` or newer |
-| ABFC2044 | error | a `Map`, `Set` or struct needs a backend capability that is missing | update the backend, or remove the type |
-| ABFC2071 | warning | the backend has no `event_meta`, so an `@event` doc comment is not written as its Blueprint tooltip | update the backend |
-| ABFC2072 | warning | the doc comment of an `@event` is longer than 2000 characters; the Blueprint tooltip, category or keywords are cut to 2000 (ending in `...`) | shorten the comment |
+| [ABFC4001](errors.md#abfc4001) | error | the backend reports a protocol below the one abfc needs | update the checkout to the tag named above |
+| [ABFC4012](errors.md#abfc4012) | warning | the backend has no `backend_info` tool (an old checkout); abfc uses the two-phase wildcard route, about 10-20 s more per build | update to 2.4.0 or newer |
+| [ABFC4014](errors.md#abfc4014) | warning | the server version is older than the minimum (2.4.0); it may miss capabilities abfc uses. Versions that do not parse (for example in test doubles) never warn | check out tag `v2.4.0` or newer |
+| [ABFC2044](errors.md#abfc2044) | error | a `Map`, `Set` or struct needs a backend capability that is missing | update the backend, or remove the type |
+| [ABFC2071](errors.md#abfc2071) | warning | the backend has no `event_meta`, so an `@event` doc comment is not written as its Blueprint tooltip | update the backend |
+| [ABFC2072](errors.md#abfc2072) | warning | the doc comment of an `@event` is longer than 2000 characters; the Blueprint tooltip, category or keywords are cut to 2000 (ending in `...`) | shorten the comment |
+| [ABFC2077](errors.md#abfc2077) | warning | the backend cannot write class-manager rows (older than 2.5.0), so the `@director` row is only checked | update to 2.5.0 or newer, or create the row in the Mod Editor |
+| [ABFC4015](errors.md#abfc4015) | error | an event that supplies a delegate is neither in this build nor recorded as built | declare the event again or remove its use |
+
+Every code, including the ones not listed here, is explained in [errors.md](errors.md).
 
 ## Known fallbacks
 
