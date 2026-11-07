@@ -1,10 +1,12 @@
 // HIR builder: checks the TypeScript subset and resolves every name through the stub tags.
 import ts from "typescript";
+import { BpTypeError, parseBpType } from "@abfc/ir";
 import type { Diagnostic, Profile, Span } from "@abfc/ir";
-import type { BpType, HirClass, HirEvent, HirExpr, HirProgram, HirStmt, LocalId } from "../hir.js";
+import type { BpType, HirClass, HirEvent, HirField, HirExpr, HirProgram, HirStmt, HirStruct, LocalId } from "../hir.js";
 import { DiagSink, Fail, relFile, spanOf } from "./diag.js";
 import type { LoadedProgram } from "./program.js";
-import { BLUEPRINT_META, WIDGET_META, bpPathOf, bpTagsOfSymbol, bpTypeOf, bpTypeOfMember, classInfo, classPathOf, functionInfo, ownEventInfo, resolveAlias, splitMemberPath } from "./tags.js";
+import { BLUEPRINT_META, WIDGET_META, bpPathOf, bpTagsOfSymbol, bpTypeOf, bpTypeOfMember, classInfo, classPathOf, functionInfo, ownEventInfo, resolveAlias, splitMemberPath, tsStructMemberName, tsStructOfDecl } from "./tags.js";
+import { udsMemberName } from "./structnames.js";
 import type { FunctionInfo } from "./tags.js";
 
 export { classPathOf } from "./tags.js";
@@ -30,6 +32,18 @@ const NUMBER_DEFAULTS: Record<string, string> = {
 const ACTOR_ONLY_OPTIONS = new Set(["alwaysRelevant", "onlyRelevantToOwner", "netUpdateFrequency", "minNetUpdateFrequency", "tickInterval"]);
 const ARRAY_OWN_ONLY = "an array can only be changed as a statement on an own array variable: this.<Array>.push(x), this.<Array>.splice(i, 1) or this.<Array>.length = 0";
 const CONTAINERS = new Set(["Map", "Set", "WeakMap", "WeakSet", "ReadonlyMap", "ReadonlySet"]);
+const CONTAINER_OWN_ONLY = "a Map or Set can only be used through an own field: this.<Field>.set(k, v), this.<Field>.has(k), this.<Field>.size, ...";
+/** Statement methods of a native Map / Set and the operation they lower to. */
+const MAP_MUTATORS = new Map<string, "add" | "remove" | "clear">([["set", "add"], ["delete", "remove"], ["clear", "clear"]]);
+const SET_MUTATORS = new Map<string, "add" | "remove" | "clear">([["add", "add"], ["delete", "remove"], ["clear", "clear"]]);
+
+/** Key (or set element) and value type of a `map:<K>:<V>` / `set:<T>` Blueprint type. */
+function splitContainerType(type: string): { key: string; value: string } {
+  if (type.startsWith("set:")) return { key: type.slice(4), value: "" };
+  const rest = type.slice(4);
+  const sep = rest.indexOf(":");
+  return { key: rest.slice(0, sep), value: rest.slice(sep + 1) };
+}
 
 type EqKind = "object" | "name" | "string" | "int" | "real" | "bool" | "byte";
 
@@ -107,6 +121,7 @@ function children(e: HirExpr): HirExpr[] {
     case "cmp": return [e.a, e.b];
     case "index": return [e.array, e.index];
     case "arrayFind": return [e.array, e.value];
+    case "containerQuery": return [e.target, ...(e.key ? [e.key] : [])];
     case "formatText": return e.args.map((a) => a.value);
     case "makeStruct": return e.fields.map((a) => a.value);
     default: return [];
@@ -141,6 +156,11 @@ interface OwnSig {
 /** Array methods that change the array; they are statements on an own array variable only. */
 const ARRAY_MUTATORS = new Set(["push", "splice"]);
 
+/** A property with neither a type annotation nor `!` (`Score = 1;`) is not an own-field attempt: it keeps the generic ABFC2099. */
+function isLegacyProperty(m: ts.PropertyDeclaration): boolean {
+  return m.type === undefined && m.exclamationToken === undefined;
+}
+
 function stripParens(x: ts.Expression): ts.Expression {
   let y = x;
   while (ts.isParenthesizedExpression(y)) y = y.expression;
@@ -161,6 +181,7 @@ function directExprs(s: HirStmt): HirExpr[] {
     case "setSelfCond": return [s.cond, s.a, s.b];
     case "forCount": return [s.init, s.cond];
     case "arrayOp": return [...(s.value ? [s.value] : []), ...(s.index ? [s.index] : [])];
+    case "containerOp": return [...(s.key ? [s.key] : []), ...(s.value ? [s.value] : [])];
     default: return [];
   }
 }
@@ -179,6 +200,7 @@ class HirBuilder {
   readonly sink: DiagSink;
   readonly classMeta: Record<string, string> = {};
   readonly classes: HirClass[] = [];
+  readonly structs: HirStruct[] = [];
   private readonly checker: ts.TypeChecker;
   private readonly mod: string;
 
@@ -189,6 +211,8 @@ class HirBuilder {
   private nextLocal = 0;
   /** Owned `@event`/`@override` methods of the class being built, by name. */
   private ownSigs = new Map<string, OwnSig>();
+  /** Own fields (`Name!: T;`) by the symbol of their declaration. */
+  private ownFields = new Map<ts.Symbol, HirField>();
   private holes = new Map<ts.Node, HirExpr>();
   private handled = new Set<ts.Node>();
   private readonly callInfo = new WeakMap<object, FunctionInfo>();
@@ -207,6 +231,12 @@ class HirBuilder {
 
   classDecl(node: ts.ClassDeclaration): void {
     const bp = (ts.getDecorators(node) ?? []).find((d) => runtimeName(this.checker, d.expression) === "blueprint");
+    const st = (ts.getDecorators(node) ?? []).find((d) => runtimeName(this.checker, d.expression) === "struct");
+    if (st) {
+      if (bp) this.sink.error("ABFC2046", `${node.name?.text ?? "(anonymous)"} cannot be both a @blueprint and a @struct`, node.name ?? node);
+      else this.structDecl(node, st);
+      return;
+    }
     if (!bp) return;
     const name = node.name?.text ?? "(anonymous)";
     let path: string | undefined;
@@ -294,6 +324,7 @@ class HirBuilder {
       parent,
       span: this.sp(node.name ?? node),
       events: [],
+      fields: [],
       manualUnits: this.manualUnits(node),
       defaults,
       ...(classManagerRow !== undefined ? { classManagerRow } : {}),
@@ -309,6 +340,15 @@ class HirBuilder {
       const names = (ts.getDecorators(m) ?? []).map((d) => runtimeName(this.checker, d.expression));
       return names.includes("event") ? "event" : names.includes("override") ? "override" : undefined;
     };
+    // Own fields first: an event body may use a field declared further down.
+    for (const m of node.members) {
+      if (!ts.isPropertyDeclaration(m) || isLegacyProperty(m) || (ts.isIdentifier(m.name) && this.isDesignerWidget(node, m.name.text))) continue;
+      const field = this.ownField(node, m);
+      if (field === undefined) continue;
+      cls.fields.push(field);
+      const fsym = this.checker.getSymbolAtLocation(m.name);
+      if (fsym) this.ownFields.set(fsym, field);
+    }
     for (const m of node.members) {
       if (!ts.isMethodDeclaration(m) || !ts.isIdentifier(m.name) || !m.body) continue;
       const kind = methodKind(m);
@@ -336,9 +376,119 @@ class HirBuilder {
         this.sink.error("ABFC2066", `"${m.name.text}" is a designer widget of ${path}; rename the variable`, m.name);
         continue;
       }
+      if (ts.isPropertyDeclaration(m) && !isLegacyProperty(m)) continue; // own field: checked and recorded above
       this.sink.error("ABFC2099", `class member of kind ${ts.SyntaxKind[m.kind]} is not supported`, m);
     }
     this.classes.push(cls);
+  }
+
+  /**
+   * A `@struct({ path })` class: a mod-defined struct (UserDefinedStruct). Fields are `Name!: Type;` only (no initializer, methods,
+   * `extends` or container types); every violation is ABFC2046. The struct is recorded only when it has no error.
+   */
+  private structDecl(node: ts.ClassDeclaration, dec: ts.Decorator): void {
+    const name = node.name?.text ?? "(anonymous)";
+    const before = this.sink.diagnostics.length;
+    const bad = (why: string, at: ts.Node): void => this.sink.error("ABFC2046", why, at);
+    const s = tsStructOfDecl(node);
+    if (s === undefined || !s.path.startsWith(`/${this.mod}/`)) {
+      bad(`@struct path of ${name} must be a string literal under "/${this.mod}/"`, dec);
+      return;
+    }
+    if (node.heritageClauses !== undefined && node.heritageClauses.length > 0) bad(`@struct ${name} cannot extend or implement anything`, node.heritageClauses[0]!);
+    const fields: HirStruct["fields"] = [];
+    const FORM = "a struct field is declared as `Name!: Type;` (no initializer, not static/readonly/optional)";
+    let index = 0;
+    for (const m of node.members) {
+      if (ts.isSemicolonClassElement(m)) continue;
+      if (!ts.isPropertyDeclaration(m)) {
+        bad(`@struct ${name}: only fields are allowed (\`Name!: Type;\`), not ${ts.isMethodDeclaration(m) ? "methods" : ts.SyntaxKind[m.kind]}`, m);
+        continue;
+      }
+      const at = index++;
+      const shown = m.name.getText();
+      if (!ts.isIdentifier(m.name)) {
+        bad(`field ${shown}: ${FORM}`, m.name);
+        continue;
+      }
+      const mods = (ts.getModifiers(m) ?? []).filter((x) => x.kind !== ts.SyntaxKind.PublicKeyword);
+      if (mods.length > 0 || m.questionToken !== undefined || m.exclamationToken === undefined || m.initializer !== undefined || (ts.getDecorators(m) ?? []).length > 0 || m.type === undefined) {
+        bad(`field ${shown}: ${FORM}`, m.name);
+        continue;
+      }
+      const tsType = this.checker.getTypeFromTypeNode(m.type);
+      if (this.containerKind(tsType) !== undefined || this.checker.isArrayType(this.checker.getNonNullableType(tsType))) {
+        bad(`field ${shown}: a struct field cannot be an array, Map or Set`, m.name);
+        continue;
+      }
+      const type = bpTypeOf(this.checker, tsType);
+      if (type === undefined) {
+        bad(`field ${shown}: field type has no Blueprint equivalent`, m.name);
+        continue;
+      }
+      try {
+        parseBpType(type);
+      } catch (e) {
+        if (e instanceof BpTypeError) {
+          bad(`field ${shown}: field type ${type} is not supported: ${e.message}`, m.name);
+          continue;
+        }
+        throw e;
+      }
+      if (type === `struct:${s.objectPath}`) {
+        bad(`field ${shown}: a struct cannot contain itself`, m.name);
+        continue;
+      }
+      fields.push({ name: m.name.text, type, memberName: udsMemberName(s.objectPath, m.name.text, at), span: this.sp(m.name) });
+    }
+    if (fields.length === 0 && this.sink.diagnostics.length === before) bad(`@struct ${name} needs at least one field`, node.name ?? node);
+    if (this.sink.diagnostics.length > before) return;
+    this.structs.push({ name, path: s.path, objectPath: s.objectPath, fields, span: this.sp(node.name ?? node) });
+  }
+
+  /**
+   * An own field: `Name!: Type;` with no initializer and no modifiers other than `public`. Reports ABFC2047 and returns undefined
+   * for any other property declaration, a type without a Blueprint equivalent, or a name that collides with an inherited member.
+   */
+  private ownField(node: ts.ClassDeclaration, m: ts.PropertyDeclaration): HirField | undefined {
+    const shown = m.name.getText();
+    const bad = (why: string): undefined => {
+      this.sink.error("ABFC2047", `field ${shown}: ${why}`, m.name);
+      return undefined;
+    };
+    const FORM = "an own field is declared as `Name!: Type;` (no initializer, not static/readonly/optional)";
+    if (!ts.isIdentifier(m.name)) return bad(FORM);
+    const mods = (ts.getModifiers(m) ?? []).filter((x) => x.kind !== ts.SyntaxKind.PublicKeyword);
+    if (mods.length > 0 || m.questionToken !== undefined || m.exclamationToken === undefined || m.initializer !== undefined || (ts.getDecorators(m) ?? []).length > 0 || m.type === undefined) {
+      return bad(FORM);
+    }
+    const tsFieldType = this.checker.getTypeFromTypeNode(m.type);
+    const type = bpTypeOf(this.checker, tsFieldType);
+    if (type === undefined) {
+      if (this.containerKind(tsFieldType) !== undefined) {
+        this.sink.error("ABFC2043", `field ${shown}: unsupported Map/Set type; keys and set elements are int, int64, byte, name or string, and a map value is any single (non-container) type`, m.name);
+        return undefined;
+      }
+      return bad("field type has no Blueprint equivalent");
+    }
+    try {
+      parseBpType(type);
+    } catch (e) {
+      if (e instanceof BpTypeError) {
+        if (/^(map|set):/.test(type)) {
+          this.sink.error("ABFC2043", `field ${shown}: field type ${type} is not supported: ${e.message}`, m.name);
+          return undefined;
+        }
+        return bad(`field type ${type} is not supported: ${e.message}`);
+      }
+      throw e;
+    }
+    const csym = node.name ? this.checker.getSymbolAtLocation(node.name) : undefined;
+    const ctype = csym ? this.checker.getDeclaredTypeOfSymbol(csym) : undefined;
+    if (ctype?.isClassOrInterface() && this.checker.getBaseTypes(ctype).some((b) => this.checker.getPropertyOfType(b, m.name.getText()) !== undefined)) {
+      return bad("the name collides with a member of the parent class or a hand-made member of the asset; rename the field");
+    }
+    return { name: m.name.text, type, span: this.sp(m.name) };
   }
 
   /** True when the class or one of its base classes is an engine Actor (`@bpPath /Script/<Module>.Actor`). */
@@ -388,7 +538,10 @@ class HirBuilder {
       }
       const t = this.checker.getTypeAtLocation(p);
       let type = bpTypeOf(this.checker, t);
-      if (type === undefined && kind === "event") {
+      if (this.containerKind(t) !== undefined) {
+        this.sink.error("ABFC2043", `parameter ${p.name.text}: Map and Set parameters are not supported`, p);
+        type = "unknown";
+      } else if (type === undefined && kind === "event") {
         if (t.flags & ts.TypeFlags.NumberLike) {
           this.sink.error("ABFC2014", `number kind of parameter ${p.name.text} is not inferable: use int, int64, byte, float or double`, p);
           type = "number";
@@ -531,6 +684,7 @@ class HirBuilder {
       if (e instanceof Fail && sym) this.locals.set(sym, { id: -1, name: d.name.text, type: "unknown", poison: true });
       throw e;
     }
+    if (/^(map|set):/.test(init.type)) f.fail("ABFC2043", "a Map or Set cannot be stored in a const (use the own field directly)", d.initializer);
     const id = this.nextLocal++;
     const fn = init.type === "result" ? this.callInfo.get(init) : undefined;
     if (sym) this.locals.set(sym, { id, name: d.name.text, type: init.type, poison: false, ...(fn ? { fn } : {}) });
@@ -556,6 +710,10 @@ class HirBuilder {
       if (op >= ts.SyntaxKind.FirstAssignment && op <= ts.SyntaxKind.LastAssignment) f.fail("ABFC2099", "compound assignment is not supported", e);
     }
     if (ts.isAwaitExpression(e)) f.fail("ABFC2099", "await is not supported", e);
+    if (ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression) && this.containerKind(e.expression.expression) !== undefined) {
+      const op = this.containerStatement(e, e.expression, this.sp(node));
+      if (op !== undefined) return op;
+    }
     if (ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression) && ARRAY_MUTATORS.has(e.expression.name.text) && this.isArrayNode(e.expression.expression)) {
       return this.arrayMutation(e, e.expression, this.sp(node));
     }
@@ -579,12 +737,13 @@ class HirBuilder {
     }
     const sym = this.checker.getSymbolAtLocation(left.name);
     if (!sym) return f.fail("ABFC2060", `member ${left.name.text} has no Blueprint metadata (@bpPath)`, left.name);
-    const type = bpTypeOfMember(sym);
+    const ownF = this.ownFields.get(sym);
+    const type = ownF?.type ?? bpTypeOfMember(sym);
     if (type === undefined) {
       if (bpPathOf(sym) === undefined) f.fail("ABFC2060", `member ${left.name.text} has no Blueprint metadata (@bpPath)`, left.name);
       return f.fail("ABFC2099", `${left.name.text} is not a Blueprint variable`, left.name);
     }
-    const name = splitMemberPath(bpPathOf(sym) ?? "")?.name ?? left.name.text;
+    const name = ownF?.name ?? splitMemberPath(bpPathOf(sym) ?? "")?.name ?? left.name.text;
     const right = stripParens(e.right);
     if (ts.isConditionalExpression(right)) {
       const cond = this.expr(right.condition, "bool", true);
@@ -606,9 +765,68 @@ class HirBuilder {
     const x = stripParens(n);
     if (!ts.isPropertyAccessExpression(x) || x.expression.kind !== ts.SyntaxKind.ThisKeyword) return undefined;
     const sym = this.checker.getSymbolAtLocation(x.name);
+    const ownF = sym ? this.ownFields.get(sym) : undefined;
+    if (ownF !== undefined) return ownF.type.startsWith("array:") ? { self: ownF.name, type: ownF.type } : undefined;
     const type = sym ? bpTypeOfMember(sym) : undefined;
     if (!sym || type === undefined || !type.startsWith("array:")) return undefined;
     return { self: splitMemberPath(bpPathOf(sym) ?? "")?.name ?? x.name.text, type };
+  }
+
+  /** `Map`/`Set` (also the Weak/Readonly forms, as "other") when the expression has such a TypeScript type. */
+  private containerKind(x: ts.Expression | ts.Type): "map" | "set" | "other" | undefined {
+    const raw = "kind" in x ? this.checker.getTypeAtLocation(x as ts.Expression) : (x as ts.Type);
+    const t = this.checker.getNonNullableType(raw);
+    const name = (t.getSymbol() ?? t.aliasSymbol)?.name;
+    if (name === undefined || !CONTAINERS.has(name)) return undefined;
+    return name === "Map" ? "map" : name === "Set" ? "set" : "other";
+  }
+
+  /** `this.<Map|Set>` where the member is an own field of that container type. */
+  private selfContainer(n: ts.Expression): { self: string; type: BpType } | undefined {
+    const x = stripParens(n);
+    if (!this.isOwnContainerField(x)) return undefined;
+    const sym = this.checker.getSymbolAtLocation((x as ts.PropertyAccessExpression).name);
+    const own = sym ? this.ownFields.get(sym) : undefined;
+    return own ? { self: own.name, type: own.type } : undefined;
+  }
+
+  /** `this.F.set(k, v)`, `.delete(k)`, `.clear()` (Map) and `.add(x)`, `.delete(x)`, `.clear()` (Set) as statements; undefined for any other member. */
+  private containerStatement(call: ts.CallExpression, callee: ts.PropertyAccessExpression, span: Span): HirStmt | undefined {
+    const f: DiagSink = this.sink;
+    const ck = this.containerKind(callee.expression);
+    const op = (ck === "map" ? MAP_MUTATORS : ck === "set" ? SET_MUTATORS : undefined)?.get(callee.name.text);
+    if (ck === undefined || ck === "other" || op === undefined) return undefined;
+    const self = this.selfContainer(callee.expression);
+    if (!self) return f.fail("ABFC2042", CONTAINER_OWN_ONLY, callee.expression);
+    const ty = splitContainerType(self.type);
+    const want = op === "clear" ? 0 : ck === "map" && op === "add" ? 2 : 1;
+    if (call.arguments.length !== want) return f.fail("ABFC2099", `${callee.name.text} takes ${want} argument${want === 1 ? "" : "s"} here`, call);
+    const key = want > 0 ? this.expr(call.arguments[0]!, ty.key) : undefined;
+    const value = want === 2 ? this.expr(call.arguments[1]!, ty.value) : undefined;
+    return { k: "containerOp", container: ck, op, target: self, ...(key ? { key } : {}), ...(value ? { value } : {}), span };
+  }
+
+  /** A call on a Map or Set receiver in value position: `has`, `get` (as `this.F.get(k)!`). Everything else is a statement or unsupported. */
+  private containerCall(node: ts.CallExpression, callee: ts.PropertyAccessExpression, ck: "map" | "set" | "other", sp: Span): HirExpr {
+    const f: DiagSink = this.sink;
+    const m = callee.name.text;
+    const label = ck === "map" ? "Map" : ck === "set" ? "Set" : "this container";
+    if (ck === "other") return f.fail("ABFC2040", `${this.checker.getNonNullableType(this.checker.getTypeAtLocation(callee.expression)).getSymbol()?.name ?? "this container"} is not supported`, node);
+    const mutators = ck === "map" ? MAP_MUTATORS : SET_MUTATORS;
+    if (mutators.has(m)) return f.fail("ABFC2099", `${label}.${m} can only be used as a statement (its result is not available)`, node);
+    if (m !== "has" && !(m === "get" && ck === "map")) {
+      return f.fail("ABFC2040", `${label}.${m} is not supported (supported: ${ck === "map" ? "set, get, has, delete, clear, size" : "add, has, delete, clear, size"}; no iteration)`, callee.name);
+    }
+    const self = this.selfContainer(callee.expression);
+    if (!self) return f.fail("ABFC2042", CONTAINER_OWN_ONLY, callee.expression);
+    if (node.arguments.length !== 1) return f.fail("ABFC2099", `${m} takes one argument`, node);
+    if (m === "get" && !ts.isNonNullExpression(node.parent)) {
+      return f.fail("ABFC2040", "Map.get must be written this.<Field>.get(k)! (a missing key gives the value type's default)", node);
+    }
+    const ty = splitContainerType(self.type);
+    const target = this.expr(callee.expression);
+    const key = this.expr(node.arguments[0]!, ty.key);
+    return { k: "containerQuery", container: ck, op: m === "has" ? "has" : "get", target, targetType: self.type, key, type: m === "has" ? "bool" : ty.value, span: sp };
   }
 
   /** `this.Arr.push(x)` and `this.Arr.splice(i, 1)` as statements. */
@@ -764,7 +982,7 @@ class HirBuilder {
       } else return f.fail("ABFC2099", "only `name: value` and shorthand properties are supported in a struct literal", p);
       const prop = ctx ? this.checker.getPropertyOfType(ctx, name) : undefined;
       const ft = prop ? bpTypeOf(this.checker, this.checker.getTypeOfSymbolAtLocation(prop, node)) : undefined;
-      fields.push({ name, value: this.expr(init, ft) });
+      fields.push({ name: (prop ? tsStructMemberName(prop) : undefined) ?? name, value: this.expr(init, ft) });
     }
     return { k: "makeStruct", struct: expected.slice("struct:".length), fields, type: expected, span: this.sp(node) };
   }
@@ -795,7 +1013,8 @@ class HirBuilder {
       this.sink.fail("ABFC2020", "'any' is not supported", node);
     }
     const tsym = tsType.getSymbol() ?? tsType.aliasSymbol;
-    if (tsym && CONTAINERS.has(tsym.name)) this.sink.fail("ABFC2040", `${tsym.name} is not supported`, node);
+    const onContainer = ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && this.containerKind(node.expression.expression) !== undefined;
+    if (tsym && CONTAINERS.has(tsym.name) && !onContainer && !this.isOwnContainerField(node)) this.sink.fail("ABFC2040", `${tsym.name} is not supported`, node);
 
     if (node.flags & ts.NodeFlags.OptionalChain && (ts.isPropertyAccessExpression(node) || ts.isCallExpression(node) || ts.isElementAccessExpression(node))) {
       const q = this.chainRoot(node);
@@ -805,6 +1024,14 @@ class HirBuilder {
     const out = this.exprInner(node, expected, inCond);
     this.noteTypes(tsType);
     return out;
+  }
+
+  /** `this.F` where F is an own field of map or set type (the only place a Map or Set may appear). */
+  private isOwnContainerField(node: ts.Expression): boolean {
+    if (!ts.isPropertyAccessExpression(node) || node.expression.kind !== ts.SyntaxKind.ThisKeyword) return false;
+    const sym = this.checker.getSymbolAtLocation(node.name);
+    const own = sym ? this.ownFields.get(sym) : undefined;
+    return own !== undefined && /^(map|set):/.test(own.type);
   }
 
   /** The first-evaluated `?.` of an optional chain that is not being resolved yet. */
@@ -987,6 +1214,8 @@ class HirBuilder {
 
     if (recv.kind === ts.SyntaxKind.ThisKeyword) {
       if (this.ownMethodOf(node)) return f.fail("ABFC2054", "method references are only allowed as delegate arguments", node);
+      const ownF = memberSym ? this.ownFields.get(memberSym) : undefined;
+      if (ownF) return { k: "getSelf", name: ownF.name, type: ownF.type, span: sp };
       const type = memberSym ? bpTypeOfMember(memberSym) : undefined;
       if (type === undefined) {
         if (memberSym && bpPathOf(memberSym) !== undefined) f.fail("ABFC2099", `${name} is not a Blueprint variable`, node.name);
@@ -999,6 +1228,13 @@ class HirBuilder {
     const local = this.localOf(recv);
     if (name === "exec" && local?.fn?.execOutputs) {
       return f.fail("ABFC2053", "`.exec` may only be used as `r.exec === \"Pin\"` or `r.exec !== \"Pin\"` in an if condition", node);
+    }
+    const recvKind = this.containerKind(recv);
+    if (recvKind !== undefined) {
+      if (recvKind === "other" || name !== "size") return f.fail("ABFC2040", `${recvKind === "map" ? "Map" : recvKind === "set" ? "Set" : "this container"}.${name} is not supported (only .size; no iteration)`, node.name);
+      const self = this.selfContainer(recv);
+      if (!self) return f.fail("ABFC2042", CONTAINER_OWN_ONLY, recv);
+      return { k: "containerQuery", container: recvKind, op: "size", target: this.expr(recv), targetType: self.type, type: "int", span: sp };
     }
     const obj = this.expr(recv);
 
@@ -1015,7 +1251,8 @@ class HirBuilder {
     const structPath = this.structPathOf(recvType);
     if (structPath !== undefined) {
       const type = (memberSym ? bpTypeOfMember(memberSym) : undefined) ?? (memberSym ? bpTypeOf(this.checker, this.checker.getTypeAtLocation(node)) : undefined) ?? "unknown";
-      return { k: "field", obj, struct: structPath, name, type, span: sp };
+      // A TS @struct names its pins <Field>_<index>_<GUID>.
+      return { k: "field", obj, struct: structPath, name: (memberSym ? tsStructMemberName(memberSym) : undefined) ?? name, type, span: sp };
     }
 
     const path = memberSym ? bpPathOf(memberSym) : undefined;
@@ -1067,6 +1304,9 @@ class HirBuilder {
       return f.fail("ABFC2099", `call of "${callee.text}" is not supported`, node);
     }
     if (!ts.isPropertyAccessExpression(callee)) return f.fail("ABFC2099", "only method and library calls are supported", node);
+
+    const ck = this.containerKind(callee.expression);
+    if (ck !== undefined) return this.containerCall(node, callee, ck, sp);
 
     if (this.isArrayNode(callee.expression)) {
       const m = callee.name.text;
@@ -1324,6 +1564,25 @@ class HirBuilder {
   }
 }
 
+/** Structs ordered so that a struct comes after the structs its fields use (a cycle keeps declaration order). */
+function orderStructs(structs: HirStruct[]): HirStruct[] {
+  const byObject = new Map(structs.map((x) => [x.objectPath, x]));
+  const out: HirStruct[] = [];
+  const state = new Map<HirStruct, 1 | 2>();
+  const visit = (x: HirStruct): void => {
+    if (state.has(x)) return;
+    state.set(x, 1);
+    for (const f of x.fields) {
+      const dep = f.type.startsWith("struct:") ? byObject.get(f.type.slice("struct:".length)) : undefined;
+      if (dep !== undefined) visit(dep);
+    }
+    state.set(x, 2);
+    out.push(x);
+  };
+  for (const x of structs) visit(x);
+  return out;
+}
+
 /**
  * Builds the HIR of the class files (or of `only`). Subset violations are ABFC2xxx diagnostics in the result; TypeScript's own
  * diagnostics are in `LoadedProgram.diagnostics`.
@@ -1333,7 +1592,7 @@ export function buildHir(loaded: LoadedProgram, config: { mod: string }, _profil
   for (const sf of only ?? loaded.files.classes) {
     for (const st of sf.statements) if (ts.isClassDeclaration(st)) b.classDecl(st);
   }
-  return { mod: config.mod, classes: b.classes, classMeta: b.classMeta, diagnostics: b.sink.diagnostics };
+  return { mod: config.mod, classes: b.classes, structs: orderStructs(b.structs), classMeta: b.classMeta, diagnostics: b.sink.diagnostics };
 }
 
 /** Diagnostics (TypeScript's and the subset checker's) of one file; the entry point of the future ts-plugin. */

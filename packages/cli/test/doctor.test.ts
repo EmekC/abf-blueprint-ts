@@ -21,7 +21,7 @@ test("happy path: every source auto, native pin types, exit 0, output lists sour
   assert.match(out, /headless folder\s+C:\\abfc-headless\s+\[env\]/);
   assert.match(out, /wildcard pin types: native/);
   assert.match(out, /cast Object: typed by backend/);
-  assert.match(out, /backend array: true, map: true, set: false; abfc array: true, map: false, set: false \(Phase 1\)/);
+  assert.match(out, /backend array: true, map: true, set: false; abfc array: true, map: true, set: false, struct: false/);
   assert.match(out, /extensions: reflect, compile_node_refs, bp_read_seconds/);
   assert.doesNotMatch(out, /error ABFC/);
 });

@@ -42,6 +42,8 @@ export interface Manifest {
   classDefaultsHash?: string;
   /** `StageStatus.syncedAt` of the stage the class defaults were applied to (a resync discards them). */
   classDefaultsStageSyncedAt?: string | null;
+  /** Hash of the fields of a mod-defined struct (`structFieldsHash`) the struct was created with; absent for a Blueprint asset. */
+  structFieldsHash?: string;
   /** Unit ids a build removed from the stage that are not published yet (cleared by a successful publish). */
   retiredUnpublished?: string[];
 }

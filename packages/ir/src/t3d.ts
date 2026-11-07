@@ -9,6 +9,8 @@ export class PatchError extends Error {
   }
 }
 
+/** `PinValueType` of a map pin or variable: the value type (the pin's own category is the key). */
+export interface T3dValueType { category: string; subCategory: string; subCategoryObject: string | null }
 export interface T3dPin {
   id: string;
   name: string;
@@ -17,6 +19,8 @@ export interface T3dPin {
   subCategory: string;
   subCategoryObject: string | null; // inner path
   container: string;
+  /** Value type of a map pin; null for everything else. */
+  valueType: T3dValueType | null;
   hidden: boolean;
   defaultValue: string | null;
   defaultObject: string | null;
@@ -97,6 +101,19 @@ function parseLinks(v: string | undefined): Array<{ node: string; pinId: string 
   return out;
 }
 
+/** `(TerminalCategory="int",TerminalSubCategory="",TerminalSubCategoryObject=...)` -> value type; `()`, empty or absent -> null. */
+function valueTypeOf(v: string | undefined): T3dValueType | null {
+  if (v === undefined) return null;
+  const a = parseAttrs(unparen(v));
+  const category = unq(a["TerminalCategory"]) ?? "";
+  if (category === "") return null;
+  return {
+    category,
+    subCategory: unq(a["TerminalSubCategory"]) ?? "",
+    subCategoryObject: innerPath(unq(a["TerminalSubCategoryObject"])),
+  };
+}
+
 function parsePinLine(raw: string): T3dPin | null {
   const m = /^\s*CustomProperties Pin \((.*)\)\s*$/.exec(raw);
   if (!m || m[1] === undefined) return null;
@@ -110,6 +127,7 @@ function parsePinLine(raw: string): T3dPin | null {
     subCategory: unq(a["PinType.PinSubCategory"]) ?? "",
     subCategoryObject: innerPath(unq(a["PinType.PinSubCategoryObject"])),
     container: unq(a["PinType.ContainerType"]) ?? "None",
+    valueType: valueTypeOf(a["PinType.PinValueType"]),
     hidden: a["bHidden"] === "True",
     defaultValue: a["DefaultValue"] === undefined ? null : (unq(a["DefaultValue"]) ?? null),
     defaultObject,
@@ -126,6 +144,7 @@ function typeFromAttrs(a: Record<string, string>): string {
       subCategory: unq(a["PinSubCategory"]) ?? "",
       subCategoryObject: innerPath(unq(a["PinSubCategoryObject"])),
       container: a["ContainerType"] ?? "None",
+      valueType: valueTypeOf(a["PinValueType"]),
     });
   } catch {
     return `unsupported:${category}${a["ContainerType"] && a["ContainerType"] !== "None" ? ":" + a["ContainerType"] : ""}`;

@@ -49,6 +49,17 @@ const CMP_NAMES = { "<": "Less", "<=": "LessEqual", ">": "Greater", ">=": "Great
 const K2_EVENT = "/Script/BlueprintGraph.K2Node_Event";
 const K2_CREATE_WIDGET = "/Script/UMGEditor.K2Node_CreateWidget";
 const K2_SPAWN_ACTOR = "/Script/BlueprintGraph.K2Node_SpawnActorFromClass";
+/** Engine function libraries of native Map and Set operations (pin names verified against exports of the Mod Editor). */
+const MAP_LIBRARY = "/Script/Engine.BlueprintMapLibrary";
+const SET_LIBRARY = "/Script/Engine.BlueprintSetLibrary";
+
+/** Splits `map:<K>:<V>` into key and value type, `set:<T>` into the element type (as `key`). */
+function containerTypes(type: string): { key: string; value?: string } {
+  if (type.startsWith("set:")) return { key: type.slice(4) };
+  const rest = type.slice(4);
+  const sep = rest.indexOf(":");
+  return { key: rest.slice(0, sep), value: rest.slice(sep + 1) };
+}
 /** Id of the entry node of every unit (the first node emitted, role "ev"). */
 const ENTRY_ID = "ev0";
 
@@ -440,6 +451,24 @@ export class UnitBuilder {
         this.settle(id, defaults);
         return { pin: `${id}.${P.returnValue}`, nulls: [...arr.nulls, ...item.nulls] };
       }
+      case "containerQuery": {
+        const map = e.container === "map";
+        const ty = containerTypes(e.targetType);
+        const targetPin = map ? "TargetMap" : "TargetSet";
+        const keyPin = map ? "Key" : "ItemToFind";
+        const fn = e.op === "size" ? (map ? "Map_Length" : "Set_Length") : e.op === "has" ? (map ? "Map_Contains" : "Set_Contains") : "Map_Find";
+        const target = this.value(e.target);
+        const key = e.key ? this.operand(e.key, ty.key) : undefined;
+        const pinTypes: Record<string, string> = { [targetPin]: e.targetType };
+        if (key) pinTypes[keyPin] = ty.key;
+        if (e.op === "get" && ty.value !== undefined) pinTypes.Value = ty.value;
+        const defaults: Record<string, string> = {};
+        const id = this.pureCall(map ? MAP_LIBRARY : SET_LIBRARY, fn, e.span, { pinTypes });
+        this.link(target.pin, `${id}.${targetPin}`);
+        if (key) this.feed(key, id, keyPin, defaults);
+        this.settle(id, defaults);
+        return { pin: `${id}.${e.op === "get" ? "Value" : P.returnValue}`, nulls: [...target.nulls, ...(key?.nulls ?? [])] };
+      }
       case "formatText": {
         // Real exports: PinNames(i)="<arg>" on the node, Format pin DefaultValue = the format text, output pin "Result", arg pins named like the args.
         const nulls: Exit[] = [];
@@ -686,6 +715,32 @@ export class UnitBuilder {
         if (o) this.feed(o, id, argPin, defaults);
         this.settle(id, defaults);
         if (o && o.nulls.length > 0) this.cur = [...this.cur, ...o.nulls];
+        return;
+      }
+      case "containerOp": {
+        const map = s.container === "map";
+        const ty = containerTypes(s.target.type);
+        const lib = map ? MAP_LIBRARY : SET_LIBRARY;
+        const fn = map
+          ? { add: "Map_Add", remove: "Map_Remove", clear: "Map_Clear" }[s.op]
+          : { add: "Set_Add", remove: "Set_Remove", clear: "Set_Clear" }[s.op];
+        const targetPin = map ? "TargetMap" : "TargetSet";
+        const keyPin = map ? "Key" : s.op === "add" ? "NewItem" : "Item";
+        const target = this.getVar(s.target.self, s.span);
+        const key = s.key ? this.optOperand(s.key, ty.key) : undefined;
+        const value = s.value && ty.value !== undefined ? this.optOperand(s.value, ty.value) : undefined;
+        const pinTypes: Record<string, string> = { [targetPin]: s.target.type };
+        if (s.key) pinTypes[keyPin] = ty.key;
+        if (s.value && ty.value !== undefined) pinTypes.Value = ty.value;
+        const id = this.emit("cont", this.profile.nodeClasses.callFunction, [this.funcRef(lib, fn)], { k: "call", class: lib, function: fn }, s.span, { pinTypes });
+        this.execInto(id);
+        this.link(target, `${id}.${targetPin}`);
+        const defaults: Record<string, string> = {};
+        if (key) this.feed(key, id, keyPin, defaults);
+        if (value) this.feed(value, id, "Value", defaults);
+        this.settle(id, defaults);
+        const nulls = [...(key?.nulls ?? []), ...(value?.nulls ?? [])];
+        if (nulls.length > 0) this.cur = [...this.cur, ...nulls];
         return;
       }
       case "forCount": {

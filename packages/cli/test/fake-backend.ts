@@ -2,7 +2,7 @@
 // exports, so that the planner, the drift check, the fallback route and the manifests run on genuine data.
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { capabilitiesFrom } from "@abfc/backend";
 import type {
   AssetSnapshot,
@@ -60,6 +60,8 @@ interface FAsset {
   path: string;
   variables: Array<{ name: string; type: string }>;
   nodes: FNode[];
+  /** Set for a UserDefinedStruct: its members as the apply spec gave them. */
+  structFields?: Array<{ name: string; type: string }>;
 }
 
 interface SpecNode {
@@ -83,7 +85,9 @@ interface SpecGraph {
 }
 interface Spec {
   asset: string;
+  create?: { class: string; parent: string; if_missing?: boolean };
   variables?: Array<{ name: string; type: string; flags: number }>;
+  struct_fields?: Array<{ name: string; friendly: string; guid: string; type: string }>;
   graphs?: SpecGraph[];
   raw?: Array<{ kind: "graph"; graph: string; text: string } | { kind: "python"; code: string }>;
 }
@@ -114,6 +118,8 @@ export interface FakeBackendOptions {
   selfEventCalls?: boolean;
   /** With `selfEventCalls: false`, still advertise the feature (a backend that lies), so the apply failure itself can be tested. */
   advertiseSelfEventCalls?: boolean;
+  /** The backend has the bp_apply feature `struct_fields` (UserDefinedStruct in `createKinds`; default false). */
+  structs?: boolean;
 }
 
 /** Name of the unlinked node that `spareNode` adds. */
@@ -367,6 +373,8 @@ export class FakeBackend implements Backend {
     const capabilities = capabilitiesFrom(tools, withInfo ? (fixInfo() as RawBackendInfo) : null, { features: EXT_FEATURES });
     capabilities.stageAudit = o.stageAudit === true;
     capabilities.selfEventCalls = o.selfEventCalls !== false || o.advertiseSelfEventCalls === true;
+    if (o.structs === true) capabilities.createKinds = [...capabilities.createKinds, "UserDefinedStruct"];
+    if (o.structs === true) capabilities.createKinds = [...capabilities.createKinds, "UserDefinedStruct"];
     this.infoValue = {
       id: "bp_apply",
       serverVersion: "fake-1",
@@ -438,6 +446,7 @@ export class FakeBackend implements Backend {
     }
     this.staged = true;
     this.syncs++;
+    this.mirrorFiles();
     return { mod: "TestMod", files: this.assets.size, stagingPath: join(this.root, "stage") };
   }
 
@@ -477,6 +486,20 @@ export class FakeBackend implements Backend {
     let specError: string | null = null;
 
     (specs as Spec[]).forEach((spec, i) => {
+      if (!work.has(spec.asset) && spec.create !== undefined) work.set(spec.asset, { path: spec.asset, variables: [], nodes: [] });
+      if (spec.create?.class === "UserDefinedStruct") {
+        const st = work.get(spec.asset)!;
+        st.structFields = (spec.struct_fields ?? []).map((f) => ({ name: f.name, type: f.type }));
+        assets.push({ asset: spec.asset, node_ids: {} });
+        return;
+      }
+      if (spec.create?.class === "UserDefinedStruct") {
+        const st = work.get(spec.asset)!;
+        st.structFields = (spec.struct_fields ?? []).map((f) => ({ name: f.name, type: f.type }));
+        assets.push({ asset: spec.asset, node_ids: {} });
+        writeFileSync(join(run, `final_${i}.t3d`), "", "utf8");
+        return;
+      }
       const a = work.get(spec.asset);
       if (a === undefined) {
         scripted.push({ asset: spec.asset, message: `asset ${spec.asset} does not exist in the stage` });
@@ -525,6 +548,7 @@ export class FakeBackend implements Backend {
     const ok = errors.length === 0 && specError === null;
     if (ok) {
       this.assets = work;
+      this.mirrorFiles();
       for (const a of (specs as Spec[]).map((s) => s.asset)) {
         this.changed.add(`Content/${a.split("/").slice(2).join("/")}.uasset`);
       }
@@ -539,6 +563,17 @@ export class FakeBackend implements Backend {
       // like the real backend, a failed apply always carries `error`: the spec error, else a summary of the compile errors
       ...(ok ? {} : { error: specError ?? `${errors.length} compile error(s) in the edited assets` }),
     };
+  }
+
+  /** The stage folder holds one `Content/<path under /TestMod/>.uasset` file per asset (the CLI checks these to find assets it has to create). */
+  private mirrorFiles(): void {
+    const content = join(this.root, "stage", "Content");
+    rmSync(content, { recursive: true, force: true });
+    for (const path of this.assets.keys()) {
+      const file = join(content, ...path.split("/").slice(2)) + ".uasset";
+      mkdirSync(dirname(file), { recursive: true });
+      writeFileSync(file, "", "utf8");
+    }
   }
 
   /** The old backend templated a self call before the graph edit: for an event this spec adds the template had no pins. */

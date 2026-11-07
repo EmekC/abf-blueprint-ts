@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { unitStateHash } from "@abfc/ir";
+import { structFieldsHash, unitStateHash } from "@abfc/ir";
 import type { IrModule, IrUnit, Profile, T3dNode } from "@abfc/ir";
 import { assetsNeedingRead, buildHir, loadProgram, lower, planBuild } from "../src/index.js";
 import type { Manifest, ManifestUnit } from "../src/index.js";
@@ -503,4 +503,173 @@ test("a removed unit takes every tag comment of that unit with it", () => {
   const manifest = manifestOf(mu({ id: "event:A", irHash: "sha256:a", nodes: ["A_1"], tag: "CMT_A", assetHash: unitStateHash(snapshot, ["A_1"]), stageSyncedAt: "T1" }));
   const r = planBuild({ ...ir, assets: [{ ...ir.assets[0]!, units: [] }] }, { manifests: new Map([[asset, manifest]]), snapshots: new Map([[asset, snapshot]]), stage, handMadeUnits: new Map() });
   assert.deepEqual(r.plan.assets[0]!.removeUnits, [{ id: "event:A", graph: "EventGraph", nodes: ["A_1", "CMT_A", "CMT_A_old"] }]);
+});
+
+// ---- own fields ----
+
+const span0 = ir.assets[0]!.variables[0]!.origin;
+function withFields(...fields: Array<[string, string]>): IrModule {
+  const a = ir.assets[0]!;
+  const vars = fields.map(([name, type]) => ({ name, type, flags: [], origin: span0 }));
+  return { ...ir, assets: [{ ...a, variables: [...vars, ...a.variables] }] } as unknown as IrModule;
+}
+
+function fieldManifest(...fields: Array<[string, string]>): Manifest {
+  return { ...manifestOf(), variables: fields.map(([name, type]) => ({ name, type })) } as unknown as Manifest;
+}
+
+function fieldPlan(irm: IrModule, manifest: Manifest | null, snapshotVars: string[] = []) {
+  return planBuild(irm, {
+    manifests: new Map([[asset, manifest]]),
+    snapshots: new Map(),
+    stage,
+    handMadeUnits: new Map(),
+    snapshotVariables: new Map([[asset, snapshotVars]]),
+  });
+}
+
+test("a new own field is declared once, and not again when the asset already has it", () => {
+  const irm = withFields(["Score", "int"]);
+  const r = fieldPlan(irm, null);
+  assert.deepEqual(r.diagnostics, []);
+  assert.equal(r.plan.assets[0]!.variables.filter((v) => v.name === "Score").length, 1);
+  const again = fieldPlan(irm, null, ["Score"]);
+  assert.deepEqual(again.plan.assets[0]!.variables.map((v) => v.name).includes("Score"), false);
+});
+
+test("an own field whose type changed is ABFC2047 and nothing is planned", () => {
+  const r = fieldPlan(withFields(["Score", "float"]), fieldManifest(["Score", "int"]), ["Score"]);
+  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC2047"]);
+  assert.equal(r.diagnostics[0]!.severity, "error");
+  assert.deepEqual(r.plan.assets, []);
+});
+
+test("an own field removed from the TS is ABFC5011 and stays in the manifest", () => {
+  const r = fieldPlan(ir, fieldManifest(["Gone", "int"]), ["Gone"]);
+  assert.deepEqual(r.diagnostics.map((d) => [d.code, d.severity]), [["ABFC5011", "warning"]]);
+  for (const a of r.plan.assets) assert.equal(a.variables.some((v) => v.name === "Gone"), false);
+});
+
+test("an asset whose only news is a field is still planned, with no units", () => {
+  const snapshot = snapshotOf(node("N1", CALL, []));
+  const keep = mu({ irHash: unit.hash, nodes: ["N1"], assetHash: unitStateHash(snapshot, ["N1"]), stageSyncedAt: "T1" });
+  const manifest = { ...manifestOf(keep), variables: [] } as Manifest;
+  const base = planBuild(ir, { manifests: new Map([[asset, manifest]]), snapshots: new Map([[asset, snapshot]]), stage, handMadeUnits: new Map() });
+  assert.deepEqual(base.plan.assets, []);
+  const r = planBuild(withFields(["Score", "int"]), {
+    manifests: new Map([[asset, manifest]]),
+    snapshots: new Map([[asset, snapshot]]),
+    stage,
+    handMadeUnits: new Map(),
+    snapshotVariables: new Map([[asset, ["abfc_UpdateTarget_t0", "abfc_UpdateTarget_i0"]]]),
+  });
+  assert.deepEqual(r.diagnostics, []);
+  assert.equal(r.plan.assets.length, 1);
+  assert.deepEqual(r.plan.assets[0]!.units, []);
+  assert.deepEqual(r.plan.assets[0]!.variables.map((v) => v.name), ["Score"]);
+});
+
+test("assetsNeedingRead includes an asset whose fields differ from the manifest", () => {
+  const snapshot = snapshotOf(node("N1", CALL, []));
+  const keep = mu({ irHash: unit.hash, nodes: ["N1"], assetHash: unitStateHash(snapshot, ["N1"]), stageSyncedAt: "T1" });
+  const read = (irm: IrModule, m: Manifest) => assetsNeedingRead(irm, { manifests: new Map([[asset, m]]), stage }).has(asset);
+  const clean = { ...manifestOf(keep), variables: [{ name: "Score", type: "int" }] } as Manifest;
+  assert.equal(read(withFields(["Score", "int"]), clean), false);
+  assert.equal(read(withFields(["Score", "int"], ["Extra", "int"]), clean), true, "new field");
+  assert.equal(read(withFields(["Score", "float"]), clean), true, "retyped field");
+  assert.equal(read(ir, clean), true, "field gone from the TS");
+});
+
+// ---- asset creation ----
+
+function createInput(create: NonNullable<IrModule["assets"][number]["create"]>) {
+  const irm = { ...ir, assets: [{ ...ir.assets[0]!, create }] } as unknown as IrModule;
+  const stale = manifestOf(mu({ irHash: "sha256:old", nodes: ["N1"], assetHash: "sha256:x", stageSyncedAt: "T0" }));
+  return { irm, stale };
+}
+
+test("a missing asset is created: empty snapshot, every unit planned, the manifest ignored", () => {
+  const { irm, stale } = createInput({ kind: "Blueprint", parent: "/Script/Engine.Actor" });
+  const r = planBuild(irm, {
+    manifests: new Map([[asset, stale]]),
+    snapshots: new Map(),
+    stage,
+    handMadeUnits: new Map(),
+    missing: new Set([asset]),
+    createKinds: ["Blueprint", "WidgetBlueprint"],
+  });
+  assert.deepEqual(r.diagnostics, []);
+  assert.equal(r.plan.assets.length, 1);
+  assert.deepEqual(r.plan.assets[0]!.create, { class: "Blueprint", parent: "/Script/Engine.Actor" });
+  assert.deepEqual(r.plan.assets[0]!.units.map((u) => u.unit.id), irm.assets[0]!.units.map((u) => u.id));
+  assert.deepEqual(r.plan.assets[0]!.units.map((u) => u.removeNodes), irm.assets[0]!.units.map(() => []));
+  assert.deepEqual(r.upToDate, []);
+});
+
+test("an asset that exists is not created, even when its IR carries a create entry", () => {
+  const { irm } = createInput({ kind: "Blueprint", parent: "/Script/Engine.Actor" });
+  const r = planBuild(irm, { manifests: new Map(), snapshots: new Map(), stage, handMadeUnits: new Map() });
+  assert.equal(r.plan.assets[0]!.create, undefined);
+});
+
+test("a missing asset of a kind the backend cannot create is ABFC2044 and nothing is planned", () => {
+  const { irm } = createInput({ kind: "WidgetBlueprint", parent: "/Script/UMG.UserWidget" });
+  const r = planBuild(irm, {
+    manifests: new Map(),
+    snapshots: new Map(),
+    stage,
+    handMadeUnits: new Map(),
+    missing: new Set([asset]),
+    createKinds: ["Blueprint"],
+  });
+  assert.deepEqual(r.diagnostics.map((d) => [d.code, d.severity]), [["ABFC2044", "error"]]);
+  assert.deepEqual(r.plan.assets, []);
+});
+
+test("a @struct asset is planned (created, never read) unless its field hash is known; a changed hash is ABFC2046", () => {
+  const G = "0123456789ABCDEF0123456789ABCDEF";
+  const fields = [{ name: `Count_0_${G}`, type: "int", flags: [], origin: { file: "src/S.ts", line: 1, col: 1, endLine: 1, endCol: 2 } }];
+  const ir: IrModule = {
+    irVersion: 1,
+    profile: "test",
+    mod: "TestMod",
+    assets: [{ path: "/TestMod/S_Entry", create: { kind: "UserDefinedStruct", parent: "" }, variables: [], units: [], structFields: fields }],
+    classMeta: {},
+  };
+  const base = { snapshots: new Map(), stage: { syncedAt: "T1" }, handMadeUnits: new Map(), createKinds: ["Blueprint", "UserDefinedStruct"] };
+  const manifest = (hash: string): Manifest => ({ asset: "/TestMod/S_Entry", compiler: "c", profile: "test", units: [], variables: [], structFieldsHash: hash });
+  const first = planBuild(ir, { ...base, manifests: new Map(), missing: new Set(["/TestMod/S_Entry"]) });
+  assert.deepEqual(first.diagnostics, []);
+  assert.equal(first.plan.assets.length, 1);
+  assert.deepEqual(first.plan.assets[0]!.struct?.fields.map((f) => f.name), [`Count_0_${G}`]);
+  const hash = structFieldsHash(fields);
+  const same = planBuild(ir, { ...base, manifests: new Map([["/TestMod/S_Entry", manifest(hash)]]) });
+  assert.deepEqual([same.diagnostics, same.plan.assets], [[], []]);
+  const changed = planBuild(ir, { ...base, manifests: new Map([["/TestMod/S_Entry", manifest("sha256:other")]]) });
+  assert.deepEqual(changed.diagnostics.map((d) => d.code), ["ABFC2046"]);
+  assert.equal(changed.plan.assets.length, 0);
+  const noKind = planBuild(ir, { ...base, createKinds: ["Blueprint"], manifests: new Map(), missing: new Set(["/TestMod/S_Entry"]) });
+  assert.deepEqual(noKind.diagnostics.map((d) => d.code), ["ABFC2044"]);
+});
+
+test("a @struct missing from the stage is a fresh create even when its manifest hash differs; present with a different hash is ABFC2046", () => {
+  const G = "0123456789ABCDEF0123456789ABCDEF";
+  const fields = [{ name: `Count_0_${G}`, type: "int", flags: [], origin: { file: "src/S.ts", line: 1, col: 1, endLine: 1, endCol: 2 } }];
+  const ir: IrModule = {
+    irVersion: 1,
+    profile: "test",
+    mod: "TestMod",
+    assets: [{ path: "/TestMod/S_Entry", create: { kind: "UserDefinedStruct", parent: "" }, variables: [], units: [], structFields: fields }],
+    classMeta: {},
+  };
+  const base = { snapshots: new Map(), stage: { syncedAt: "T1" }, handMadeUnits: new Map(), createKinds: ["Blueprint", "UserDefinedStruct"] };
+  const stale: Manifest = { asset: "/TestMod/S_Entry", compiler: "c", profile: "test", units: [], variables: [], structFieldsHash: "sha256:other" };
+  const manifests = new Map([["/TestMod/S_Entry", stale]]);
+  const gone = planBuild(ir, { ...base, manifests, missing: new Set(["/TestMod/S_Entry"]) });
+  assert.deepEqual(gone.diagnostics, []);
+  assert.equal(gone.plan.assets.length, 1);
+  assert.deepEqual(gone.plan.assets[0]!.struct?.fields.map((f) => f.name), [`Count_0_${G}`]);
+  const present = planBuild(ir, { ...base, manifests, missing: new Set() });
+  assert.deepEqual(present.diagnostics.map((d) => d.code), ["ABFC2046"]);
+  assert.equal(present.plan.assets.length, 0);
 });

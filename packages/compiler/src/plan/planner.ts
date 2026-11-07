@@ -1,5 +1,5 @@
 // Build planner: IR + manifests + stage snapshots -> the units to (re)apply, and the diagnostics that block others.
-import { classDefaultsHash } from "@abfc/ir";
+import { classDefaultsHash, structFieldsHash } from "@abfc/ir";
 import type { ApplyPlan, AssetPlan, Diagnostic, IrModule, IrUnit, IrVariable, Span, T3dNode } from "@abfc/ir";
 import { builtGraphMatches, driftDiagnostics, unitState } from "../ownership/drift.js";
 import type { StageInfo } from "../ownership/drift.js";
@@ -18,6 +18,10 @@ export interface PlanInput {
   forceReplan?: Set<string>;
   /** The backend's bp_apply feature `self_event_calls` (default true). Without it a self call to an event added in the same build cannot be applied. */
   selfEventCalls?: boolean;
+  /** Assets of `ir` whose file does not exist in the stage: they are created by the apply (an empty snapshot, every unit planned, the manifest ignored). */
+  missing?: Set<string>;
+  /** The backend capability `createKinds`; when given, creating an asset of a kind it lacks is ABFC2044. */
+  createKinds?: string[];
 }
 
 export interface PlanResult {
@@ -105,10 +109,18 @@ export function assetsNeedingRead(
       }) ||
       // a unit that is no longer in the TS: its stage nodes are removed (or its manifest entry dropped)
       (manifest?.units.some((mu) => !asset.units.some((unit) => unit.id === mu.id)) ?? false) ||
-      defaultsStale(asset, manifest, input.stage);
+      defaultsStale(asset, manifest, input.stage) ||
+      fieldsStale(asset, manifest);
     if (need) out.add(asset.path);
   }
   return out;
+}
+
+/** Own fields (non-temp variables) of the asset that differ from what the manifest recorded (new, retyped or gone from the TS). */
+function fieldsStale(asset: IrModule["assets"][number], manifest: Manifest | null): boolean {
+  const fields = asset.variables.filter((v) => v.temp !== true);
+  if (fields.some((v) => manifest?.variables.find((m) => m.name === v.name)?.type !== v.type)) return true;
+  return (manifest?.variables ?? []).some((m) => !m.name.startsWith("abfc_") && !fields.some((v) => v.name === m.name));
 }
 
 function unitHeight(u: IrUnit): number {
@@ -121,11 +133,90 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
   const assets: AssetPlan[] = [];
 
   for (const asset of ir.assets) {
-    const manifest = input.manifests.get(asset.path) ?? null;
+    if (asset.structFields !== undefined) {
+      // A mod-defined struct: created (never read) when the stage lacks it or the manifest does not know it; the backend no-ops an equal struct.
+      const fields = asset.structFields;
+      const hash = structFieldsHash(fields);
+      const known = (input.manifests.get(asset.path) ?? null)?.structFieldsHash;
+      const name = asset.path.slice(asset.path.lastIndexOf("/") + 1);
+      // A struct missing from the stage (a stage reset) is planned as a fresh create whatever the manifest says.
+      if (known !== undefined && known !== hash && input.missing?.has(asset.path) !== true) {
+        diagnostics.push({
+          severity: "error",
+          code: "ABFC2046",
+          asset: asset.path,
+          ...(fields[0] !== undefined ? { span: fields[0].origin } : {}),
+          message: `changing the fields of @struct ${name} after it was created is not supported yet.`,
+          fix: "restore the fields, or give the struct a new path (and change the places that use it).",
+        });
+        continue;
+      }
+      if (input.createKinds !== undefined && !input.createKinds.includes("UserDefinedStruct")) {
+        diagnostics.push({
+          severity: "error",
+          code: "ABFC2044",
+          asset: asset.path,
+          message: `${asset.path} is a @struct and the backend cannot create a UserDefinedStruct (backend_info bpApply createKinds).`,
+          fix: "update abf-mod-editor-mcp (bp_apply feature struct_fields).",
+        });
+        continue;
+      }
+      if (known === hash && input.missing?.has(asset.path) !== true) continue;
+      assets.push({ asset: asset.path, struct: { fields }, graphNodes: {}, variables: [], units: [], classMeta: ir.classMeta });
+      continue;
+    }
+    let create: AssetPlan["create"];
+    if (input.missing?.has(asset.path) === true && asset.create !== undefined) {
+      const kind = asset.create.kind;
+      if (kind !== "Blueprint" && kind !== "WidgetBlueprint") {
+        diagnostics.push({ severity: "error", code: "ABFC2044", asset: asset.path, message: `${asset.path} does not exist in the stage and abfc cannot create a ${kind}.` });
+        continue;
+      }
+      if (input.createKinds !== undefined && !input.createKinds.includes(kind)) {
+        diagnostics.push({
+          severity: "error",
+          code: "ABFC2044",
+          asset: asset.path,
+          message: `${asset.path} does not exist in the stage and the backend cannot create a ${kind} (backend_info bpApply createKinds).`,
+          fix: "update abf-mod-editor-mcp, or create the asset in the Mod Editor first.",
+        });
+        continue;
+      }
+      create = { class: kind, parent: asset.create.parent };
+    }
+    const manifest = create !== undefined ? null : (input.manifests.get(asset.path) ?? null);
     const snapshot = input.snapshots.get(asset.path) ?? new Map<string, T3dNode>();
     const handMade = input.handMadeUnits.get(asset.path) ?? [];
     const declared = new Set(input.snapshotVariables?.get(asset.path) ?? []);
     const spans = new Map<string, Span>(asset.units.map((u) => [u.id, u.origin]));
+
+    // Own fields: a changed type is refused before any apply; a field gone from the TS stays in the asset (and the manifest).
+    const fieldVars = asset.variables.filter((v) => v.temp !== true);
+    let retyped = false;
+    for (const v of fieldVars) {
+      const mv = manifest?.variables.find((m) => m.name === v.name);
+      if (mv === undefined || mv.type === v.type) continue;
+      retyped = true;
+      diagnostics.push({
+        severity: "error",
+        code: "ABFC2047",
+        asset: asset.path,
+        span: v.origin,
+        message: `changing the type of own field ${v.name} (${mv.type} -> ${v.type}) is not supported yet.`,
+        fix: "keep the type, or rename the field (the old variable stays in the asset until you delete it in the Mod Editor).",
+      });
+    }
+    if (retyped) continue;
+    for (const mv of manifest?.variables ?? []) {
+      if (mv.name.startsWith("abfc_") || fieldVars.some((v) => v.name === mv.name)) continue;
+      diagnostics.push({
+        severity: "warning",
+        code: "ABFC5011",
+        asset: asset.path,
+        message: `own field ${mv.name} is no longer declared in TypeScript; the variable stays in ${asset.path.slice(asset.path.lastIndexOf("/") + 1)} (delete it in the Mod Editor).`,
+      });
+    }
+    const newFields = fieldVars.filter((v) => !declared.has(v.name));
 
     const picked: Array<{ unit: IrUnit; removeNodes: string[] }> = [];
     /** Names of events that this build adds (no custom event in the stage yet). */
@@ -287,7 +378,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
         };
       }
     }
-    if (picked.length === 0 && defaults === undefined && removeUnits.length === 0 && forgetUnits.length === 0 && removeTags.length === 0) continue;
+    if (create === undefined && picked.length === 0 && newFields.length === 0 && defaults === undefined && removeUnits.length === 0 && forgetUnits.length === 0 && removeTags.length === 0) continue;
 
     const removedByGraph = new Map<string, Set<string>>();
     for (const r of removeUnits) {
@@ -324,7 +415,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
 
     const prefixes = picked.map((p) => `abfc_${p.unit.name}_`);
     const variables: IrVariable[] = asset.variables.filter(
-      (v) => prefixes.some((pre) => v.name.startsWith(pre)) && !declared.has(v.name),
+      (v) => (v.temp === true ? prefixes.some((pre) => v.name.startsWith(pre)) : true) && !declared.has(v.name),
     );
     // Entry nodes of cross wire targets that stay as they are: their real names come from the manifest.
     const entryNames: Record<string, string> = {};
@@ -337,6 +428,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
     }
     assets.push({
       asset: asset.path,
+      ...(create !== undefined ? { create } : {}),
       graphNodes,
       variables,
       units,
