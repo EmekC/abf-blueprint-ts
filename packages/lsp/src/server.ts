@@ -1,8 +1,11 @@
 // The abfc language server: documents -> projects -> debounced checks -> published diagnostics.
 import { dirname } from "node:path";
 import { TextDocument } from "vscode-languageserver-textdocument";
-import { DidChangeWatchedFilesNotification, ProposedFeatures, TextDocumentSyncKind, TextDocuments, createConnection } from "vscode-languageserver/node.js";
+import { CodeActionKind, DidChangeWatchedFilesNotification, ProposedFeatures, TextDocumentSyncKind, TextDocuments, createConnection } from "vscode-languageserver/node.js";
 import { AbfcError, findProjectDir } from "@abfc/env";
+import { codeActionsFor } from "./actions.js";
+import { compilerConfigOf } from "./environment.js";
+import { hoverAt } from "./hover.js";
 import { ProjectState } from "./project.js";
 import type { InitOptions } from "./project.js";
 import { isUnder, pathKey, uriToPath } from "./uri.js";
@@ -165,6 +168,8 @@ export function startServer(o: ServerOptions): Promise<number> {
     return {
       capabilities: {
         textDocumentSync: { openClose: true, change: TextDocumentSyncKind.Incremental },
+        hoverProvider: true,
+        codeActionProvider: { codeActionKinds: [CodeActionKind.QuickFix] },
       },
       serverInfo: { name: "abfc", version: "0.1.0" },
     };
@@ -192,6 +197,38 @@ export function startServer(o: ServerOptions): Promise<number> {
       }
     } catch (e) {
       logError("file watcher notification", e);
+    }
+  });
+
+  connection.onHover((params) => {
+    try {
+      const project = docProject.get(params.textDocument.uri);
+      const path = uriToPath(params.textDocument.uri);
+      if (project === undefined || project === null || path === null) return null;
+      flush(project);
+      const snap = project.snapshot();
+      return snap === null ? null : hoverAt(project, snap, path, params.position, opts);
+    } catch (e) {
+      logError("hover", e);
+      return null;
+    }
+  });
+
+  connection.onCodeAction((params) => {
+    try {
+      const only = params.context.only;
+      if (only !== undefined && !only.some((k) => k === CodeActionKind.QuickFix || k.startsWith(CodeActionKind.QuickFix + "."))) return [];
+      const uri = params.textDocument.uri;
+      const project = docProject.get(uri);
+      const path = uriToPath(uri);
+      if (project === undefined || project === null || path === null) return [];
+      flush(project);
+      const snap = project.snapshot();
+      if (snap === null || project.env === null) return [];
+      return codeActionsFor(project, snap, uri, path, params.range, compilerConfigOf(project.env.config));
+    } catch (e) {
+      logError("code action", e);
+      return [];
     }
   });
 
