@@ -6,7 +6,7 @@ abfc does not touch Blueprint assets itself. It talks to a headless Mod Editor b
 
 | What | Value |
 | --- | --- |
-| Minimum server version | 2.4.0 (tag `v2.4.0`) |
+| Minimum server version | 2.4.0 (tag `v2.4.0`); class-manager rows (`@director`) need 2.5.0 |
 | Protocol | 1 or higher (`backend_info.protocol`) |
 | Python | 3.9 or newer on the PC (the editor uses its own Python internally) |
 | Mod Editor | installed from the Epic Games Launcher |
@@ -80,9 +80,11 @@ Warnings and errors from the backend check use the codes below. `abfc doctor` ex
 | `capabilities.gameTest` | `abfc test`, `abfc publish --full` |
 | `capabilities.audit` | `abfc publish --full` |
 | `capabilities.publish` | `abfc publish` |
+| `capabilities.classManagerRows` | backend 2.5.0 or newer: `bp_apply` accepts the `class_manager_row` key, so `@director("RowName")` writes the class-manager row asset; without it the build warns and writes no row |
 | `capabilities.functionLocals` | always `false` today; abfc hoists temporaries into owned member variables instead |
 | `capabilities.userPureFunctions` | always `false` today; getters are impure functions |
 | `bpApply.features` | per-feature gates, for example `event_meta` (event tooltips, ABFC2071) and `self_event_calls` (ABFC4013) |
+| `class_manager_row` (`bp_apply` key, backend 2.5.0) | the row name from `@director`; the backend creates the row asset in the class-manager table of the mod if it is missing, with only the row name and the class reference set (no game-specific values), and updates the class reference otherwise |
 
 ## Diagnostics
 
