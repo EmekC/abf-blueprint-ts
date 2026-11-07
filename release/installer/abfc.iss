@@ -47,7 +47,7 @@ UninstallDisplayName=abfc {#AppVersion}
 SetupLogging=yes
 
 [Tasks]
-Name: "addtopath"; Description: "Add abfc to my PATH (new terminals see it)"
+Name: "addtopath"; Description: "Add abfc to PATH"
 Name: "vsix"; Description: "Install the abfc extension into VS Code"; Check: VsCodeFound
 
 [Files]
