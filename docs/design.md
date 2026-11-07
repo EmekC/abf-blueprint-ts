@@ -720,7 +720,7 @@ User config (per machine, never committed): `%APPDATA%\abfc\config.json`, or the
 1. Target: `dir` or the working folder, created when missing. `ABFC1020` (exit 3) inside a mod folder (unchanged rule). `ABFC1040` when an ancestor folder (not the target) holds `abf.config.json` (nested projects).
 2. Mode: no `abf.config.json` in the target: new project. Schema 1: upgrade (18.4). Schema 2: re-run (fill in missing files; switching the mod needs the prompt's confirmation or `--mod <other> --yes`).
 3. Mod Editor: `--editor-root` > `ABFC_EDITOR_ROOT`/`ABF_EDITOR_ROOT` > user config > Epic manifests > `Program Files\Epic Games\AbioticFactorModEdit*` (the order of 9.1 without the project config), validated by the profile's exe path. Not found: the prompt asks for the folder (validated, re-asked); with `--yes` it is `ABFC1001` (exit 2).
-4. Mods folder: `--mods-dir` > `ABFC_MODS_DIR` > user config `modsDir` > `<Documents>\Abiotic Factor Mods` (Documents from the Known Folder lookup of 9.1). It must exist (else the prompt asks; with `--yes` `ABFC1004`).
+4. Mods folder: `--mods-dir` > `ABFC_MODS_DIR` > user config `modsDir` > `<Documents>\Abiotic Factor Mods` (Documents from the Known Folder lookup of 9.1). It must exist (else the prompt asks; with `--yes` `ABFC1003`).
 5. Scan: every direct subfolder `X` of the mods folder that holds `X\X.uplugin` (case-insensitive) is a mod. Shown per mod: folder name, the `.uplugin` `FriendlyName` when the JSON reads, and the number of `.uasset` files under `Content` (walk capped at 5000). Sorted by name. Folders without a matching `.uplugin` are skipped silently.
 6. Prompt (interactive only when stdin and stdout are terminals; otherwise without `--yes` it is `ABFC1041`, exit 1, "use --mod <name> --yes"):
    ```

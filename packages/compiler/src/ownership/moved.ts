@@ -18,9 +18,9 @@ export function movedClassDiagnostics(hir: HirProgram, manifests: readonly Manif
   if (orphans.length === 0) return out;
   for (const c of declared) {
     if (!c.pathDerived || known.has(c.path.toLowerCase())) continue;
-    const matches = orphans.filter((m) =>
-      m.source !== undefined ? m.source.class === c.name || m.source.file === c.span.file : lastSegment(m.asset) === c.name,
-    );
+    // Same class name first (several classes may share one file); the file only counts when no orphan carries the name (class renamed).
+    const byName = orphans.filter((m) => (m.source !== undefined ? m.source.class === c.name : lastSegment(m.asset) === c.name));
+    const matches = byName.length > 0 ? byName : orphans.filter((m) => m.source !== undefined && m.source.file === c.span.file);
     if (matches.length === 0) continue;
     const tail = "abfc will not create a second asset or retire the first one.";
     if (matches.length === 1) {

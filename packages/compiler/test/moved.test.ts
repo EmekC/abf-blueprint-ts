@@ -41,6 +41,26 @@ test("a renamed class is found through source.file", () => {
   assert.equal(ds[0]!.data?.keepPath, "Relays/Thing");
 });
 
+test("two classes in one file that both moved each match only their own manifest", () => {
+  const file = "src/P4Tally.ts";
+  const s = { name: "S_P4Entry", path: "/TestMod/S_P4Entry", pathDerived: true, objectPath: "/TestMod/S_P4Entry.S_P4Entry", fields: [], span: span(file) } as HirStruct;
+  const hir = program([cls("BP_P4Tally", "/TestMod/BP_P4Tally", file)], [s]);
+  const ds = movedClassDiagnostics(
+    hir,
+    [
+      manifest("/TestMod/Phase4/BP_P4Tally", { file, class: "BP_P4Tally", derived: true }),
+      manifest("/TestMod/Phase4/S_P4Entry", { file, class: "S_P4Entry", derived: true }),
+    ],
+    "TestMod",
+  );
+  assert.equal(ds.length, 2);
+  for (const d of ds) assert.equal(d.code, "ABFC5012");
+  assert.deepEqual(ds[0]!.data, { keepPath: "Phase4/BP_P4Tally", recorded: "/TestMod/Phase4/BP_P4Tally" });
+  assert.match(ds[0]!.fix ?? "", /path: "Phase4\/BP_P4Tally"/);
+  assert.deepEqual(ds[1]!.data, { keepPath: "Phase4/S_P4Entry", recorded: "/TestMod/Phase4/S_P4Entry" });
+  assert.match(ds[1]!.fix ?? "", /path: "Phase4\/S_P4Entry"/);
+});
+
 test("a manifest without source is matched by the last path segment", () => {
   const hir = program([cls("MyRelay", "/TestMod/New/MyRelay", "src/New/MyRelay.ts")]);
   const ds = movedClassDiagnostics(hir, [manifest("/TestMod/Old/MyRelay")], "TestMod");
