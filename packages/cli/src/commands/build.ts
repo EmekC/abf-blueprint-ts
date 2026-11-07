@@ -132,7 +132,8 @@ async function restoreManifestsAfterResync(
         try {
           held = new Set((await readAsset(ctx, backend, asset)).parsed.nodes.keys());
         } catch {
-          held = new Set();
+          // unreadable stage: do not treat it as empty (that would drop published units), keep this manifest as it is
+          continue;
         }
         units = base.units.filter((u) => u.adopt !== null || u.nodes.every((n) => held.has(n)));
       }

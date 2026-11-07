@@ -324,6 +324,26 @@ test("(b1p) a published unit that is changed and fails to compile keeps the entr
   });
 });
 
+test("(b1q) a stage read that fails after the re-sync does not drop the units of that asset", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    r.backend.markPublished();
+    const before = readManifest(r.dir, RELAY_ASSET)!.units;
+    assert.ok(before.length > 0);
+
+    const src = join(r.dir, "src", "Relay.ts");
+    writeFileSync(src, readFileSync(src, "utf8").replace("const rowName = Lib.RowToName(pot.Row);", "const rowName = Lib.RowToName(pot.Row); this.LastName = rowName;"), "utf8");
+    r.backend.reportMessages = [{ severity: "error", asset: RELAY_ASSET, message: "boom" }];
+    r.backend.failReadsAfterResync = true;
+    x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    const after = readManifest(r.dir, RELAY_ASSET)!.units;
+    assert.equal(after.length, before.length, "the units are not dropped when the stage cannot be read");
+    assert.equal(after[0]!.irHash, "", "the manifest of the failed build stays as it is, no restore");
+  });
+});
+
 test("(d1) build --drift reads every owned asset, a plain build of an up-to-date project reads none", async () => {
   await withRig({}, async (r) => {
     assert.equal((await r.run(["adopt", RELAY_ASSET, "UpdateTarget", "--yes"])).code, 0);

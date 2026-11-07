@@ -320,6 +320,9 @@ export class FakeBackend implements Backend {
   /** Folder of the run folders (`export.t3d`, `final_<i>.t3d`); real files, below the system temp folder. */
   readonly root: string;
   closed = 0;
+  /** Every `bp_read` after a resync (`staging_sync` with discardChanges) fails (default false). */
+  failReadsAfterResync = false;
+  private resynced = false;
   /** Makes the apply that creates `<unit>_<irId>` fail with this message (the failing node is named in the compile error). */
   compileError: { irId: string; unit?: string; message: string } | null = null;
   /** Messages of `bp_compile_report`; any error makes the report unclean. */
@@ -469,6 +472,7 @@ export class FakeBackend implements Backend {
   async stage(_modDir: string, o: { discardChanges: boolean }): Promise<StageReport> {
     this.calls.push({ tool: "staging_sync" });
     if (o.discardChanges && this.options.failResync === true) throw new Error("fake staging_sync failed");
+    if (o.discardChanges) this.resynced = true;
     if (!this.staged || (o.discardChanges && !this.keepAssetsOnSync)) {
       this.assets =
         this.published !== null
@@ -502,6 +506,7 @@ export class FakeBackend implements Backend {
 
   async read(_mod: string, asset: string): Promise<AssetSnapshot> {
     this.calls.push({ tool: "bp_read" });
+    if (this.failReadsAfterResync && this.resynced) throw new Error("fake bp_read failed");
     this.lastWarm = this.warm;
     const a = this.assets.get(asset);
     if (a === undefined) throw new Error(`fake stage: no asset ${asset}`);
