@@ -26,8 +26,68 @@ function fromTs(d: ts.Diagnostic, root: string): Diagnostic | undefined {
   return out;
 }
 
-/** `<projectDir>/tsconfig.json` -> program. Class files are the root files not ending `.test.ts`; test files end `.test.ts`. */
-export function loadProgram(projectDir: string): LoadedProgram {
+/** The TypeScript version the frontend was built against; a language service on another version must not use this frontend. */
+export const TS_VERSION: string = ts.version;
+
+/**
+ * Hides what abfc owns now (and what is retired) from the `_Manual` interfaces of hand-made stubs.
+ * Returns null when nothing is owned; the returned function returns `text` unchanged for every other file.
+ */
+export function ownedManualFilter(
+  projectDir: string,
+  onWarning?: (file: string, why: string) => void,
+): ((fileName: string, text: string) => string) | null {
+  const root = resolve(projectDir);
+  // Stubs are generated before abfc owns a unit; what the manifests say abfc owns now is hidden from their `_Manual` interfaces.
+  const owned = ownedSets(root);
+  // The active profile is not known here, so every profile's retired.json is read; an unreadable one is ignored with a warning.
+  const retiredByAsset = readRetired(root, undefined, (file, why) => onWarning?.(file, why));
+  for (const [asset, ids] of Object.entries(retiredByAsset)) {
+    const cur = owned[asset] ?? { units: [], variables: [] };
+    owned[asset] = { units: [...cur.units, ...ids], variables: cur.variables };
+  }
+  if (Object.keys(owned).length === 0) return null;
+  const stubsRoot = resolve(root, ".abfc", "stubs");
+  const underStubs = (file: string): boolean => {
+    const rel = relative(stubsRoot, resolve(file));
+    return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  };
+  return (fileName, text) => {
+    if (!fileName.endsWith(".d.ts") || !underStubs(fileName) || !text.includes("@bpHandMade")) return text;
+    return filterOwnedManual(fileName, text, owned);
+  };
+}
+
+/** TypeScript's own diagnostics of a program (config, syntax, options, semantics) as ABFC2000. */
+export function tsDiagnostics(program: ts.Program, projectDir: string): Diagnostic[] {
+  const root = resolve(projectDir);
+  const out: Diagnostic[] = [];
+  for (const d of ts.getPreEmitDiagnostics(program)) {
+    const x = fromTs(d, root);
+    if (x) out.push(x);
+  }
+  return out;
+}
+
+/** Splits the root files of a program into class files and test files (files ending `.test.ts`); `.d.ts` roots are skipped. */
+export function loadedFromProgram(projectDir: string, program: ts.Program, diagnostics: Diagnostic[]): LoadedProgram {
+  const root = resolve(projectDir);
+  const classes: ts.SourceFile[] = [];
+  const tests: ts.SourceFile[] = [];
+  for (const name of program.getRootFileNames()) {
+    if (name.endsWith(".d.ts")) continue;
+    const sf = program.getSourceFile(name);
+    if (!sf) continue;
+    (relFile(root, sf.fileName).endsWith(".test.ts") ? tests : classes).push(sf);
+  }
+  return { projectDir: root, program, checker: program.getTypeChecker(), files: { classes, tests }, diagnostics };
+}
+
+/**
+ * `<projectDir>/tsconfig.json` -> program. Class files are the root files not ending `.test.ts`; test files end `.test.ts`.
+ * `oldProgram` lets TypeScript reuse unchanged files and structure (watch mode).
+ */
+export function loadProgram(projectDir: string, oldProgram?: ts.Program): LoadedProgram {
   const root = resolve(projectDir);
   const configPath = resolve(root, "tsconfig.json");
   const fatal: ts.Diagnostic[] = [];
@@ -54,28 +114,16 @@ export function loadProgram(projectDir: string): LoadedProgram {
     const x = fromTs(d, root);
     if (x) diagnostics.push(x);
   }
-  // Stubs are generated before abfc owns a unit; what the manifests say abfc owns now is hidden from their `_Manual` interfaces.
-  const owned = ownedSets(root);
-  // The active profile is not known here, so every profile's retired.json is read; an unreadable one is ignored with a warning.
-  const retiredByAsset = readRetired(root, undefined, (file, why) =>
+  const filter = ownedManualFilter(root, (file, why) =>
     diagnostics.push({ severity: "warning", code: "ABFC2000", message: `ignoring unreadable ${file}: ${why}; run abfc stubs to rewrite it` }),
   );
-  for (const [asset, ids] of Object.entries(retiredByAsset)) {
-    const cur = owned[asset] ?? { units: [], variables: [] };
-    owned[asset] = { units: [...cur.units, ...ids], variables: cur.variables };
-  }
-  const stubsRoot = resolve(root, ".abfc", "stubs");
-  const underStubs = (file: string): boolean => {
-    const rel = relative(stubsRoot, resolve(file));
-    return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
-  };
   const host = ts.createCompilerHost(parsed.options);
-  if (Object.keys(owned).length > 0) {
+  if (filter !== null) {
     const getSourceFile = host.getSourceFile.bind(host);
     host.getSourceFile = (fileName, languageVersionOrOptions, onError, shouldCreate) => {
       const sf = getSourceFile(fileName, languageVersionOrOptions, onError, shouldCreate);
-      if (sf === undefined || !fileName.endsWith(".d.ts") || !underStubs(fileName) || !sf.text.includes("@bpHandMade")) return sf;
-      const text = filterOwnedManual(fileName, sf.text, owned);
+      if (sf === undefined) return sf;
+      const text = filter(fileName, sf.text);
       return text === sf.text ? sf : ts.createSourceFile(fileName, text, languageVersionOrOptions, true);
     };
   }
@@ -84,18 +132,8 @@ export function loadProgram(projectDir: string): LoadedProgram {
     options: parsed.options,
     host,
     ...(parsed.projectReferences ? { projectReferences: parsed.projectReferences } : {}),
+    ...(oldProgram ? { oldProgram } : {}),
   });
-  for (const d of ts.getPreEmitDiagnostics(program)) {
-    const x = fromTs(d, root);
-    if (x) diagnostics.push(x);
-  }
-  const classes: ts.SourceFile[] = [];
-  const tests: ts.SourceFile[] = [];
-  for (const name of parsed.fileNames) {
-    if (name.endsWith(".d.ts")) continue;
-    const sf = program.getSourceFile(name);
-    if (!sf) continue;
-    (relFile(root, sf.fileName).endsWith(".test.ts") ? tests : classes).push(sf);
-  }
-  return { projectDir: root, program, checker: program.getTypeChecker(), files: { classes, tests }, diagnostics };
+  diagnostics.push(...tsDiagnostics(program, root));
+  return loadedFromProgram(root, program, diagnostics);
 }

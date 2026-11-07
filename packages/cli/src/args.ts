@@ -22,6 +22,8 @@ export interface CliFlags {
   cold: boolean;
   /** `--remove-node <name>` (repeatable): extra nodes `abfc adopt` removes with the unit. */
   removeNode: string[];
+  /** `--watch`: `abfc check` stays running and checks again after every relevant file change. */
+  watch: boolean;
 }
 
 export interface ParsedArgs {
@@ -66,6 +68,7 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
         full: { type: "boolean" },
         cold: { type: "boolean" },
         "remove-node": { type: "string", multiple: true },
+        watch: { type: "boolean" },
       },
     });
   } catch (e) {
@@ -73,6 +76,7 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
   }
   const v = parsed.values;
   const [command, ...positionals] = parsed.positionals;
+  if (command === "check" && v.watch === true && v.json === true) throw new UsageError("--watch cannot be combined with --json");
   return {
     command: command ?? null,
     positionals,
@@ -95,6 +99,7 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
       full: v.full === true,
       cold: v.cold === true,
       removeNode: v["remove-node"] ?? [],
+      watch: v.watch === true,
     },
   };
 }

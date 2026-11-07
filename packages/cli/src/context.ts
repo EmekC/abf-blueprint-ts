@@ -12,6 +12,13 @@ export interface CliDeps {
   now: () => Date;
   /** Lists the files below a mod folder for the publish file check (default: a read-only walk of the real file system). */
   listFiles?: ((root: string) => Array<{ rel: string; size: number }>) | undefined;
+  /**
+   * Watches a folder tree for `abfc check --watch` and calls `onChange` with the absolute path of every changed file
+   * (default: `fs.watch(dir, { recursive: true })`).
+   */
+  watch?: ((dir: string, onChange: (file: string) => void) => { close(): void }) | undefined;
+  /** Ends `abfc check --watch` when aborted (default: aborted by SIGINT). */
+  stopSignal?: AbortSignal | undefined;
   /** Folder the command line is relative to (default: `process.cwd()`). */
   cwd?: string | undefined;
   stdout?: ((line: string) => void) | undefined;

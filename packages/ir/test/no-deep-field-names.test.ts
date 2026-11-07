@@ -24,12 +24,14 @@ function walk(dir: string, out: string[]): void {
   }
 }
 
-test("package tests contain no game-specific names", () => {
+test("package tests and shipped data contain no game-specific names", () => {
   const root = repoRoot();
   const files: string[] = [];
   for (const pkg of readdirSync(join(root, "packages"))) {
-    const testDir = join(root, "packages", pkg, "test");
-    if (existsSync(testDir)) walk(testDir, files);
+    for (const sub of ["test", "data"]) {
+      const d = join(root, "packages", pkg, sub);
+      if (existsSync(d)) walk(d, files);
+    }
   }
   assert.ok(files.length > 0, "expected at least this guard test under packages/*/test");
   const hits: string[] = [];

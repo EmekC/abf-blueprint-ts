@@ -1,6 +1,8 @@
 export * from "./hir.js";
-export { loadProgram } from "./frontend/program.js";
+export { TS_VERSION, loadProgram, loadedFromProgram, ownedManualFilter, tsDiagnostics } from "./frontend/program.js";
 export type { LoadedProgram } from "./frontend/program.js";
+export { checkProject, lowerChecked } from "./service.js";
+export type { ProjectCheck } from "./service.js";
 export { buildHir, checkSubset } from "./frontend/build.js";
 export { compileTests } from "./frontend/tests.js";
 export { blockedMemberHits } from "./frontend/blocked.js";
@@ -29,3 +31,6 @@ export type { PlanInput, PlanResult } from "./plan/planner.js";
 export { featureGates } from "./plan/gates.js";
 export type { GateCapabilities } from "./plan/gates.js";
 export { udsGuid, udsMemberName } from "./frontend/structnames.js";
+export { describeIrNode, irNodesAt } from "./explain.js";
+export { idivFix, optionalChainFix } from "./frontend/fixes.js";
+export type { TextEdit } from "./frontend/fixes.js";

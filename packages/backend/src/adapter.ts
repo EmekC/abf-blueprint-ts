@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { AbfcError } from "@abfc/env";
 import { parseBpType } from "@abfc/ir";
-import type { ApplyPlan, AssetPlan, BackendCapabilities, Diagnostic, IrNode, IrParam, IrUnit, Profile } from "@abfc/ir";
+import type { ApplyPlan, AssetPlan, BackendCapabilities, Diagnostic, EventMeta, IrNode, IrParam, IrUnit, Profile } from "@abfc/ir";
 import { renderDefaultsCode } from "./defaults-template.js";
 import { applyErrors, applyTwoPhase } from "./fallback.js";
 import type { FallbackAsset, WildcardPatchRef } from "./fallback.js";
@@ -17,6 +17,7 @@ export interface BpNodeSpec {
   function?: string;
   target?: string;
   params?: IrParam[];
+  meta?: EventMeta;
   props?: string[];
   pos: [number, number];
   set?: Record<string, string>;
@@ -102,6 +103,7 @@ function toBpNode(unit: IrUnit, n: IrNode, origin: [number, number], caps: Backe
       case "event":
         out.name = s.name;
         if (s.params && s.params.length > 0) out.params = s.params;
+        if (s.meta && caps.eventMeta) out.meta = { ...s.meta };
         break;
       case "override":
         out.class = s.class;

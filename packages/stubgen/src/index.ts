@@ -7,3 +7,4 @@ export * from "./manual.js";
 export * from "./lock.js";
 export * from "./paths.js";
 export * from "./write.js";
+export * from "./describe.js";

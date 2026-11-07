@@ -2,6 +2,7 @@
 import { pinObjectText, unitHash } from "@abfc/ir";
 import type { IrNode, IrUnit, IrVariable, IrWire, Profile, SemanticTag, Span } from "@abfc/ir";
 import type { HirEvent, HirExpr, HirStmt, LocalId } from "../hir.js";
+import { eventMetaOf } from "./eventmeta.js";
 import { assignPositions } from "./layout.js";
 
 /** `"<node>.<pin>"` */
@@ -44,7 +45,7 @@ interface Extra {
 
 const REAL_TYPES = new Set(["float", "double", "real"]);
 
-const ARITH_NAMES = { "+": "Add", "-": "Subtract", "*": "Multiply" } as const;
+const ARITH_NAMES = { "+": "Add", "-": "Subtract", "*": "Multiply", "/": "Divide" } as const;
 const CMP_NAMES = { "<": "Less", "<=": "LessEqual", ">": "Greater", ">=": "GreaterEqual" } as const;
 const K2_EVENT = "/Script/BlueprintGraph.K2Node_Event";
 const K2_CREATE_WIDGET = "/Script/UMGEditor.K2Node_CreateWidget";
@@ -127,6 +128,8 @@ export class UnitBuilder {
     } else {
       const evSem: Extract<SemanticTag, { k: "event" }> = { k: "event", name: ev.name };
       if (ev.params.length > 0) evSem.params = ev.params.map((p) => ({ name: p.name, type: p.type }));
+      const meta = ev.doc === undefined ? undefined : eventMetaOf(ev.doc);
+      if (meta !== undefined) evSem.meta = meta;
       this.entryId = this.emit("ev", this.profile.nodeClasses.customEvent, [`CustomFunctionName="${ev.name}"`], evSem, ev.span);
     }
     for (const p of ev.params) this.params.set(p.name, `${this.entryId}.${p.name}`);

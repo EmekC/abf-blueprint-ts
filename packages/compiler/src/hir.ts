@@ -104,7 +104,7 @@ export type HirExpr = (
   | { k: "nameLit"; text: string }
   | { k: "createWidget"; cls: string; owner: HirExpr }
   | { k: "spawn"; cls: string; owner?: HirExpr; collision?: string; scale?: string }
-  | { k: "arith"; op: "+" | "-" | "*"; kind: "int" | "real"; a: HirExpr; b: HirExpr }
+  | { k: "arith"; op: "+" | "-" | "*" | "/"; kind: "int" | "real"; a: HirExpr; b: HirExpr }
   | { k: "cmp"; op: "<" | "<=" | ">" | ">="; kind: "int" | "real"; a: HirExpr; b: HirExpr }
   | { k: "index"; array: HirExpr; index: HirExpr; elem: BpType }
   /** `arr.indexOf(x)`: Array_Find (-1 when absent). `elem` is the element type. */

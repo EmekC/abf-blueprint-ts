@@ -1,0 +1,21 @@
+{
+  "name": "@abfc/eslint-plugin",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist/src"
+  ],
+  "dependencies": {
+    "@typescript-eslint/utils": "8.72.1"
+  },
+  "peerDependencies": {
+    "eslint": "^9.0.0 || ^10.0.0"
+  }
+}

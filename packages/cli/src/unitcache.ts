@@ -8,6 +8,11 @@ export interface UnitCacheEntry {
   irHash: string;
   stubLockHash: string;
   compilerVersion: string;
+  /**
+   * Only for a documented @event (its doc comment is its tooltip, which is in the IR hash): whether the backend wrote the tooltip
+   * (bp_apply feature `event_meta`) when the unit was built. A backend update that flips it re-plans the unit; absent means false.
+   */
+  eventMeta?: boolean;
 }
 
 /** `{[asset path]: {[unit id]: entry}}` */

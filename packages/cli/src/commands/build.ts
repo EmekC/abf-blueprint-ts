@@ -16,7 +16,7 @@ import {
 } from "@abfc/compiler";
 import type { Manifest, ManifestUnit, SourceMapFile } from "@abfc/compiler";
 import { parseExport, sha256, structFieldsHash } from "@abfc/ir";
-import type { AssetPlan, Diagnostic, IrAsset, IrModule, Span, T3dNode } from "@abfc/ir";
+import type { AssetPlan, Diagnostic, IrAsset, IrModule, IrUnit, Span, T3dNode } from "@abfc/ir";
 import { readLock } from "@abfc/stubgen";
 import { win32 } from "node:path";
 import type { CliContext } from "../context.js";
@@ -37,12 +37,18 @@ import {
 } from "./common.js";
 import { ensureStage } from "./stage.js";
 
+/** True for an @event whose doc comment is its tooltip: the backend only writes it with the bp_apply feature `event_meta`. */
+function hasEventTooltip(u: IrUnit): boolean {
+  const entry = u.nodes.find((n) => n.sem?.k === "event");
+  return entry?.sem?.k === "event" && entry.sem.meta !== undefined;
+}
+
 /** Records every unit of the owned assets as built with the current compiler and stub lock (read by the next build). */
-function writeCache(ctx: CliContext, owned: IrAsset[], cache: UnitCache, stubLockHash: string): void {
+function writeCache(ctx: CliContext, owned: IrAsset[], cache: UnitCache, stubLockHash: string, eventMeta: boolean): void {
   const next: UnitCache = { ...cache };
   for (const a of owned) {
     const units: UnitCache[string] = {};
-    for (const u of a.units) units[u.id] = { irHash: u.hash, stubLockHash, compilerVersion: COMPILER_ID };
+    for (const u of a.units) units[u.id] = { irHash: u.hash, stubLockHash, compilerVersion: COMPILER_ID, ...(hasEventTooltip(u) ? { eventMeta } : {}) };
     next[a.path] = units;
   }
   writeUnitCache(win32.join(ctx.paths.cacheDir, "units.json"), next);
@@ -167,6 +173,8 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     for (const u of a.units) {
       const c = cache[a.path]?.[u.id];
       if (c !== undefined && (c.stubLockHash !== stubLockHash || c.compilerVersion !== COMPILER_ID || c.irHash !== u.hash)) forceReplan.add(`${a.path} ${u.id}`);
+      // A documented event built without the tooltip (backend without event_meta) is applied again once the backend can write it.
+      else if (c !== undefined && hasEventTooltip(u) && (c.eventMeta ?? false) !== (caps.eventMeta === true)) forceReplan.add(`${a.path} ${u.id}`);
     }
   }
 
@@ -212,7 +220,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   for (const a of skipped) for (const u of a.units) planned.upToDate.push(`${a.path} ${u.id}`);
 
   if (planned.plan.assets.length === 0) {
-    writeCache(ctx, owned, cache, stubLockHash);
+    writeCache(ctx, owned, cache, stubLockHash, caps.eventMeta === true);
     output.info(`up to date (${planned.upToDate.length} unit(s) unchanged)`);
     output.json({ applied: [], upToDate: planned.upToDate });
     return true;
@@ -384,7 +392,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   for (const m of finals) writeManifest(projectDir, m);
   for (const m of report.messages) if (m.severity === "warning" && args.flags.verbose) output.info(`[Unreal warning] ${m.message}`);
 
-  writeCache(ctx, owned, cache, stubLockHash);
+  writeCache(ctx, owned, cache, stubLockHash, caps.eventMeta === true);
   output.info(`applied ${stagedUnits.length > 0 ? stagedUnits.join(", ") : "no units"} in ${appliedAssets.join(", ")} (route: ${route})${createdStructs.length > 0 ? `, created struct ${createdStructs.join(", ")}` : ""}${removedUnits.length > 0 ? `, removed ${removedUnits.join(", ")}` : ""}${removedOrphanTags > 0 ? `, removed ${removedOrphanTags} orphan tag comment(s)` : ""}`);
   output.json({ applied: stagedUnits, assets: appliedAssets, ...(createdStructs.length > 0 ? { structs: createdStructs } : {}), route, upToDate: planned.upToDate, ...(removedUnits.length > 0 ? { removed: removedUnits } : {}), ...(removedOrphanTags > 0 ? { removedOrphanTags } : {}) });
   return true;

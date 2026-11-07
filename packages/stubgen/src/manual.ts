@@ -1,12 +1,13 @@
 // Stubs for the mod's own hand-made assets: one `<Asset>_Manual` interface per asset plus the generated class.
-import { parseExport, userPins } from "@abfc/ir";
+import { displayNameOf, parseExport, userPins } from "@abfc/ir";
+import { describeFunction, loadDescriptions } from "./describe.js";
 import { FileBuilder, jsdoc } from "./imports.js";
 import { buildSignature } from "./signature.js";
 import { UOBJECT_PATH, ident, memberKey, moduleSpecifier, stubFile, tsIdent } from "./names.js";
 import { isUnsupported, normalizeGrammar, refsOfGrammar, tsOfGrammar, unsupportedLabel } from "./typemap.js";
 import type { TypeRef } from "./typemap.js";
 
-export const STUBGEN_VERSION = "0.2.1";
+export const STUBGEN_VERSION = "0.3.0";
 
 export interface ManualPin {
   name: string;
@@ -21,11 +22,13 @@ export interface ManualAsset {
   /** Meta class path of the generated class. */
   meta: string;
   parent: string | null;
-  variables: ManualPin[];
+  /** `replicated` is set when the variable has CPF_Net (0x20) in its `PropertyFlags`. */
+  variables: Array<ManualPin & { replicated?: true }>;
   /** Designer widgets of a Widget Blueprint with `bIsVariable=True`: name and widget class path. Emitted as `readonly` members. */
   widgets: Array<{ name: string; cls: string }>;
   functions: Array<{ name: string; inputs: ManualPin[]; outputs: ManualPin[] }>;
-  events: Array<{ name: string; params: ManualPin[] }>;
+  /** `net` is set for replicated custom events (FUNC_Net 0x40 in the head line `FunctionFlags=`). */
+  events: Array<{ name: string; params: ManualPin[]; net?: { kind: "server" | "client" | "multicast"; reliable: boolean } }>;
   /** What abfc owns in this asset: unit ids (`event:UpdateTarget`) and variable names. */
   owned: { units: string[]; variables: string[] };
 }
@@ -51,6 +54,18 @@ function legacyStubType(t: string): string {
   return m?.[1] !== undefined && m[2] !== undefined ? `unsupported:${m[2]}:${m[1] === "map" ? "Map" : "Set"}` : t;
 }
 
+/** CPF_Net (0x20) in a raw `PropertyFlags` value; flags can exceed 2^53, so they are parsed as BigInt. */
+function isReplicated(raw: string | null): boolean {
+  return raw !== null && /^\d+$/.test(raw) && (BigInt(raw) & 0x20n) !== 0n;
+}
+
+/** The RPC kind of custom-event `FunctionFlags`: FUNC_Net (0x40) with NetServer, NetClient or NetMulticast; reliable = FUNC_NetReliable (0x80). */
+function netOfFlags(flags: bigint): { kind: "server" | "client" | "multicast"; reliable: boolean } | null {
+  if ((flags & 0x40n) === 0n) return null;
+  const kind = (flags & 0x200000n) !== 0n ? "server" : (flags & 0x1000000n) !== 0n ? "client" : (flags & 0x4000n) !== 0n ? "multicast" : null;
+  return kind === null ? null : { kind, reliable: (flags & 0x80n) !== 0n };
+}
+
 /**
  * `exportText` is the `<run>/export.t3d` of `bp_read`, `structure` its JSON result (`blueprint.class`, `functions`).
  * Variables, parent class and custom events come from the export, functions from the structure.
@@ -71,11 +86,22 @@ export function manualFromExport(
   for (const n of ex.nodes.values()) {
     if (n.graph !== "EventGraph" || !n.cls.endsWith("K2Node_CustomEvent")) continue;
     let name: string | null = null;
+    let flags: bigint | null = null;
     for (const h of n.head) {
       const m = /^CustomFunctionName="([^"]*)"/.exec(h);
       if (m?.[1] !== undefined) name = m[1];
+      const f = /^FunctionFlags=(\d+)/.exec(h);
+      if (f?.[1] !== undefined) flags = BigInt(f[1]);
     }
-    if (name !== null) events.push({ name, params: userPins(n).outs.map((p) => ({ name: p.name, type: legacyStubType(p.type) })) });
+    if (name !== null) {
+      const ev: ManualAsset["events"][number] = {
+        name,
+        params: userPins(n).outs.map((p) => ({ name: p.name, type: legacyStubType(p.type) })),
+      };
+      const net = flags === null ? null : netOfFlags(flags);
+      if (net) ev.net = net;
+      events.push(ev);
+    }
   }
   const functions: ManualAsset["functions"] = [];
   if (Array.isArray(st.functions)) {
@@ -88,7 +114,11 @@ export function manualFromExport(
     classPath: `${asset}.${short}_C`,
     meta,
     parent: ex.parentClass,
-    variables: ex.variables.map((v) => ({ name: v.name, type: legacyStubType(v.type) })),
+    variables: ex.variables.map((v) => {
+      const out: ManualAsset["variables"][number] = { name: v.name, type: legacyStubType(v.type) };
+      if (isReplicated(v.propertyFlags)) out.replicated = true;
+      return out;
+    }),
     widgets: ex.widgets.filter((w) => w.isVariable && !ex.variables.some((v) => v.name === w.name)).map((w) => ({ name: w.name, cls: w.cls })),
     functions,
     events,
@@ -123,12 +153,19 @@ export function emitManual(m: ManualAsset, header?: string): { file: string; tex
   const ownedUnits = new Set(m.owned.units);
   const ownedVars = new Set(m.owned.variables);
 
+  const table = loadDescriptions();
+  const handMade = (kind: "function" | "event", name: string): string =>
+    table.functions[`${m.classPath}:${name}`] !== undefined
+      ? describeFunction(table, m.classPath, name)
+      : `Hand-made ${kind} of ${short} (${displayNameOf(name)}).`;
+
   const body: string[] = [];
   for (const v of m.variables) {
     if (ownedVars.has(v.name)) continue;
     const g = normalizeGrammar(v.type);
     const tags = [`@bpPath ${m.classPath}:${v.name}`, `@bpType ${g}`];
     if (isUnsupported(g)) tags.push(`@bpUnsupported ${unsupportedLabel(g)}`);
+    if (v.replicated) tags.push("@bpReplicated");
     tags.push("@bpHandMade");
     body.push(jsdoc(tags, "  ") + `  ${memberKey(v.name)}: ${tsOfGrammar(g, fb)};\n`);
   }
@@ -141,12 +178,13 @@ export function emitManual(m: ManualAsset, header?: string): { file: string; tex
       [],
       fb,
     );
-    body.push(jsdoc([`@bpPath ${m.classPath}:${f.name}`, ...sig.tags, "@bpHandMade"], "  ") + `  ${memberKey(f.name)}(${sig.params}): ${sig.ret};\n`);
+    body.push(jsdoc([handMade("function", f.name), `@bpPath ${m.classPath}:${f.name}`, ...sig.tags, "@bpHandMade"], "  ") + `  ${memberKey(f.name)}(${sig.params}): ${sig.ret};\n`);
   }
   for (const e of m.events) {
     if (ownedUnits.has(`event:${e.name}`)) continue;
     const sig = buildSignature(e.params.map((p) => ({ pin: p.name, grammar: normalizeGrammar(p.type) })), [], [], fb);
-    body.push(jsdoc([`@bpPath ${m.classPath}:${e.name}`, ...sig.tags, "@bpHandMade"], "  ") + `  ${memberKey(e.name)}(${sig.params}): void;\n`);
+    const net = e.net ? [`@bpRpc ${e.net.kind}`, ...(e.net.reliable ? ["@bpReliable"] : [])] : [];
+    body.push(jsdoc([handMade("event", e.name), `@bpPath ${m.classPath}:${e.name}`, ...sig.tags, ...net, "@bpHandMade"], "  ") + `  ${memberKey(e.name)}(${sig.params}): void;\n`);
   }
 
   const parentName = fb.ref(m.parent ?? UOBJECT_PATH, "class");

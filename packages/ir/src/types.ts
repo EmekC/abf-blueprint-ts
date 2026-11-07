@@ -53,9 +53,11 @@ export interface IrNode {
   pos: [number, number];
   origin: Span;
 }
+/** Tooltip, category and keywords of a custom event (from its TS doc comment); written by bp_apply feature `event_meta`. */
+export interface EventMeta { tooltip?: string; category?: string; keywords?: string }
 export type SemanticTag =
   | { k: "call"; class?: string; function: string } | { k: "get" | "set"; name: string; class?: string }
-  | { k: "event"; name: string; params?: IrParam[] } | { k: "override"; class: string; function: string }
+  | { k: "event"; name: string; params?: IrParam[]; meta?: EventMeta } | { k: "override"; class: string; function: string }
   | { k: "branch" } | { k: "sequence" } | { k: "cast"; target: string } | { k: "self" }
   | { k: "spawn" } | { k: "create_widget" } | { k: "call_dispatcher" | "bind_dispatcher"; name: string };
 export type IrWire = [from: `${string}.${string}`, to: `${string}.${string}`]; // output first; "entry"/"result" reserved
@@ -97,6 +99,8 @@ export interface BackendCapabilities {
   castObjectPin: boolean;
   /** bp_apply feature `self_event_calls`: a self call to a custom event added in the same apply gets real pins. */
   selfEventCalls: boolean;
+  /** bp_apply feature `event_meta`: an `event` node may carry `meta` ({tooltip, category, keywords}). */
+  eventMeta: boolean;
   bpApplyFeatures: string[];
   nodeKinds: string[];
   /** `mod_audit` can audit the stage (false in Phase 1: it audits the real mod). */

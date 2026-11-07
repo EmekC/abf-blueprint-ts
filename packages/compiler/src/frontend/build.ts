@@ -1298,6 +1298,12 @@ class HirBuilder {
         }
         return { k: "nameLit", text: a0.text, type: "name", span: sp };
       }
+      if (rt === "idiv") {
+        if (node.arguments.length !== 2) return f.fail("ABFC2099", "idiv(a, b) takes two arguments", node);
+        const { a, b, kind } = this.numericPair(node.arguments[0]!, node.arguments[1]!, node, "idiv");
+        if (kind !== "int") return f.fail("ABFC2012", `idiv takes int operands, not ${a.type}`, node);
+        return { k: "arith", op: "/", kind: "int", a, b, type: "int", span: sp };
+      }
       if (rt === "createWidget") return this.createWidgetExpr(node, sp);
       if (rt === "spawnActor") return this.spawnExpr(node, sp);
       if (callee.text === "eval") return f.fail("ABFC2020", "eval is not supported", node);
@@ -1481,14 +1487,19 @@ class HirBuilder {
 
   /** Both operands of `+ - * < <= > >=`: same numeric kind (int or real); literals take the other side's type. */
   private numericOperands(node: ts.BinaryExpression): { a: HirExpr; b: HirExpr; kind: "int" | "real" } {
+    return this.numericPair(node.left, node.right, node, node.operatorToken.getText());
+  }
+
+  /** Two operands of a numeric operation (`node` is the whole expression for diagnostics, `opText` names the operator or function). */
+  private numericPair(left: ts.Expression, right: ts.Expression, node: ts.Node, opText: string): { a: HirExpr; b: HirExpr; kind: "int" | "real" } {
     const f: DiagSink = this.sink;
     const strip = (x: ts.Expression): ts.Expression => {
       let y = x;
       while (ts.isParenthesizedExpression(y)) y = y.expression;
       return y;
     };
-    const l = strip(node.left);
-    const r = strip(node.right);
+    const l = strip(left);
+    const r = strip(right);
     let a: HirExpr;
     let b: HirExpr;
     if (this.isLiteralNode(l) && !this.isLiteralNode(r)) {
@@ -1503,7 +1514,7 @@ class HirBuilder {
     if (ka === undefined && kb === undefined) return f.fail("ABFC2014", "the number kind of this expression is not inferable; use int, int64, byte, float or double values", node);
     if (ka !== undefined && kb !== undefined && ka !== kb) return f.fail("ABFC2012", `cannot combine ${a.type} with ${b.type}: operands need the same number kind (int or real)`, node);
     const kind = (ka ?? kb)!;
-    if (kind !== "int" && kind !== "real") return f.fail("ABFC2012", `${node.operatorToken.getText()} needs int or real operands, not ${a.type}`, node);
+    if (kind !== "int" && kind !== "real") return f.fail("ABFC2012", `${opText} needs int or real operands, not ${a.type}`, node);
     return { a, b, kind };
   }
 

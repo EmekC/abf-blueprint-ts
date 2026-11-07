@@ -4,6 +4,8 @@ import type { Diagnostic, IrModule, Span } from "@abfc/ir";
 export interface GateCapabilities {
   containerTypes: { map: boolean; set: boolean };
   createKinds: string[];
+  /** bp_apply feature `event_meta`; absent counts as false. */
+  eventMeta?: boolean;
 }
 
 /**
@@ -35,6 +37,18 @@ export function featureGates(ir: IrModule, caps: GateCapabilities): Diagnostic[]
     for (const v of a.variables) check(v.type, a.path, v.origin);
     for (const v of a.structFields ?? []) check(v.type, a.path, v.origin);
     for (const u of a.units) {
+      if (u.kind === "event" && caps.eventMeta !== true) {
+        const entry = u.nodes.find((n) => n.sem?.k === "event");
+        if (entry?.sem?.k === "event" && entry.sem.meta !== undefined) {
+          out.push({
+            severity: "warning",
+            code: "ABFC2071",
+            asset: a.path,
+            span: u.origin,
+            message: `the doc comment of @event ${u.name} is not written as its Blueprint tooltip: the backend has no bp_apply feature event_meta (update the backend).`,
+          });
+        }
+      }
       for (const v of u.locals) check(v.type, a.path, v.origin);
       for (const p of [...u.signature.inputs, ...u.signature.outputs]) {
         const origin = u.nodes[0]?.origin;
