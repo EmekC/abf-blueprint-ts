@@ -79,7 +79,7 @@ export class FakeBackend implements Backend {
 }
 
 export function result(over: Partial<BpApplyResult> = {}): BpApplyResult {
-  return { ok: true, rolledBack: false, run: "", seconds: 0.5, assets: null, compile: { errors: [], warnings: [] }, ...over };
+  return { ok: true, rolledBack: false, run: "", seconds: 0.5, assets: null, compile: { errors: [], warnings: [] }, rows: [], ...over };
 }
 
 /** Real node name the fake backend gives to a spec node id. */

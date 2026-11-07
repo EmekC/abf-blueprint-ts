@@ -22,6 +22,8 @@ export interface PlanInput {
   missing?: Set<string>;
   /** The backend capability `createKinds`; when given, creating an asset of a kind it lacks is ABFC2044. */
   createKinds?: string[];
+  /** The backend writes class-manager rows (capability `classManagerRows`): a `@director` asset whose manifest has no `directorRow` for it re-runs the defaults pass. */
+  directorRows?: boolean;
 }
 
 export interface PlanResult {
@@ -76,10 +78,12 @@ function tagsOf(snapshot: Map<string, T3dNode>, unitId: string, graph: string): 
 }
 
 /** Does the asset's class defaults pass need to run (hash or stage changed)? */
-function defaultsStale(asset: IrModule["assets"][number], manifest: Manifest | null, stage: StageInfo): boolean {
+function defaultsStale(asset: IrModule["assets"][number], manifest: Manifest | null, stage: StageInfo, directorRows = false): boolean {
   if (asset.classDefaults === undefined && asset.classManagerRow === undefined && asset.director === undefined) return false;
   const hash = classDefaultsHash(asset.classDefaults ?? {}, asset.classManagerRow, asset.director?.asset);
-  return manifest?.classDefaultsHash !== hash || (manifest.classDefaultsStageSyncedAt ?? null) !== stage.syncedAt;
+  if (manifest?.classDefaultsHash !== hash || (manifest.classDefaultsStageSyncedAt ?? null) !== stage.syncedAt) return true;
+  // The backend can write class-manager rows now but the last pass only verified the row (or wrote another one): run the pass again.
+  return directorRows && asset.director !== undefined && manifest.directorRow !== asset.director.asset;
 }
 
 /**
@@ -89,7 +93,7 @@ function defaultsStale(asset: IrModule["assets"][number], manifest: Manifest | n
  */
 export function assetsNeedingRead(
   ir: IrModule,
-  input: { manifests: Map<string, Manifest | null>; stage: StageInfo; forceReplan?: Set<string> },
+  input: { manifests: Map<string, Manifest | null>; stage: StageInfo; forceReplan?: Set<string>; directorRows?: boolean },
 ): Set<string> {
   const out = new Set<string>();
   for (const asset of ir.assets) {
@@ -109,7 +113,7 @@ export function assetsNeedingRead(
       }) ||
       // a unit that is no longer in the TS: its stage nodes are removed (or its manifest entry dropped)
       (manifest?.units.some((mu) => !asset.units.some((unit) => unit.id === mu.id)) ?? false) ||
-      defaultsStale(asset, manifest, input.stage) ||
+      defaultsStale(asset, manifest, input.stage, input.directorRows === true) ||
       fieldsStale(asset, manifest);
     if (need) out.add(asset.path);
   }
@@ -369,7 +373,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
     if (asset.classDefaults !== undefined || asset.classManagerRow !== undefined || asset.director !== undefined) {
       const values = asset.classDefaults ?? {};
       const hash = classDefaultsHash(values, asset.classManagerRow, asset.director?.asset);
-      if (defaultsStale(asset, manifest, input.stage)) {
+      if (defaultsStale(asset, manifest, input.stage, input.directorRows === true)) {
         const classPath = `${asset.path}.${asset.path.slice(asset.path.lastIndexOf("/") + 1)}_C`;
         defaults = {
           classPath,

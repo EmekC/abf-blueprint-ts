@@ -90,6 +90,7 @@ interface Spec {
   struct_fields?: Array<{ name: string; friendly: string; guid: string; type: string }>;
   graphs?: SpecGraph[];
   raw?: Array<{ kind: "graph"; graph: string; text: string } | { kind: "python"; code: string }>;
+  class_manager_row?: { asset_path: string; class_path: string };
 }
 
 export interface RecordedCall {
@@ -122,6 +123,8 @@ export interface FakeBackendOptions {
   eventMeta?: boolean;
   /** The backend has the bp_apply feature `struct_fields` (UserDefinedStruct in `createKinds`; default false). */
   structs?: boolean;
+  /** The backend writes class-manager rows (`classManagerRows` capability, backend 2.5.0; default false). */
+  classManagerRows?: boolean;
 }
 
 /** Name of the unlinked node that `spareNode` adds. */
@@ -355,6 +358,10 @@ export class FakeBackend implements Backend {
   /** Pretend the server runs a warm session: read, apply and compile results say `warm: true` (`lastWarm`). */
   warm = false;
   lastWarm = false;
+  /** Class of every class-manager row the fake stage holds (row asset path -> class path); a resync forgets them. */
+  readonly rowClasses = new Map<string, string>();
+  /** Scripts the `rows` of the next `bp_apply` results (instead of the rows derived from the specs); `null` = derive. */
+  scriptedRows: Array<{ asset: string; created: boolean; changed: boolean }> | null = null;
 
   private readonly infoValue: BackendInfo;
   private readonly withUpdateTarget: boolean;
@@ -376,6 +383,7 @@ export class FakeBackend implements Backend {
     capabilities.stageAudit = o.stageAudit === true;
     capabilities.selfEventCalls = o.selfEventCalls !== false || o.advertiseSelfEventCalls === true;
     capabilities.eventMeta = o.eventMeta === true;
+    capabilities.classManagerRows = o.classManagerRows === true;
     if (o.structs === true) capabilities.createKinds = [...capabilities.createKinds, "UserDefinedStruct"];
     if (o.structs === true) capabilities.createKinds = [...capabilities.createKinds, "UserDefinedStruct"];
     this.infoValue = {
@@ -451,6 +459,7 @@ export class FakeBackend implements Backend {
     if (!this.staged || (o.discardChanges && !this.keepAssetsOnSync)) {
       this.assets = new Map([[RELAY_ASSET, initialAsset(this.withUpdateTarget, this.options)]]);
       this.changed.clear();
+      this.rowClasses.clear();
     }
     this.staged = true;
     this.syncs++;
@@ -492,6 +501,17 @@ export class FakeBackend implements Backend {
     const assets: NonNullable<BpApplyResult["assets"]> = [];
     const castTyped = this.infoValue.capabilities.castObjectPin;
     let specError: string | null = null;
+
+    // Class-manager rows run after all Blueprints (like the real backend): created when missing, class overwritten when it differs.
+    const rowStage = new Map(this.rowClasses);
+    const rows: BpApplyResult["rows"] = [];
+    for (const spec of specs as Spec[]) {
+      const row = spec.class_manager_row;
+      if (row === undefined) continue;
+      const before = rowStage.get(row.asset_path);
+      rows.push({ asset: row.asset_path, created: before === undefined, changed: before !== row.class_path });
+      rowStage.set(row.asset_path, row.class_path);
+    }
 
     (specs as Spec[]).forEach((spec, i) => {
       if (!work.has(spec.asset) && spec.create !== undefined) work.set(spec.asset, { path: spec.asset, variables: [], nodes: [] });
@@ -560,6 +580,10 @@ export class FakeBackend implements Backend {
       for (const a of (specs as Spec[]).map((s) => s.asset)) {
         this.changed.add(`Content/${a.split("/").slice(2).join("/")}.uasset`);
       }
+      for (const r of rows) {
+        this.rowClasses.set(r.asset, rowStage.get(r.asset)!);
+        if (r.created || r.changed) this.changed.add(`Content/${r.asset.split("/").slice(2).join("/")}.uasset`);
+      }
     }
     return {
       ok,
@@ -568,6 +592,7 @@ export class FakeBackend implements Backend {
       seconds: 0.5,
       assets,
       compile: { errors, warnings: [] },
+      rows: ok ? (this.scriptedRows ?? rows) : [],
       // like the real backend, a failed apply always carries `error`: the spec error, else a summary of the compile errors
       ...(ok ? {} : { error: specError ?? `${errors.length} compile error(s) in the edited assets` }),
     };

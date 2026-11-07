@@ -120,6 +120,19 @@ function compileList(v: unknown): CompileMessage[] {
   return Array.isArray(v) ? v.map(compileMessage) : [];
 }
 
+/** The top-level `rows` of a `bp_apply` result (class-manager rows, backend 2.5.0): `[{ asset, created, changed }]`; entries without an asset are dropped. */
+function rowList(v: unknown): BpApplyResult["rows"] {
+  if (!Array.isArray(v)) return [];
+  const out: BpApplyResult["rows"] = [];
+  for (const r of v) {
+    if (!isObject(r)) continue;
+    const asset = str(r.asset);
+    if (asset === null || asset === "") continue;
+    out.push({ asset, created: r.created === true, changed: r.changed === true });
+  }
+  return out;
+}
+
 export class BpApplyBackend implements Backend {
   private readonly client: McpStdioClient;
   private readonly serverDir: string;
@@ -259,6 +272,7 @@ export class BpApplyBackend implements Backend {
           })
         : null,
       compile: { errors: compileList(compile.errors), warnings: compileList(compile.warnings) },
+      rows: rowList(json.rows),
     };
     let error = str(json.error);
     if (error === "invalid spec" && Array.isArray(json.problems) && json.problems.length > 0) {

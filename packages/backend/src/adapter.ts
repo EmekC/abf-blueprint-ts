@@ -40,6 +40,8 @@ export interface BpApplyAssetSpec {
   variables?: Array<{ name: string; type: string; flags: number }>;
   graphs?: BpGraphSpec[];
   raw?: Array<{ kind: "graph"; graph: string; text: string } | { kind: "python"; code: string }>;
+  /** Backend 2.5.0 (bp_apply feature `class_manager_row`): write the class-manager row of a `@director` class after the Blueprints are saved. */
+  class_manager_row?: { asset_path: string; class_path: string };
 }
 
 function refused(n: IrNode, what: string): AbfcError {
@@ -247,6 +249,8 @@ export interface AssetApplyOutcome {
   defaultsApplied: boolean;
   /** Warnings of pass 5: ABFC2070 (class manager row), ABFC5102 (the pass failed; it is repeated by the next build). */
   defaultsWarnings: Diagnostic[];
+  /** The class-manager row the backend wrote for the asset's `@director` in pass 5 (`created`/`changed` as reported); absent without the capability. */
+  directorRow?: { asset: string; created: boolean; changed: boolean };
 }
 
 export interface ApplyOutcome {
@@ -278,16 +282,34 @@ function patchRefs(a: AssetPlan, spec: BpApplyAssetSpec, caps: BackendCapabiliti
 }
 
 /** Spec of the class-defaults pass of one asset: one fixed Python template (see defaults-template.ts). */
-export function renderDefaultsSpec(a: AssetPlan): BpApplyAssetSpec {
+export function renderDefaultsSpec(a: AssetPlan, caps: BackendCapabilities): BpApplyAssetSpec {
   const d = a.defaults!;
-  return { asset: a.asset, raw: [{ kind: "python", code: renderDefaultsCode(d.classPath, d.values, d.director?.asset ?? d.classManagerRow) }] };
+  // With the capability the backend writes the `@director` row (`class_manager_row`); without it the row is only verified by the template.
+  const writes = d.director !== undefined && caps.classManagerRows;
+  const verify = d.director !== undefined ? (writes ? undefined : d.director.asset) : d.classManagerRow;
+  const spec: BpApplyAssetSpec = { asset: a.asset, raw: [{ kind: "python", code: renderDefaultsCode(d.classPath, d.values, verify) }] };
+  if (writes) spec.class_manager_row = { asset_path: d.director!.asset, class_path: d.director!.classPath };
+  return spec;
 }
 
 /** Pass 5: class defaults of every asset whose plan has a `defaults` item. A failure is a warning (the next build repeats it). */
-async function applyDefaultsPass(backend: Backend, plan: ApplyPlan, perAsset: AssetApplyOutcome[], o: ApplyOptions): Promise<void> {
+async function applyDefaultsPass(backend: Backend, plan: ApplyPlan, perAsset: AssetApplyOutcome[], caps: BackendCapabilities, o: ApplyOptions): Promise<void> {
   const targets = plan.assets.map((a, i) => ({ a, i })).filter((x) => x.a.defaults !== undefined);
   if (targets.length === 0) return;
-  const specs = targets.map((x) => renderDefaultsSpec(x.a));
+  const specs = targets.map((x) => renderDefaultsSpec(x.a, caps));
+  // Without the backend capability a @director row is only verified: say so once per asset.
+  if (!caps.classManagerRows) {
+    for (const { a, i } of targets) {
+      if (a.defaults!.director === undefined) continue;
+      perAsset[i]!.defaultsWarnings.push({
+        severity: "warning",
+        code: "ABFC2077",
+        asset: a.asset,
+        message: `the backend cannot write class-manager rows; update abf-mod-editor-mcp to 2.5.0 or newer. The row ${a.defaults!.director.asset} is only checked, not written.`,
+        fix: "update abf-mod-editor-mcp to 2.5.0 or newer, or create the row in the Mod Editor.",
+      });
+    }
+  }
   const r = await backend.applySpecs(plan.mod, specs, { label: "defaults", cacheDir: o.cacheDir });
   o.record("apply.defaults", r.seconds);
   for (const { a, i } of targets) {
@@ -301,6 +323,21 @@ async function applyDefaultsPass(backend: Backend, plan: ApplyPlan, perAsset: As
         fix: "run abfc build again; the pass is repeated.",
       });
       continue;
+    }
+    const want = a.defaults!.director;
+    if (want !== undefined && caps.classManagerRows) {
+      const row = r.rows.find((x) => x.asset.toLowerCase() === want.asset.toLowerCase());
+      if (row === undefined) {
+        out.defaultsWarnings.push({
+          severity: "warning",
+          code: "ABFC5102",
+          asset: a.asset,
+          message: `the backend did not report the class-manager row ${want.asset} for ${a.asset}. The row is not confirmed.`,
+          fix: "run abfc build again; the pass is repeated.",
+        });
+        continue;
+      }
+      out.directorRow = { asset: want.asset, created: row.created, changed: row.changed };
     }
     out.defaultsApplied = true;
     const text = [r.logTail ?? "", ...r.compile.warnings.map((w) => w.message)].join("\n");
@@ -324,7 +361,7 @@ export async function applyPlan(
   const unitAssets = plan.assets.filter((a) => a.create !== undefined || a.struct !== undefined || a.units.length > 0 || a.variables.length > 0 || (a.removeUnits?.length ?? 0) > 0 || (a.removeTags?.length ?? 0) > 0);
   if (unitAssets.length === 0) {
     const only: AssetApplyOutcome[] = plan.assets.map((a) => ({ asset: a.asset, nodeIds: {}, finalText: null, compile: [], tagName: null, tagNames: {}, defaultsApplied: false, defaultsWarnings: [] }));
-    await applyDefaultsPass(backend, plan, only, o);
+    await applyDefaultsPass(backend, plan, only, caps, o);
     return { ok: true, perAsset: only };
   }
   const specs =unitAssets.map((a) => renderMainSpec(a, caps, profile));
@@ -404,6 +441,6 @@ export async function applyPlan(
       out.finalText = readFinal(tag.run, ti) ?? out.finalText;
     });
   }
-  await applyDefaultsPass(backend, plan, perAsset, o);
+  await applyDefaultsPass(backend, plan, perAsset, caps, o);
   return { ok: true, perAsset };
 }

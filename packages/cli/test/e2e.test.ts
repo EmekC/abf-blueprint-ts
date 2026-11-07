@@ -1646,3 +1646,51 @@ test("a @struct with a backend that cannot create a UserDefinedStruct is ABFC204
     assert.equal(r.backend.calls.filter((c) => c.tool === "bp_apply").length, 0);
   });
 });
+
+const DIRECTOR_ROW = "/TestMod/DataTables/DT_ClassManager/EntityDirector_Test";
+
+function addDirector(dir: string, row = "EntityDirector_Test"): void {
+  const file = join(dir, "src", "Relay.ts");
+  const text = readFileSync(file, "utf8").replace(/@director\("[^"]*"\)\n/, "");
+  const withImport = text.includes("director") ? text : `import { director } from "@abfc/runtime";\n${text}`;
+  writeFileSync(file, withImport.replace("@blueprint(", `@director("${row}")\n@blueprint(`), "utf8");
+}
+
+test("(row1) @director with the classManagerRows capability: the spec carries class_manager_row, the manifest records directorRow, publish lists the row; a new row name warns ABFC5013", async () => {
+  await withRig({ handMadeEvent: false, classManagerRows: true }, async (r) => {
+    addDirector(r.dir);
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    const defaults = r.backend.calls.filter((c) => c.tool === "bp_apply" && c.label === "defaults");
+    assert.equal(defaults.length, 1);
+    assert.deepEqual(defaults[0]!.specs![0]!.class_manager_row, { asset_path: DIRECTOR_ROW, class_path: "/TestMod/Relay/BP_Relay.BP_Relay_C" });
+    assert.doesNotMatch(r.backend.pythonCode[0]!.code, /row_asset/);
+    assert.match(x.out, /class-manager row \/TestMod\/DataTables\/DT_ClassManager\/EntityDirector_Test: created/);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)?.directorRow, DIRECTOR_ROW);
+    assert.doesNotMatch(x.out, /ABFC2077|ABFC5013/);
+
+    const p = await r.run(["publish", "--dry-run"]);
+    assert.match(p.out, /DataTables\/DT_ClassManager\/EntityDirector_Test\.uasset/);
+
+    x = await r.run(["build"]);
+    assert.match(x.out, /up to date/);
+
+    addDirector(r.dir, "EntityDirector_Other");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC5013: the previous class-manager row \/TestMod\/DataTables\/DT_ClassManager\/EntityDirector_Test stays in the mod; delete it in the Mod Editor/);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)?.directorRow, "/TestMod/DataTables/DT_ClassManager/EntityDirector_Other");
+  });
+});
+
+test("(row2) @director without the capability keeps the verify route and warns ABFC2077; no directorRow is recorded", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    addDirector(r.dir);
+    const x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC2077: the backend cannot write class-manager rows; update abf-mod-editor-mcp to 2\.5\.0 or newer/);
+    assert.equal(r.backend.calls.find((c) => c.label === "defaults")!.specs![0]!.class_manager_row, undefined);
+    assert.match(r.backend.pythonCode[0]!.code, /row_asset = unreal\.load_asset\("\/TestMod\/DataTables\/DT_ClassManager\/EntityDirector_Test"\)/);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)?.directorRow, undefined);
+  });
+});

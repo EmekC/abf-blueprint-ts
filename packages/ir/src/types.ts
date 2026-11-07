@@ -105,6 +105,8 @@ export interface BackendCapabilities {
   selfEventCalls: boolean;
   /** bp_apply feature `event_meta`: an `event` node may carry `meta` ({tooltip, category, keywords}). */
   eventMeta: boolean;
+  /** `backend_info.capabilities.classManagerRows` (backend 2.5.0) AND bp_apply feature `class_manager_row`: the defaults spec may carry `class_manager_row`. */
+  classManagerRows: boolean;
   bpApplyFeatures: string[];
   nodeKinds: string[];
   /** `mod_audit` can audit the stage (false in Phase 1: it audits the real mod). */

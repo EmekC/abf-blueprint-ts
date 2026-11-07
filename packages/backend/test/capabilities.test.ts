@@ -142,3 +142,11 @@ test("compileErrorNodeRefs comes from backend_info without the abfc_extensions t
   assert.equal(capabilitiesFrom(ALL_TOOLS, info, null).compileErrorNodeRefs, true);
   assert.equal(capabilitiesFrom(ALL_TOOLS, FIX_INFO, null).compileErrorNodeRefs, false);
 });
+
+test("classManagerRows needs capabilities.classManagerRows AND the bp_apply feature class_manager_row", () => {
+  const feat = (features: string[], flag: boolean): RawBackendInfo => ({ protocol: 1, bpApply: { features }, capabilities: { classManagerRows: flag } }) as RawBackendInfo;
+  assert.equal(capabilitiesFrom([], feat(["class_manager_row"], true), null).classManagerRows, true);
+  assert.equal(capabilitiesFrom([], feat([], true), null).classManagerRows, false);
+  assert.equal(capabilitiesFrom([], feat(["class_manager_row"], false), null).classManagerRows, false);
+  assert.equal(capabilitiesFrom([], null, null).classManagerRows, false);
+});

@@ -37,6 +37,7 @@ export interface RawBackendInfo {
     compileErrorNodeRefs?: unknown;
     functionLocals?: unknown;
     createKinds?: unknown;
+    classManagerRows?: unknown;
   } | null;
   bpApply?: { features?: unknown; nodeKinds?: unknown } | null;
 }
@@ -68,6 +69,7 @@ export const BP_APPLY_P1_BASE: BackendCapabilities = {
   castObjectPin: false,
   selfEventCalls: false,
   eventMeta: false,
+  classManagerRows: false,
   bpApplyFeatures: [],
   nodeKinds: [],
   backendContainerTypes: null,
@@ -121,6 +123,7 @@ export function capabilitiesFrom(
     castObjectPin: bpApplyFeatures.includes("cast_object_pin"),
     selfEventCalls: bpApplyFeatures.includes("self_event_calls"),
     eventMeta: bpApplyFeatures.includes("event_meta"),
+    classManagerRows: bool(info?.capabilities?.classManagerRows) && bpApplyFeatures.includes("class_manager_row"),
     nodeKinds: strings(info?.bpApply?.nodeKinds),
     backendContainerTypes:
       rawContainers === null

@@ -43,6 +43,8 @@ export interface BpApplyResult {
   seconds: number;
   assets: Array<{ asset: string; node_ids: Record<string, Record<string, string>>; final?: string }> | null;
   compile: { errors: CompileMessage[]; warnings: CompileMessage[] };
+  /** Class-manager rows the backend wrote after the Blueprints were saved (backend 2.5.0); empty when the spec carried none. */
+  rows: Array<{ asset: string; created: boolean; changed: boolean }>;
   /** The apply ran on the warm session. */
   warm?: boolean;
   error?: string;

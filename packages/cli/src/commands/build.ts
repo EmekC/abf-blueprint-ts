@@ -184,7 +184,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   // Assets that cannot have anything to plan are not read (no drift check there; `abfc status` still reads everything), unless `readAll`.
   const tRead = performance.now();
   const existing = owned.filter((a) => !missing.has(a.path));
-  const toRead = readAll ? new Set(existing.map((a) => a.path)) : assetsNeedingRead({ ...ir, assets: existing }, { manifests, stage, forceReplan });
+  const toRead = readAll ? new Set(existing.map((a) => a.path)) : assetsNeedingRead({ ...ir, assets: existing }, { manifests, stage, forceReplan, directorRows: caps.classManagerRows });
   const readAssets = existing.filter((a) => toRead.has(a.path));
   const skipped = existing.filter((a) => !toRead.has(a.path));
   const snapshots = new Map<string, Map<string, T3dNode>>();
@@ -218,6 +218,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     selfEventCalls: caps.selfEventCalls,
     missing,
     createKinds: caps.createKinds,
+    directorRows: caps.classManagerRows,
   });
   if (emitAll(ctx, planned.diagnostics)) return false;
   for (const a of skipped) for (const u of a.units) planned.upToDate.push(`${a.path} ${u.id}`);
@@ -351,6 +352,19 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     const defaultsDone = a.defaults !== undefined && outcome.defaultsApplied;
     const classDefaultsHash = defaultsDone ? a.defaults!.hash : old?.classDefaultsHash;
     const classDefaultsStageSyncedAt = defaultsDone ? stage.syncedAt : old?.classDefaultsStageSyncedAt;
+    // The class-manager row the backend wrote for `@director` (recorded with the defaults hash, only after pass 5 succeeded).
+    const directorRow = defaultsDone && outcome.directorRow !== undefined ? outcome.directorRow.asset : old?.directorRow;
+    if (defaultsDone && outcome.directorRow !== undefined && (outcome.directorRow.created || outcome.directorRow.changed)) {
+      output.info(`class-manager row ${outcome.directorRow.asset}: ${outcome.directorRow.created ? "created" : "updated"}`);
+    }
+    if (defaultsDone && outcome.directorRow !== undefined && old?.directorRow !== undefined && old.directorRow.toLowerCase() !== outcome.directorRow.asset.toLowerCase()) {
+      output.diag({
+        severity: "warning",
+        code: "ABFC5013",
+        asset: a.asset,
+        message: `the previous class-manager row ${old.directorRow} stays in the mod; delete it in the Mod Editor`,
+      });
+    }
     const appliedIds = new Set(a.units.map((p) => p.unit.id));
     // Removed from the stage, not published yet: `abfc publish` lists the asset until a publish clears this.
     const retiredUnpublished = [...new Set([...(old?.retiredUnpublished ?? []), ...retired])].sort();
@@ -363,6 +377,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
       variables,
       ...(classDefaultsHash !== undefined ? { classDefaultsHash } : {}),
       ...(classDefaultsStageSyncedAt !== undefined ? { classDefaultsStageSyncedAt } : {}),
+      ...(directorRow !== undefined ? { directorRow } : {}),
       ...(retiredUnpublished.length > 0 ? { retiredUnpublished } : {}),
       ...(source !== undefined ? { source } : {}),
     };
@@ -375,6 +390,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
       units: units.map((u) => (appliedIds.has(u.id) ? { ...u, irHash: "" } : u)),
       ...(old?.classDefaultsHash !== undefined ? { classDefaultsHash: old.classDefaultsHash } : {}),
       ...(old?.classDefaultsStageSyncedAt !== undefined ? { classDefaultsStageSyncedAt: old.classDefaultsStageSyncedAt } : {}),
+      ...(old?.directorRow !== undefined ? { directorRow: old.directorRow } : {}),
       ...(retiredUnpublished.length > 0 ? { retiredUnpublished } : {}),
       ...(source !== undefined ? { source } : {}),
     });
