@@ -2,8 +2,9 @@
 import { win32 } from "node:path";
 import type { Backend } from "@abfc/backend";
 import { buildHir, loadProgram, lowerChecked } from "@abfc/compiler";
-import type { HirProgram, LoadedProgram } from "@abfc/compiler";
+import type { CompilerProjectConfig, HirProgram, LoadedProgram } from "@abfc/compiler";
 import { AbfcError } from "@abfc/env";
+import type { ProjectConfig } from "@abfc/env";
 import { parseExport } from "@abfc/ir";
 import type { BackendInfo, Diagnostic, IrModule, T3dExport } from "@abfc/ir";
 import { checkLock, readLock } from "@abfc/stubgen";
@@ -13,6 +14,16 @@ import { formatTimings, recordRun } from "../runs.js";
 import type { RunEntry } from "../runs.js";
 
 export const COMPILER_ID = "abfc 0.1.0";
+
+/** What the compiler frontend needs from the project config (derived asset paths, migration hints). */
+export function compilerConfigOf(config: ProjectConfig): CompilerProjectConfig {
+  return {
+    mod: config.mod.name,
+    sourceRoot: config.sourceRoot,
+    migrationHints: config.schemaVersion >= 2,
+    classManagerTable: config.classManager.table,
+  };
+}
 
 /** Seconds since `t0` (a `performance.now()` value). */
 export const since = (t0: number): number => (performance.now() - t0) / 1000;
@@ -70,7 +81,7 @@ export interface Frontend {
 /** TypeScript program -> HIR -> IR, printing every diagnostic. */
 export function compileFrontend(ctx: CliContext): Frontend {
   const loaded = loadProgram(ctx.projectDir);
-  const hir = buildHir(loaded, { mod: ctx.config.mod.name }, ctx.env.profile);
+  const hir = buildHir(loaded, compilerConfigOf(ctx.config), ctx.env.profile);
   const diags = [...loaded.diagnostics, ...hir.diagnostics];
   emitAll(ctx, diags);
   if (hasError(diags)) return { loaded, hir, ir: null };

@@ -1,6 +1,7 @@
 // The check path shared by `abfc check` and the language service: HIR -> IR -> tests, as one list of diagnostics.
 import { validateIrModule } from "@abfc/ir";
 import type { Diagnostic, IrModule, Profile } from "@abfc/ir";
+import type { CompilerProjectConfig } from "./frontend/assetpaths.js";
 import { buildHir } from "./frontend/build.js";
 import type { LoadedProgram } from "./frontend/program.js";
 import { compileTests } from "./frontend/tests.js";
@@ -35,7 +36,7 @@ export interface ProjectCheck {
 }
 
 /** Whole-project check: all class files -> HIR -> (when clean) IR -> test cases. */
-export function checkProject(loaded: LoadedProgram, config: { mod: string }, profile: Profile): ProjectCheck {
+export function checkProject(loaded: LoadedProgram, config: CompilerProjectConfig, profile: Profile): ProjectCheck {
   const hir = buildHir(loaded, config, profile);
   const diagnostics: Diagnostic[] = [...hir.diagnostics];
   const failed = [...loaded.diagnostics, ...hir.diagnostics].some((d) => d.severity === "error");
@@ -43,7 +44,7 @@ export function checkProject(loaded: LoadedProgram, config: { mod: string }, pro
   const lowered = lowerChecked(hir, profile);
   diagnostics.push(...lowered.diagnostics);
   if (lowered.ir === null) return { hir, ir: null, diagnostics, tests: 0 };
-  const compiled = compileTests(loaded, profile);
+  const compiled = compileTests(loaded, profile, undefined, config);
   diagnostics.push(...compiled.diagnostics);
   return { hir, ir: lowered.ir, diagnostics, tests: compiled.cases.length };
 }

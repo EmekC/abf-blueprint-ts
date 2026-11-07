@@ -33,7 +33,11 @@ export interface SpawnOptions {
 }
 
 export interface BlueprintOptions {
-  path: string;
+  /**
+   * Optional override of the asset path, relative to the mod (`"Relays/OldName"`). Without it the path derives from the file
+   * location under the source root and the class name.
+   */
+  path?: string;
   parent?: string;
   replicates?: boolean;
   alwaysRelevant?: boolean;
@@ -50,17 +54,20 @@ export interface BlueprintOptions {
 }
 
 export interface StructOptions {
-  /** Package path of the struct asset under the mod, e.g. `/ExampleMod/Structs/S_Entry` (the object path is `<path>.<AssetName>`). */
-  path: string;
+  /**
+   * Optional override of the struct asset path, relative to the mod (`"Structs/S_Entry"`). Without it the path derives from the
+   * file location under the source root and the class name. The object path is `<path>.<AssetName>`.
+   */
+  path?: string;
 }
 
-export declare function blueprint(o: BlueprintOptions): <T extends abstract new (...a: any) => any>(c: T, ctx: ClassDecoratorContext<T>) => void;
+export declare function blueprint(o?: BlueprintOptions): <T extends abstract new (...a: any) => any>(c: T, ctx: ClassDecoratorContext<T>) => void;
 /**
  * A mod-defined struct (UserDefinedStruct) created by abfc. Declare the fields as `Name!: Type;` (no initializer, no methods, no
  * `extends`, no containers). Use the class as a type: an object literal where it is expected becomes a Make Struct node and
  * reading a member of a value of it becomes a Break Struct node. Changing the fields after the struct was created is not supported yet.
  */
-export declare function struct(o: StructOptions): <T extends abstract new (...a: any) => any>(c: T, ctx: ClassDecoratorContext<T>) => void;
+export declare function struct(o?: StructOptions): <T extends abstract new (...a: any) => any>(c: T, ctx: ClassDecoratorContext<T>) => void;
 export declare function event(m: (this: any, ...a: any[]) => void, ctx: ClassMethodDecoratorContext): void;
 export declare function override(m: (this: any, ...a: any[]) => void, ctx: ClassMethodDecoratorContext): void;
 export declare function createWidget<T>(cls: abstract new (...a: never[]) => T, owningPlayer: object | null): T;

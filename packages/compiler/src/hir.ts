@@ -12,6 +12,8 @@ export interface HirClass {
   name: string;
   /** Package path, e.g. "/Mod/Dir/BP_X". */
   path: string;
+  /** True when the path was derived from the file location (no `path:` option). */
+  pathDerived: boolean;
   /** `<path>.<AssetName>_C`. */
   classPath: string;
   /** Class path of the parent (`@bpPath` of the `extends` class). */
@@ -125,6 +127,8 @@ export interface HirStruct {
   name: string;
   /** Package path, e.g. "/Mod/Dir/S_X". */
   path: string;
+  /** True when the path was derived from the file location (no `path:` option). */
+  pathDerived: boolean;
   /** `<path>.<AssetName>`. */
   objectPath: string;
   fields: HirStructField[];

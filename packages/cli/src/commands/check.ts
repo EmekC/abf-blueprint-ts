@@ -6,7 +6,7 @@ import { AbfcError } from "@abfc/env";
 import { loadContext } from "../context.js";
 import type { CliContext, CliDeps } from "../context.js";
 import { Output } from "../output.js";
-import { Recorder, countUnits, emitAll, hasErrors, lockDiagnostics, since } from "./common.js";
+import { Recorder, compilerConfigOf, countUnits, emitAll, hasErrors, lockDiagnostics, since } from "./common.js";
 
 /**
  * Lock check, TypeScript check, HIR, lowering and test compilation. Returns true when there is no error.
@@ -21,7 +21,7 @@ export async function runCheck(ctx: CliContext, rec: Recorder, state?: { oldProg
   const loaded = loadProgram(ctx.projectDir, state?.oldProgram);
   if (state) state.oldProgram = loaded.program;
   emitAll(ctx, loaded.diagnostics);
-  const result = checkProject(loaded, { mod: ctx.config.mod.name }, ctx.env.profile);
+  const result = checkProject(loaded, compilerConfigOf(ctx.config), ctx.env.profile);
   emitAll(ctx, result.diagnostics);
   const ok = result.ir !== null && !hasErrors(ctx);
   rec.record("check.frontend", since(t0), ok, result.ir === null ? 0 : countUnits(result.ir));

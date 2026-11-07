@@ -13,7 +13,7 @@ import {
   ownedManualFilter,
   tsDiagnostics,
 } from "@abfc/compiler";
-import type { LoadedProgram, ProjectCheck, TextEdit } from "@abfc/compiler";
+import type { CompilerProjectConfig, LoadedProgram, ProjectCheck, TextEdit } from "@abfc/compiler";
 import { findProjectDir, loadProfile, loadProjectConfig } from "@abfc/env";
 import type { PluginInfo } from "./info.js";
 
@@ -66,11 +66,17 @@ export function createService(tsMod: typeof ts, info: PluginInfo): AbfcService |
     return null;
   }
   let projectDir: string;
-  let modName: string;
+  let compilerConfig: CompilerProjectConfig;
   let profile: ReturnType<typeof loadProfile>;
   try {
     projectDir = findProjectDir(info.project.getCurrentDirectory());
-    modName = loadProjectConfig(projectDir).mod.name;
+    const cfg = loadProjectConfig(projectDir);
+    compilerConfig = {
+      mod: cfg.mod.name,
+      sourceRoot: cfg.sourceRoot,
+      migrationHints: cfg.schemaVersion >= 2,
+      classManagerTable: cfg.classManager.table,
+    };
     profile = loadProfile();
   } catch (e) {
     log(`disabled: ${e instanceof Error ? e.message : String(e)}`);
@@ -131,7 +137,7 @@ export function createService(tsMod: typeof ts, info: PluginInfo): AbfcService |
     let entry = cache.get(program);
     if (entry === undefined) {
       const loaded = loadedFromProgram(projectDir, program, tsDiagnostics(program, projectDir));
-      entry = { loaded, check: checkProject(loaded, { mod: modName }, profile) };
+      entry = { loaded, check: checkProject(loaded, compilerConfig, profile) };
       cache.set(program, entry);
     }
     return entry;

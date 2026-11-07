@@ -1,6 +1,7 @@
 // Reads the `@bp*` JSDoc tags of generated stubs (design 5.1) and maps TypeScript types to bp_apply type grammar.
 import ts from "typescript";
 import type { BpType } from "../hir.js";
+import { assetPathOf } from "./assetpaths.js";
 import { udsMemberName } from "./structnames.js";
 
 /** Tag name without the `@` -> comments, e.g. `bpPath` -> ["/Script/Engine.Actor"]. */
@@ -125,18 +126,18 @@ export function tsBlueprintOfDecl(decl: ts.ClassDeclaration): { path: string; wi
   for (const d of ts.getDecorators(decl) ?? []) {
     const e = d.expression;
     if (!ts.isCallExpression(e) || !ts.isIdentifier(e.expression) || e.expression.text !== "blueprint") continue;
-    const opts = e.arguments[0];
-    if (!opts || !ts.isObjectLiteralExpression(opts)) continue;
-    let path: string | undefined;
+    const path = assetPathOf(decl, "blueprint")?.path;
+    if (path === undefined || path === "") continue;
     let widget = false;
-    for (const p of opts.properties) {
-      if (!ts.isPropertyAssignment(p) || !(ts.isIdentifier(p.name) || ts.isStringLiteral(p.name))) continue;
-      const init = p.initializer;
-      if (!ts.isStringLiteral(init) && !ts.isNoSubstitutionTemplateLiteral(init)) continue;
-      if (p.name.text === "path") path = init.text;
-      else if (p.name.text === "kind") widget = init.text === "widget";
+    const opts = e.arguments[0];
+    if (opts && ts.isObjectLiteralExpression(opts)) {
+      for (const p of opts.properties) {
+        if (!ts.isPropertyAssignment(p) || !(ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) || p.name.text !== "kind") continue;
+        const init = p.initializer;
+        if (ts.isStringLiteral(init) || ts.isNoSubstitutionTemplateLiteral(init)) widget = init.text === "widget";
+      }
     }
-    if (path !== undefined && path !== "") return { path, widget };
+    return { path, widget };
   }
   return undefined;
 }
@@ -159,16 +160,9 @@ export function tsStructOfDecl(decl: ts.ClassDeclaration): { path: string; objec
   for (const d of ts.getDecorators(decl) ?? []) {
     const e = d.expression;
     if (!ts.isCallExpression(e) || !ts.isIdentifier(e.expression) || e.expression.text !== "struct") continue;
-    const opts = e.arguments[0];
-    if (!opts || !ts.isObjectLiteralExpression(opts)) continue;
-    for (const p of opts.properties) {
-      if (!ts.isPropertyAssignment(p) || !(ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) || p.name.text !== "path") continue;
-      const init = p.initializer;
-      if (!ts.isStringLiteral(init) && !ts.isNoSubstitutionTemplateLiteral(init)) continue;
-      const path = init.text;
-      if (path === "" || path.endsWith("/")) continue;
-      return { path, objectPath: `${path}.${path.slice(path.lastIndexOf("/") + 1)}` };
-    }
+    const path = assetPathOf(decl, "struct")?.path;
+    if (path === undefined || path === "" || path.endsWith("/")) continue;
+    return { path, objectPath: `${path}.${path.slice(path.lastIndexOf("/") + 1)}` };
   }
   return undefined;
 }

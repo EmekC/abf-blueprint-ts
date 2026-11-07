@@ -3,9 +3,11 @@ import ts from "typescript";
 import { BpTypeError, parseBpType } from "@abfc/ir";
 import type { Diagnostic, Profile, Span } from "@abfc/ir";
 import type { BpType, HirClass, HirEvent, HirField, HirExpr, HirProgram, HirStmt, HirStruct, LocalId } from "../hir.js";
+import { assetPathOf, bindPathContext } from "./assetpaths.js";
+import type { AssetPathInfo, CompilerProjectConfig } from "./assetpaths.js";
 import { DiagSink, Fail, relFile, spanOf } from "./diag.js";
 import type { LoadedProgram } from "./program.js";
-import { BLUEPRINT_META, WIDGET_META, bpPathOf, bpTagsOfSymbol, bpTypeOf, bpTypeOfMember, classInfo, classPathOf, functionInfo, ownEventInfo, resolveAlias, splitMemberPath, tsStructMemberName, tsStructOfDecl } from "./tags.js";
+import { BLUEPRINT_META, WIDGET_META, bpPathOf, bpTagsOfSymbol, bpTypeOf, bpTypeOfMember, classInfo, classPathOf, functionInfo, ownEventInfo, resolveAlias, splitMemberPath, tsStructMemberName } from "./tags.js";
 import { udsMemberName } from "./structnames.js";
 import type { FunctionInfo } from "./tags.js";
 
@@ -85,19 +87,24 @@ export function runtimeName(checker: ts.TypeChecker, expr: ts.Expression): strin
   return imp && imp.module === "@abfc/runtime" ? imp.name : undefined;
 }
 
-/** `path` option of the `@blueprint({ path })` decorator of a class declaration. */
+/** Asset path of a class declaration carrying `@blueprint(...)`: the `path` option, else the path derived from the file location. */
 export function blueprintPathOf(checker: ts.TypeChecker, decl: ts.ClassDeclaration): string | undefined {
   for (const d of ts.getDecorators(decl) ?? []) {
     if (runtimeName(checker, d.expression) !== "blueprint" || !ts.isCallExpression(d.expression)) continue;
-    const opts = d.expression.arguments[0];
-    if (!opts || !ts.isObjectLiteralExpression(opts)) continue;
-    for (const p of opts.properties) {
-      if (ts.isPropertyAssignment(p) && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) && p.name.text === "path") {
-        if (ts.isStringLiteral(p.initializer) || ts.isNoSubstitutionTemplateLiteral(p.initializer)) return p.initializer.text;
-      }
-    }
+    return assetPathOf(decl, "blueprint")?.path;
   }
   return undefined;
+}
+
+/** Reports the problems of an asset path; true when one of them is an error. */
+function reportPathProblems(sink: DiagSink, info: AssetPathInfo, mapCode?: (code: string) => string): boolean {
+  let failed = false;
+  for (const p of info.problems) {
+    sink.report(p.severity, mapCode ? mapCode(p.code) : p.code, p.message, p.node);
+    if (p.fix !== undefined) sink.diagnostics[sink.diagnostics.length - 1]!.fix = p.fix;
+    if (p.severity === "error") failed = true;
+  }
+  return failed;
 }
 
 function children(e: HirExpr): HirExpr[] {
@@ -239,7 +246,6 @@ class HirBuilder {
     }
     if (!bp) return;
     const name = node.name?.text ?? "(anonymous)";
-    let path: string | undefined;
     let parentOption: string | undefined;
     let classManagerRow: string | undefined;
     let widget = false;
@@ -249,8 +255,9 @@ class HirBuilder {
       for (const p of opts.properties) {
         const key = ts.isPropertyAssignment(p) && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) ? p.name.text : undefined;
         const lit = ts.isPropertyAssignment(p) && (ts.isStringLiteral(p.initializer) || ts.isNoSubstitutionTemplateLiteral(p.initializer)) ? p.initializer.text : undefined;
-        if (key === "path") path = lit;
-        else if (key === "parent") parentOption = lit;
+        if (key === "path") {
+          // the asset path is resolved by assetPathOf below
+        } else if (key === "parent") parentOption = lit;
         else if (key === "classManagerRow") classManagerRow = lit;
         else if (key === "tickEnabled") {
           this.sink.error(
@@ -279,7 +286,14 @@ class HirBuilder {
         } else this.sink.warning("ABFC2099", `@blueprint option "${key ?? "?"}" is not supported`, p);
       }
     }
-    if (path === undefined || !path.startsWith(`/${this.mod}/`) || path.endsWith("/")) {
+    const pathInfo = assetPathOf(node, "blueprint");
+    if (pathInfo === undefined) {
+      this.sink.error("ABFC2001", `@blueprint path of ${name} must be a string literal under "/${this.mod}/"`, opts ?? bp);
+      return;
+    }
+    if (reportPathProblems(this.sink, pathInfo)) return;
+    const path = pathInfo.path;
+    if (path === undefined) {
       this.sink.error("ABFC2001", `@blueprint path of ${name} must be a string literal under "/${this.mod}/"`, opts ?? bp);
       return;
     }
@@ -320,6 +334,7 @@ class HirBuilder {
     const cls: HirClass = {
       name,
       path,
+      pathDerived: pathInfo.explicit === undefined,
       classPath: classPathOf(path),
       parent,
       span: this.sp(node.name ?? node),
@@ -388,13 +403,16 @@ class HirBuilder {
    */
   private structDecl(node: ts.ClassDeclaration, dec: ts.Decorator): void {
     const name = node.name?.text ?? "(anonymous)";
-    const before = this.sink.diagnostics.length;
+    const errors = (): number => this.sink.diagnostics.filter((d) => d.severity === "error").length;
+    const before = errors();
     const bad = (why: string, at: ts.Node): void => this.sink.error("ABFC2046", why, at);
-    const s = tsStructOfDecl(node);
-    if (s === undefined || !s.path.startsWith(`/${this.mod}/`)) {
-      bad(`@struct path of ${name} must be a string literal under "/${this.mod}/"`, dec);
+    const pathInfo = assetPathOf(node, "struct");
+    // a path outside the mod stays ABFC2046 for structs (the code structs have always used)
+    if (pathInfo === undefined || reportPathProblems(this.sink, pathInfo, (c) => (c === "ABFC2001" ? "ABFC2046" : c)) || pathInfo.path === undefined) {
+      if (pathInfo === undefined || pathInfo.problems.every((p) => p.severity !== "error")) bad(`@struct path of ${name} must be a string literal under "/${this.mod}/"`, dec);
       return;
     }
+    const s = { path: pathInfo.path, objectPath: `${pathInfo.path}.${pathInfo.path.slice(pathInfo.path.lastIndexOf("/") + 1)}` };
     if (node.heritageClauses !== undefined && node.heritageClauses.length > 0) bad(`@struct ${name} cannot extend or implement anything`, node.heritageClauses[0]!);
     const fields: HirStruct["fields"] = [];
     const FORM = "a struct field is declared as `Name!: Type;` (no initializer, not static/readonly/optional)";
@@ -441,9 +459,9 @@ class HirBuilder {
       }
       fields.push({ name: m.name.text, type, memberName: udsMemberName(s.objectPath, m.name.text, at), span: this.sp(m.name) });
     }
-    if (fields.length === 0 && this.sink.diagnostics.length === before) bad(`@struct ${name} needs at least one field`, node.name ?? node);
-    if (this.sink.diagnostics.length > before) return;
-    this.structs.push({ name, path: s.path, objectPath: s.objectPath, fields, span: this.sp(node.name ?? node) });
+    if (fields.length === 0 && errors() === before) bad(`@struct ${name} needs at least one field`, node.name ?? node);
+    if (errors() > before) return;
+    this.structs.push({ name, path: s.path, pathDerived: pathInfo.explicit === undefined, objectPath: s.objectPath, fields, span: this.sp(node.name ?? node) });
   }
 
   /**
@@ -1598,7 +1616,8 @@ function orderStructs(structs: HirStruct[]): HirStruct[] {
  * Builds the HIR of the class files (or of `only`). Subset violations are ABFC2xxx diagnostics in the result; TypeScript's own
  * diagnostics are in `LoadedProgram.diagnostics`.
  */
-export function buildHir(loaded: LoadedProgram, config: { mod: string }, _profile: Profile, only?: readonly ts.SourceFile[]): HirProgram {
+export function buildHir(loaded: LoadedProgram, config: CompilerProjectConfig, _profile: Profile, only?: readonly ts.SourceFile[]): HirProgram {
+  bindPathContext(loaded, config);
   const b = new HirBuilder(loaded, config.mod);
   for (const sf of only ?? loaded.files.classes) {
     for (const st of sf.statements) if (ts.isClassDeclaration(st)) b.classDecl(st);
@@ -1607,7 +1626,7 @@ export function buildHir(loaded: LoadedProgram, config: { mod: string }, _profil
 }
 
 /** Diagnostics (TypeScript's and the subset checker's) of one file; the entry point of the future ts-plugin. */
-export function checkSubset(loaded: LoadedProgram, file: ts.SourceFile, config: { mod: string }, profile: Profile): Diagnostic[] {
+export function checkSubset(loaded: LoadedProgram, file: ts.SourceFile, config: CompilerProjectConfig, profile: Profile): Diagnostic[] {
   const hir = buildHir(loaded, config, profile, [file]);
   const rel = relFile(loaded.projectDir, file.fileName);
   return [...loaded.diagnostics.filter((d) => d.span?.file === rel), ...hir.diagnostics];

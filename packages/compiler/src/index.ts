@@ -5,6 +5,8 @@ export { checkProject, lowerChecked } from "./service.js";
 export type { ProjectCheck } from "./service.js";
 export { buildHir, checkSubset } from "./frontend/build.js";
 export { compileTests } from "./frontend/tests.js";
+export { assetPathOf, bindPathContext, pathContextOf } from "./frontend/assetpaths.js";
+export type { AssetPathInfo, AssetPathProblem, CompilerProjectConfig, PathContext } from "./frontend/assetpaths.js";
 export { blockedMemberHits } from "./frontend/blocked.js";
 export { lower, formatLiteral, assignPositions } from "./lower/index.js";
 export { analyzeAdoption, adoptionDiagnostics, AdoptionError } from "./ownership/adopt.js";
