@@ -1,11 +1,23 @@
 // The abfc language server: documents -> projects -> debounced checks -> published diagnostics.
 import { dirname } from "node:path";
 import { TextDocument } from "vscode-languageserver-textdocument";
-import { ProposedFeatures, TextDocumentSyncKind, TextDocuments, createConnection } from "vscode-languageserver/node.js";
+import { DidChangeWatchedFilesNotification, ProposedFeatures, TextDocumentSyncKind, TextDocuments, createConnection } from "vscode-languageserver/node.js";
 import { AbfcError, findProjectDir } from "@abfc/env";
 import { ProjectState } from "./project.js";
 import type { InitOptions } from "./project.js";
-import { pathKey, uriToPath } from "./uri.js";
+import { isUnder, pathKey, uriToPath } from "./uri.js";
+
+/** What the server asks the client to watch (when the client can register watchers). */
+export const WATCHED_GLOBS = [
+  "**/abf.config.json",
+  "**/.abfc/manifest/*.json",
+  "**/.abfc/stubs/**/stubs.lock.json",
+  "**/.abfc/stubs/**/retired.json",
+  "**/.abfc/stubs/**/*.d.ts",
+  "**/.abfc/tsconfig.paths.json",
+  "**/tsconfig*.json",
+  "**/*.ts",
+];
 
 export interface ServerOptions {
   input: NodeJS.ReadableStream;
@@ -95,11 +107,15 @@ export function startServer(o: ServerOptions): Promise<number> {
     const key = pathKey(dir);
     let project = projects.get(key);
     if (project === undefined) {
-      const created: ProjectState = new ProjectState(dir, (fileName) => {
-        if (created.docs.size === 0) return undefined;
-        const doc = created.docs.get(pathKey(fileName));
-        return doc === undefined ? undefined : documents.get(doc.uri)?.getText();
-      });
+      const created: ProjectState = new ProjectState(
+        dir,
+        (fileName) => {
+          if (created.docs.size === 0) return undefined;
+          const doc = created.docs.get(pathKey(fileName));
+          return doc === undefined ? undefined : documents.get(doc.uri)?.getText();
+        },
+        (message) => connection.console.error(message),
+      );
       project = created;
       projects.set(key, project);
     }
@@ -141,14 +157,42 @@ export function startServer(o: ServerOptions): Promise<number> {
     }
   };
 
+  let canWatch = false;
+
   connection.onInitialize((params) => {
     opts = { ...((params.initializationOptions ?? {}) as InitOptions) };
+    canWatch = params.capabilities.workspace?.didChangeWatchedFiles?.dynamicRegistration === true;
     return {
       capabilities: {
         textDocumentSync: { openClose: true, change: TextDocumentSyncKind.Incremental },
       },
       serverInfo: { name: "abfc", version: "0.1.0" },
     };
+  });
+
+  connection.onInitialized(() => {
+    if (!canWatch) return;
+    connection.client
+      .register(DidChangeWatchedFilesNotification.type, { watchers: WATCHED_GLOBS.map((globPattern) => ({ globPattern })) })
+      .catch((e: unknown) => logError("registering file watchers", e));
+  });
+
+  // Something changed on disk (a build wrote manifests, the user edited a config or a stub): rebuild the affected projects.
+  connection.onDidChangeWatchedFiles((params) => {
+    try {
+      for (const change of params.changes) {
+        const path = uriToPath(change.uri);
+        if (path === null) continue;
+        const isConfig = /(^|[\\/])abf\.config\.json$/i.test(path);
+        for (const project of projects.values()) {
+          if (!isUnder(path, project.dir)) continue;
+          project.markDirty(isConfig);
+          scheduleCheck(project);
+        }
+      }
+    } catch (e) {
+      logError("file watcher notification", e);
+    }
   });
 
   documents.onDidOpen((e) => touch(e.document.uri));

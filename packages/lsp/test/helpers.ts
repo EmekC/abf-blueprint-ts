@@ -34,7 +34,7 @@ export interface Started {
 }
 
 /** A server over in-memory streams, initialised. */
-export async function startInMemory(initOptions: InitOptions = {}): Promise<Started> {
+export async function startInMemory(initOptions: InitOptions = {}, capabilities: object = {}): Promise<Started> {
   const toServer = new PassThrough();
   const fromServer = new PassThrough();
   void startServer({ input: toServer, output: fromServer, log: () => undefined });
@@ -42,7 +42,7 @@ export async function startInMemory(initOptions: InitOptions = {}): Promise<Star
   const initializeResult = await client.request("initialize", {
     processId: null,
     rootUri: null,
-    capabilities: {},
+    capabilities,
     initializationOptions: { debounceMs: 0, ...initOptions },
   });
   client.notify("initialized", {});

@@ -21,6 +21,8 @@ const HEADER_END = Buffer.from("\r\n\r\n");
 export class StdioLspClient {
   /** Everything the server wrote that is not a valid frame (stdout must carry protocol messages only). */
   readonly protocolErrors: string[] = [];
+  /** The requests the server sent (all answered with null), in order. */
+  readonly serverRequests: Array<{ method: string; params: any }> = [];
   private buffer: Buffer = Buffer.alloc(0);
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
@@ -165,6 +167,7 @@ export class StdioLspClient {
     }
     if (message.method !== undefined && message.id !== undefined) {
       // A request from the server (client/registerCapability, workspace/configuration, ...): answer with null.
+      this.serverRequests.push({ method: message.method, params: message.params });
       this.send({ id: message.id, result: null });
       return;
     }

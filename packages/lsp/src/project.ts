@@ -1,5 +1,5 @@
 // One compiler state per project folder (the folder holding abf.config.json): environment, last program, last check.
-import { statSync } from "node:fs";
+import { readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import type { Diagnostic as LspDiagnostic } from "vscode-languageserver/node.js";
 import { SourceFileCache, checkProject, loadProgram } from "@abfc/compiler";
@@ -10,6 +10,7 @@ import type { Diagnostic } from "@abfc/ir";
 import { checkLock, readLock } from "@abfc/stubgen";
 import { atFileStart, toLspDiagnostic } from "./convert.js";
 import { compilerConfigOf, loadProjectEnvironment } from "./environment.js";
+import { ProjectLinter } from "./lint.js";
 import { pathKey, pathToUri } from "./uri.js";
 
 /** The `initializationOptions` the server understands. */
@@ -38,6 +39,63 @@ const sameFile = (a: string, b: string): boolean => (process.platform === "win32
 
 const isTsDiagnostic = (d: Diagnostic): boolean => d.code === "ABFC2000" && d.message.startsWith("[TS");
 
+/** How long a disk stamp stays valid (like the old tsserver plugin's manifest token). */
+export const DISK_STAMP_TTL_MS = 1000;
+
+function statLine(label: string, path: string): string {
+  try {
+    const s = statSync(path);
+    return `${label}:${s.mtimeMs}:${s.size}`;
+  } catch {
+    return "";
+  }
+}
+
+function jsonNames(dir: string): string[] {
+  try {
+    return readdirSync(dir)
+      .filter((n) => n.endsWith(".json"))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+function subdirs(dir: string): string[] {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * A string that changes when something the check depends on changes on disk: the manifests, each stub profile's
+ * `retired.json` and `stubs.lock.json`, `abf.config.json`, `tsconfig.json` and `.abfc/tsconfig.paths.json`
+ * (mtime and size of each, so a file that appears or disappears also changes it).
+ */
+export function diskStamp(dir: string): string {
+  const parts: string[] = [];
+  const add = (label: string, path: string): void => {
+    const line = statLine(label, path);
+    if (line !== "") parts.push(line);
+  };
+  add(PROJECT_CONFIG_FILE, join(dir, PROJECT_CONFIG_FILE));
+  add("tsconfig.json", join(dir, "tsconfig.json"));
+  add("tsconfig.paths.json", join(dir, ".abfc", "tsconfig.paths.json"));
+  const manifests = join(dir, ".abfc", "manifest");
+  for (const name of jsonNames(manifests)) add(`manifest/${name}`, join(manifests, name));
+  const stubs = join(dir, ".abfc", "stubs");
+  for (const profile of subdirs(stubs)) {
+    add(`${profile}/retired.json`, join(stubs, profile, "retired.json"));
+    add(`${profile}/stubs.lock.json`, join(stubs, profile, "stubs.lock.json"));
+  }
+  return parts.join("|");
+}
+
 export class ProjectState {
   readonly configUri: string;
   /** Open documents of this project by path key. Their text lives in the server's document store. */
@@ -50,12 +108,27 @@ export class ProjectState {
   private dirty = true;
   private reloadConfig = true;
   private configStamp = "";
+  private diskStampValue: string | null = null;
+  private diskStampAt = 0;
+  private readonly linter: ProjectLinter;
 
   constructor(
     readonly dir: string,
     private readonly overlay: (fileName: string) => string | undefined,
+    onLog: (message: string) => void = () => undefined,
   ) {
     this.configUri = pathToUri(join(dir, PROJECT_CONFIG_FILE));
+    this.linter = new ProjectLinter(dir, onLog);
+  }
+
+  /** Marks the project dirty when the disk stamp changed (recomputed at most once per second). */
+  private checkDisk(): void {
+    const now = Date.now();
+    if (this.diskStampValue !== null && now - this.diskStampAt < DISK_STAMP_TTL_MS) return;
+    this.diskStampAt = now;
+    const stamp = diskStamp(this.dir);
+    if (this.diskStampValue !== null && stamp !== this.diskStampValue) this.dirty = true;
+    this.diskStampValue = stamp;
   }
 
   /** The next `snapshot()` rebuilds the program; `reloadConfig` also re-reads abf.config.json and the environment. */
@@ -98,6 +171,7 @@ export class ProjectState {
   /** The program and check of the current text of every open document; null when the config does not load. */
   snapshot(): Snapshot | null {
     this.ensureConfig();
+    this.checkDisk();
     const env = this.env;
     if (env === null) return null;
     if (this.last !== null && !this.dirty) return this.last;
@@ -133,6 +207,15 @@ export class ProjectState {
     if (sf === undefined) return [];
     const out = this.abfcDiagnosticsOf(snap, sf).map(toLspDiagnostic);
     if (opts.tsDiagnostics === true) out.push(...this.tsDiagnosticsOf(snap, sf).map(toLspDiagnostic));
+    if (opts.lint !== false && !sf.fileName.endsWith(".d.ts")) {
+      const key = pathKey(path);
+      let findings = snap.lint.get(key);
+      if (findings === undefined) {
+        findings = this.linter.lint(snap.loaded, sf);
+        snap.lint.set(key, findings);
+      }
+      out.push(...findings);
+    }
     return out;
   }
 
