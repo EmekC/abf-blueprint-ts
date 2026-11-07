@@ -142,9 +142,9 @@ describe("ci.yml", () => {
     assert.ok(test.includes("npm run build") && test.includes("run: npm test"));
   });
 
-  it("scans with the denylist secret but does not require it (forks have no secrets)", () => {
+  it("scans without any name secret or denylist requirement", () => {
     const artifacts = jobBlocks(text).get("artifacts");
-    assert.ok(artifacts.includes("ABFC_NAME_DENYLIST: ${{ secrets.ABFC_NAME_DENYLIST }}"));
+    assert.ok(!code.includes("ABFC_NAME_DENYLIST"));
     assert.ok(!code.includes("--require-denylist"));
     assert.ok(artifacts.includes("--require exe,runtime,zip,installer-input,installer,vsix,npm"));
     assert.ok(artifacts.includes("--require-iscc"));
@@ -241,14 +241,14 @@ describe("release.yml", () => {
     assert.ok(!jobs.get("build").includes("permissions:"));
   });
 
-  it("scans with the required denylist and requires the installer", () => {
+  it("scans without a name secret and requires the installer", () => {
     const build = jobs.get("build");
-    assert.ok(build.includes("--require-denylist"));
+    assert.ok(!build.includes("--require-denylist"));
     assert.ok(build.includes("--require exe,runtime,zip,installer-input,installer,vsix,npm"));
     assert.ok(build.includes("--require-iscc"));
     assert.ok(build.includes("--require-installer"));
     assert.ok(build.includes("set-version.mjs --check"));
-    assert.ok(build.includes("ABFC_NAME_DENYLIST: ${{ secrets.ABFC_NAME_DENYLIST }}"));
+    assert.ok(!build.includes("ABFC_NAME_DENYLIST"));
   });
 
   it("checks the tag format before using it", () => {

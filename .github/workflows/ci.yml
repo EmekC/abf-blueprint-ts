@@ -125,8 +125,6 @@ jobs:
         run: node scripts/release/inspect.mjs --version ${{ steps.pins.outputs.version }}
 
       - name: Scan artifacts
-        env:
-          ABFC_NAME_DENYLIST: ${{ secrets.ABFC_NAME_DENYLIST }}
         run: node scripts/release/scan-artifacts.mjs --version ${{ steps.pins.outputs.version }} --require exe,runtime,zip,installer-input,installer,vsix,npm
 
       - name: Upload artifacts

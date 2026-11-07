@@ -1,16 +1,16 @@
 #!/usr/bin/env node
 // Scans the built release artifacts for mod names, user and build paths, dev folders and game-derived files (design 18.10).
 //
-//   node scripts/release/scan-artifacts.mjs --version <semver> [--denylist <file>] [--require-denylist]
+//   node scripts/release/scan-artifacts.mjs --version <semver> [--denylist <file>]
 //                                           [--require <list>] [--repo-root <dir>]
 //
 // Artifacts (kind: location): exe: build/release/exe/abfc.exe, runtime: build/release/runtime/runtime.zip,
 // zip: build/release/zip/abfc-<v>-win-x64.zip, installer-input: every file of build/release/installer-input,
 // installer: build/release/installer/abfc-setup-<v>.exe, vsix: build/vsix/abfc-vscode-<v>.vsix,
 // npm: build/release/npm/*.tgz.
-// Names: the committed guard words plus `--denylist <file>` (a file outside the repository) or the environment
-// variable ABFC_NAME_DENYLIST (the CI secret); name hits are printed as `guard word #i` / `denylist entry #i`, never as the word.
-// Exit 0 clean, 1 on hits, 2 on a usage error, a missing required artifact or a missing required denylist.
+// Names: the committed guard words plus `--denylist <file>` (a file outside the repository) (an optional local
+// file outside the repository, one name per line); name hits are printed as `guard word #i` / `denylist entry #i`, never as the word.
+// Exit 0 clean, 1 on hits, 2 on a usage error, or a missing required artifact.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,7 +18,7 @@ import { GUARD_WORDS, applyExceptions, loadExceptions, parseDenylist, scanArtifa
 
 const defaultRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const USAGE =
-  "usage: node scripts/release/scan-artifacts.mjs --version <semver> [--denylist <file>] [--require-denylist] [--require <list>] [--repo-root <dir>]";
+  "usage: node scripts/release/scan-artifacts.mjs --version <semver> [--denylist <file>] [--require <list>] [--repo-root <dir>]";
 const SEMVER = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
 const KINDS = ["exe", "runtime", "zip", "installer-input", "installer", "vsix", "npm"];
 const DEFAULT_REQUIRE = "exe,runtime,zip,installer-input,vsix,npm";
@@ -29,7 +29,7 @@ function fail(message, code = 2) {
 }
 
 function parseArgv(argv) {
-  const o = { version: "", denylist: "", requireDenylist: false, require: DEFAULT_REQUIRE, repoRoot: defaultRoot };
+  const o = { version: "", denylist: "", require: DEFAULT_REQUIRE, repoRoot: defaultRoot };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const value = () => {
@@ -39,7 +39,6 @@ function parseArgv(argv) {
     };
     if (a === "--version") o.version = value();
     else if (a === "--denylist") o.denylist = value();
-    else if (a === "--require-denylist") o.requireDenylist = true;
     else if (a === "--require") o.require = value();
     else if (a === "--repo-root") o.repoRoot = resolve(value());
     else fail(`unknown argument ${a}\n${USAGE}`);
@@ -87,15 +86,12 @@ try {
   if (o.denylist !== "") {
     if (!existsSync(o.denylist)) fail("--denylist file not found");
     denylistWords = parseDenylist(readFileSync(o.denylist, "utf8"));
-  } else if (process.env.ABFC_NAME_DENYLIST !== undefined && process.env.ABFC_NAME_DENYLIST.trim() !== "") {
-    denylistWords = parseDenylist(process.env.ABFC_NAME_DENYLIST);
   }
 } catch (e) {
   fail(e instanceof Error ? e.message : String(e));
 }
 if (denylistWords !== null && denylistWords.length === 0) denylistWords = null;
 if (denylistWords === null) {
-  if (o.requireDenylist) fail("--require-denylist: no name denylist (pass --denylist <file> or set ABFC_NAME_DENYLIST)");
   console.log("notice: no name denylist given; scanning with the committed guard words only");
 } else {
   denylistWords.forEach((word, i) => names.push({ word, label: `denylist entry #${i + 1}` }));

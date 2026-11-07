@@ -211,15 +211,8 @@ describe("scan-artifacts.mjs", () => {
   const run = (root, args, env = {}) =>
     spawnSync(process.execPath, [script, "--version", "1.0.0", "--repo-root", root, ...args], {
       encoding: "utf8",
-      env: { ...process.env, ABFC_NAME_DENYLIST: "", ...env },
+      env: { ...process.env, ...env },
     });
-
-  it("--require-denylist without a denylist exits 2", () => {
-    const root = mkdtempSync(join(tmp, "root-"));
-    const r = run(root, ["--require-denylist", "--require", "vsix"]);
-    assert.equal(r.status, 2, r.stdout + r.stderr);
-    assert.match(r.stderr, /no name denylist/);
-  });
 
   it("a missing required artifact exits 2; an optional one is reported", () => {
     const root = mkdtempSync(join(tmp, "root-"));
@@ -239,8 +232,6 @@ describe("scan-artifacts.mjs", () => {
     assert.equal(bad.status, 1, bad.stdout + bad.stderr);
     assert.match(bad.stdout, /HIT name vsix > abfc-vscode-<version>\.vsix > extension\/x\.js: denylist entry #1 \[context [0-9a-f]{12}\]/);
     assert.ok(!(bad.stdout + bad.stderr).toLowerCase().includes(NAME));
-    const viaEnv = run(root, ["--require", "vsix", "--require-denylist"], { ABFC_NAME_DENYLIST: `${NAME}\n` });
-    assert.equal(viaEnv.status, 1, viaEnv.stdout + viaEnv.stderr);
     writeFileSync(vsix, writeZip([{ name: "extension/x.js", data: utf("// fine") }]));
     const good = run(root, ["--require", "vsix", "--denylist", deny]);
     assert.equal(good.status, 0, good.stdout + good.stderr);

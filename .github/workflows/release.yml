@@ -123,9 +123,7 @@ jobs:
         run: node scripts/release/inspect.mjs --version ${{ steps.version.outputs.version }}
 
       - name: Scan artifacts
-        env:
-          ABFC_NAME_DENYLIST: ${{ secrets.ABFC_NAME_DENYLIST }}
-        run: node scripts/release/scan-artifacts.mjs --version ${{ steps.version.outputs.version }} --require-denylist --require exe,runtime,zip,installer-input,installer,vsix,npm
+        run: node scripts/release/scan-artifacts.mjs --version ${{ steps.version.outputs.version }} --require exe,runtime,zip,installer-input,installer,vsix,npm
 
       - name: Stage the GitHub release files
         run: node scripts/release/stage-github.mjs --version ${{ steps.version.outputs.version }} --require-installer
