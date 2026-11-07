@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { parseExport } from "@abfc/ir";
 import type { Span, T3dNode } from "@abfc/ir";
 import {
-  adoptionDiagnostics, analyzeAdoption, driftDiagnostics, fingerprintUnit, mapCompileMessages, manifestPath, ownedSets,
+  adoptionDiagnostics, analyzeAdoption, deleteManifest, deleteSourceMap, driftDiagnostics, fingerprintUnit, listManifests, mapCompileMessages, manifestPath, ownedSets,
   readManifest, readSourceMap, rebaseStaleUnits, unitState, writeManifest, writeSourceMap,
 } from "../src/index.js";
 import type { Manifest, ManifestUnit, SourceMapFile } from "../src/index.js";
@@ -212,6 +212,20 @@ test("manifest and source map files", () => {
     writeSourceMap(dir, sm);
     assert.deepEqual(readSourceMap(dir, asset), sm);
     assert.equal(readSourceMap(dir, "/Fake/Mod/Other"), null);
+
+    // listing and deleting
+    const other: Manifest = { asset: "/Fake/Mod/BP_Other", compiler: "0.1.0", profile: "p", units: [], variables: [], retiredUnpublished: ["event:Z"] };
+    writeManifest(dir, other);
+    assert.deepEqual(listManifests(dir).map((x) => x.asset), [asset, "/Fake/Mod/BP_Other"]);
+    assert.deepEqual(listManifests(dir)[1]!.retiredUnpublished, ["event:Z"]);
+    deleteManifest(dir, asset);
+    deleteManifest(dir, asset);
+    assert.equal(readManifest(dir, asset), null);
+    assert.deepEqual(listManifests(dir).map((x) => x.asset), ["/Fake/Mod/BP_Other"]);
+    deleteSourceMap(dir, asset);
+    deleteSourceMap(dir, asset);
+    assert.equal(readSourceMap(dir, asset), null);
+    assert.deepEqual(listManifests(join(dir, "nowhere")), []);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

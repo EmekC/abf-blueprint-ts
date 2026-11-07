@@ -280,7 +280,7 @@ test("loadProjectConfig: BOM tolerated, defaults filled, bad key reported with i
   const ok = fakeHost({ files: { [`${dir}\\abf.config.json`]: "\uFEFF" + JSON.stringify({ mod: { name: "m" }, editor: { root: "D:\\e" } }) } });
   const cfg = loadProjectConfig(dir, ok);
   assert.equal(cfg.mod.name, "m");
-  assert.deepEqual(cfg.stubs, { classes: [], scriptClasses: [], modAssets: "all" });
+  assert.deepEqual(cfg.stubs, { classes: [], scriptClasses: [], modAssets: "all", widgetMembers: {} });
   assert.deepEqual(cfg.backend, { kind: "bp_apply", minProtocol: 1 });
   assert.equal(cfg.editor?.root, "D:\\e");
 
@@ -397,4 +397,18 @@ test("formatDiagnostic: a span prints the problem-matcher form with a forward-sl
   const m = /^(.*\.ts):(\d+):(\d+): (error|warning) (ABFC\d+): (.*)$/.exec(text);
   assert.ok(m);
   assert.deepEqual([m[2], m[3], m[5]], ["12", "5", "ABFC2000"]);
+});
+
+test("loadProjectConfig: stubs.widgetMembers is validated (ABFC1021)", () => {
+  const dir = "D:\\p";
+  const cfgOf = (widgetMembers: unknown) =>
+    fakeHost({ files: { [`${dir}\\abf.config.json`]: JSON.stringify({ mod: { name: "m" }, stubs: { widgetMembers } }) } });
+  const good = { "/Game/UI/W_Example.W_Example_C": { TitleText: "/Script/UMG.TextBlock" } };
+  assert.deepEqual(loadProjectConfig(dir, cfgOf(good)).stubs.widgetMembers, good);
+  for (const bad of [["x"], { "/Game/X.X_C": "TextBlock" }, { "/Game/X.X_C": { A: 3 } }, { "/Game/X.X_C": { A: "TextBlock" } }]) {
+    assert.throws(
+      () => loadProjectConfig(dir, cfgOf(bad)),
+      (e: unknown) => e instanceof AbfcError && e.diagnostic.code === "ABFC1021" && /stubs\.widgetMembers/.test(e.diagnostic.message),
+    );
+  }
 });

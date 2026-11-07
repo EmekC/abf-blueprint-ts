@@ -3,6 +3,7 @@ import type { AssetApplyOutcome } from "@abfc/backend";
 import {
   assetsNeedingRead,
   fingerprintUnit,
+  listManifests,
   mapCompileMessages,
   planBuild,
   readManifest,
@@ -124,6 +125,19 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   if (fe.ir === null) return false;
   const ir = fe.ir;
   const owned = ir.assets.filter((a) => a.units.length > 0 || a.classDefaults !== undefined || a.classManagerRow !== undefined);
+  // A class whose TypeScript is gone but whose manifest still lists units: its units are retired like those of a removed event.
+  for (const m of listManifests(projectDir)) {
+    if (!m.asset.startsWith(`/${mod}/`) || m.units.length === 0 || owned.some((a) => a.path === m.asset)) continue;
+    owned.push(ir.assets.find((a) => a.path === m.asset) ?? { path: m.asset, variables: [], units: [] });
+    if (m.classDefaultsHash !== undefined) {
+      output.diag({
+        severity: "warning",
+        code: "ABFC5010",
+        asset: m.asset,
+        message: `${m.asset} is no longer declared in TypeScript; its owned units are removed, the class defaults abfc set stay as they are.`,
+      });
+    }
+  }
 
   const { backend, info } = await session.open();
   const caps = info.capabilities;
@@ -200,7 +214,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     },
   });
 
-  const irByPath = new Map(ir.assets.map((a) => [a.path, a]));
+  const irByPath = new Map(owned.map((a) => [a.path, a]));
   if (!applied.ok) {
     let reported = 0;
     planned.plan.assets.forEach((a, i) => {
@@ -289,6 +303,8 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     const classDefaultsHash = defaultsDone ? a.defaults!.hash : old?.classDefaultsHash;
     const classDefaultsStageSyncedAt = defaultsDone ? stage.syncedAt : old?.classDefaultsStageSyncedAt;
     const appliedIds = new Set(a.units.map((p) => p.unit.id));
+    // Removed from the stage, not published yet: `abfc publish` lists the asset until a publish clears this.
+    const retiredUnpublished = [...new Set([...(old?.retiredUnpublished ?? []), ...retired])].sort();
     const finalManifest: Manifest = {
       asset: a.asset,
       compiler: COMPILER_ID,
@@ -297,6 +313,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
       variables,
       ...(classDefaultsHash !== undefined ? { classDefaultsHash } : {}),
       ...(classDefaultsStageSyncedAt !== undefined ? { classDefaultsStageSyncedAt } : {}),
+      ...(retiredUnpublished.length > 0 ? { retiredUnpublished } : {}),
     };
     finals.push(finalManifest);
     writeManifest(projectDir, {
@@ -307,6 +324,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
       units: units.map((u) => (appliedIds.has(u.id) ? { ...u, irHash: "" } : u)),
       ...(old?.classDefaultsHash !== undefined ? { classDefaultsHash: old.classDefaultsHash } : {}),
       ...(old?.classDefaultsStageSyncedAt !== undefined ? { classDefaultsStageSyncedAt: old.classDefaultsStageSyncedAt } : {}),
+      ...(retiredUnpublished.length > 0 ? { retiredUnpublished } : {}),
     });
     writeSourceMap(projectDir, sourceMapOf(irAsset, { ...previousNames(old), ...outcome.nodeIds }));
     appliedAssets.push(a.asset);

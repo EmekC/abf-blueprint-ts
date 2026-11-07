@@ -4,9 +4,11 @@ import { classFilterTag, memberFilterTags } from "./filter.js";
 import type { FilterRules } from "./filter.js";
 import { FileBuilder, jsdoc } from "./imports.js";
 import { emitManual, manualReferences, STUBGEN_VERSION } from "./manual.js";
+import { widgetMember } from "./manual.js";
 import type { ManualAsset } from "./manual.js";
 import { IDENT_RE, UOBJECT_PATH, ident, memberKey, moduleSpecifier, stubFile, tsIdent } from "./names.js";
 import { buildSignature } from "./signature.js";
+import { SUPPLEMENTAL_PROPERTIES } from "./supplements.js";
 import type { SigPin } from "./signature.js";
 import type { ReflectClass, ReflectData, ReflectMember, ReflectPin } from "./types.js";
 import { grammarOfPin, isUnsupported, refsOfGrammar, tsOfGrammar, unsupportedLabel } from "./typemap.js";
@@ -17,6 +19,8 @@ export interface EmitInput {
   reflect: ReflectData;
   filter: { rules: FilterRules; contentVersion: string | null };
   manual: ManualAsset[];
+  /** `stubs.widgetMembers` of the config: class path -> { designer widget name -> widget class path }. */
+  widgetMembers?: Record<string, Record<string, string>>;
   mod: string;
   /** Extra type paths to emit as opaque classes (referenced types that were not reflected are added automatically). */
   opaque: string[];
@@ -125,6 +129,28 @@ function renderClass(
     mt.push(`@bpType ${g}`);
     if (isUnsupported(g)) mt.push(`@bpUnsupported ${unsupportedLabel(g)}`);
     instance.push(jsdoc(mt, "  ") + `  ${memberKey(p.name)}: ${tsOfGrammar(g, fb)};\n`);
+  }
+
+  if (!opaque) {
+    for (const sp of SUPPLEMENTAL_PROPERTIES[path] ?? []) {
+      if (seen.has(`i:${sp.name}`)) continue;
+      seen.add(`i:${sp.name}`);
+      counters.members++;
+      // A supplement whose object class is not reflected is typed UObject.
+      const objPath = sp.type.startsWith("object:") ? sp.type.slice("object:".length) : null;
+      const g = objPath !== null && input.reflect.classes[objPath] === undefined ? `object:${UOBJECT_PATH}` : sp.type;
+      const mt = [`@bpPath ${path}:${sp.name}`, `@bpType ${g}`];
+      instance.push(jsdoc(mt, "  ") + `  ${sp.readonly ? "readonly " : ""}${memberKey(sp.name)}: ${tsOfGrammar(g, fb)};\n`);
+    }
+  }
+
+  for (const [member, widgetCls] of Object.entries(input.widgetMembers?.[path] ?? {})) {
+    if (seen.has(`i:${member}`)) continue;
+    seen.add(`i:${member}`);
+    counters.members++;
+    // A widget class that was not reflected (no `scriptClasses` entry) is typed UObject; `abfc stubs` warns about it.
+    const known = input.reflect.classes[widgetCls] !== undefined;
+    instance.push(widgetMember(path, member, known ? widgetCls : UOBJECT_PATH, fb, widgetCls));
   }
 
   for (const f of c.functions) {

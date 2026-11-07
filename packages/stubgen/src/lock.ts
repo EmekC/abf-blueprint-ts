@@ -16,7 +16,20 @@ export interface StubsLock {
   classes: string[];
   scriptClasses: string[];
   modAssets: string[];
+  /** `stubs.widgetMembers` the stubs were generated with (keys sorted). */
+  widgetMembers?: Record<string, Record<string, string>>;
   createdAt: string;
+}
+
+/** The config's `stubs.widgetMembers` with every key sorted, so equal configs compare and serialize equal. */
+export function sortedWidgetMembers(m: Record<string, Record<string, string>> | undefined): Record<string, Record<string, string>> {
+  const out: Record<string, Record<string, string>> = {};
+  for (const cls of Object.keys(m ?? {}).sort()) {
+    const inner: Record<string, string> = {};
+    for (const k of Object.keys(m?.[cls] ?? {}).sort()) inner[k] = m![cls]![k]!;
+    out[cls] = inner;
+  }
+  return out;
 }
 
 export const LOCK_FILE = "stubs.lock.json";
@@ -95,6 +108,14 @@ export function checkLock(lock: StubsLock | null, env: Environment, config: Proj
       severity: "warning",
       code: "ABFC3003",
       message: `the stubs do not cover: ${missing.join(", ")}.`,
+      fix: 'run "abfc stubs" to regenerate.',
+    });
+  }
+  if (JSON.stringify(sortedWidgetMembers(lock.widgetMembers)) !== JSON.stringify(sortedWidgetMembers(config.stubs.widgetMembers))) {
+    out.push({
+      severity: "warning",
+      code: "ABFC3003",
+      message: "stubs.widgetMembers changed since the stubs were generated.",
       fix: 'run "abfc stubs" to regenerate.',
     });
   }
