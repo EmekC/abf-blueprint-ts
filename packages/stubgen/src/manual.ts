@@ -6,7 +6,7 @@ import { UOBJECT_PATH, ident, memberKey, moduleSpecifier, stubFile, tsIdent } fr
 import { isUnsupported, normalizeGrammar, refsOfGrammar, tsOfGrammar, unsupportedLabel } from "./typemap.js";
 import type { TypeRef } from "./typemap.js";
 
-export const STUBGEN_VERSION = "0.1.0";
+export const STUBGEN_VERSION = "0.2.1";
 
 export interface ManualPin {
   name: string;
@@ -22,6 +22,8 @@ export interface ManualAsset {
   meta: string;
   parent: string | null;
   variables: ManualPin[];
+  /** Designer widgets of a Widget Blueprint with `bIsVariable=True`: name and widget class path. Emitted as `readonly` members. */
+  widgets: Array<{ name: string; cls: string }>;
   functions: Array<{ name: string; inputs: ManualPin[]; outputs: ManualPin[] }>;
   events: Array<{ name: string; params: ManualPin[] }>;
   /** What abfc owns in this asset: unit ids (`event:UpdateTarget`) and variable names. */
@@ -78,6 +80,7 @@ export function manualFromExport(
     meta,
     parent: ex.parentClass,
     variables: ex.variables.map((v) => ({ name: v.name, type: v.type })),
+    widgets: ex.widgets.filter((w) => w.isVariable && !ex.variables.some((v) => v.name === w.name)).map((w) => ({ name: w.name, cls: w.cls })),
     functions,
     events,
     owned,
@@ -89,9 +92,16 @@ export function manualReferences(m: ManualAsset): TypeRef[] {
   const refs: TypeRef[] = [{ path: m.parent ?? UOBJECT_PATH, kind: "class" }];
   const add = (t: string): void => void refs.push(...refsOfGrammar(normalizeGrammar(t)));
   for (const v of m.variables) add(v.type);
+  for (const w of m.widgets) refs.push({ path: w.cls, kind: "class" });
   for (const f of m.functions) for (const p of [...f.inputs, ...f.outputs]) add(p.type);
   for (const e of m.events) for (const p of e.params) add(p.type);
   return refs;
+}
+
+/** A designer widget as a non-null `readonly` member: `@bpWidget` marks it, abfc never owns it. */
+export function widgetMember(classPath: string, name: string, typeCls: string, fb: FileBuilder, declaredCls: string = typeCls): string {
+  const tags = [`@bpPath ${classPath}:${name}`, `@bpType object:${declaredCls}`, "@bpWidget", "@bpHandMade"];
+  return jsdoc(tags, "  ") + `  readonly ${memberKey(name)}: ${fb.ref(typeCls, "class")};\n`;
 }
 
 /** The stub file of one hand-made asset: `{ file: "Mod/<mod>/<a/X>.d.ts", text }`. */
@@ -113,6 +123,7 @@ export function emitManual(m: ManualAsset, header?: string): { file: string; tex
     tags.push("@bpHandMade");
     body.push(jsdoc(tags, "  ") + `  ${memberKey(v.name)}: ${tsOfGrammar(g, fb)};\n`);
   }
+  for (const w of m.widgets) body.push(widgetMember(m.classPath, w.name, w.cls, fb));
   for (const f of m.functions) {
     if (ownedUnits.has(`function:${f.name}`)) continue;
     const sig = buildSignature(

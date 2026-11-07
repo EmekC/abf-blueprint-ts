@@ -140,7 +140,7 @@ export interface Profile {
     getItemIndex: string; getItemOutput: string; opA: string; opB: string;
   };
   nodeClasses: {
-    callFunction: string; callArrayFunction: string; getArrayItem: string; breakStruct: string; variableGet: string;
+    callFunction: string; callArrayFunction: string; getArrayItem: string; breakStruct: string; makeStruct: string; formatText: string; variableGet: string;
     variableSet: string; customEvent: string; branch: string; dynamicCast: string; comment: string;
   };
   functions: {
@@ -174,4 +174,5 @@ export interface AssetPlan {
 export interface ApplyPlan { mod: string; assets: AssetPlan[] }
 
 export interface TestStepRecord { step: Record<string, unknown>; span: Span; knownIssue?: string }
-export interface TestCase { name: string; file: string; span: Span; steps: TestStepRecord[] }
+/** `liveHud`: the test needs the live HUD (not available hidden); it is skipped and listed with its manual `checklist`. */
+export interface TestCase { name: string; file: string; span: Span; steps: TestStepRecord[]; liveHud?: { checklist: string[] } }

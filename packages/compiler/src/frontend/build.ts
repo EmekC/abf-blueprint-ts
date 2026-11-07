@@ -4,10 +4,12 @@ import type { Diagnostic, Profile, Span } from "@abfc/ir";
 import type { BpType, HirClass, HirEvent, HirExpr, HirProgram, HirStmt, LocalId } from "../hir.js";
 import { DiagSink, Fail, relFile, spanOf } from "./diag.js";
 import type { LoadedProgram } from "./program.js";
-import { bpPathOf, bpTagsOfSymbol, bpTypeOf, bpTypeOfMember, classInfo, functionInfo, resolveAlias, splitMemberPath } from "./tags.js";
+import { BLUEPRINT_META, WIDGET_META, bpPathOf, bpTagsOfSymbol, bpTypeOf, bpTypeOfMember, classInfo, classPathOf, functionInfo, ownEventInfo, resolveAlias, splitMemberPath } from "./tags.js";
 import type { FunctionInfo } from "./tags.js";
 
-const BLUEPRINT_META = "/Script/Engine.BlueprintGeneratedClass";
+export { classPathOf } from "./tags.js";
+
+const USER_WIDGET = "/Script/UMG.UserWidget";
 const NUMERIC = new Set(["int", "int64", "byte", "float", "double", "real"]);
 const STRINGY = new Set(["name", "text", "string"]);
 /** `@blueprint` options that set class defaults (applied by the class-defaults pass). */
@@ -84,11 +86,6 @@ export function blueprintPathOf(checker: ts.TypeChecker, decl: ts.ClassDeclarati
   return undefined;
 }
 
-/** `<path>.<AssetName>_C` for a package path. */
-export function classPathOf(path: string): string {
-  return `${path}.${path.slice(path.lastIndexOf("/") + 1)}_C`;
-}
-
 function children(e: HirExpr): HirExpr[] {
   switch (e.k) {
     case "getOn": return [e.obj];
@@ -110,6 +107,8 @@ function children(e: HirExpr): HirExpr[] {
     case "cmp": return [e.a, e.b];
     case "index": return [e.array, e.index];
     case "arrayFind": return [e.array, e.value];
+    case "formatText": return e.args.map((a) => a.value);
+    case "makeStruct": return e.fields.map((a) => a.value);
     default: return [];
   }
 }
@@ -213,6 +212,7 @@ class HirBuilder {
     let path: string | undefined;
     let parentOption: string | undefined;
     let classManagerRow: string | undefined;
+    let widget = false;
     const defaultOpts: Array<{ key: string; prop: string; value: string; node: ts.Node }> = [];
     const opts = ts.isCallExpression(bp.expression) ? bp.expression.arguments[0] : undefined;
     if (opts && ts.isObjectLiteralExpression(opts)) {
@@ -232,7 +232,12 @@ class HirBuilder {
           // class defaults: validated here, applied by the class-defaults pass (design 6.2 pass 5)
           const init = (p as ts.PropertyAssignment).initializer;
           const prop = BOOL_DEFAULTS[key] ?? NUMBER_DEFAULTS[key];
-          if (prop === undefined) continue; // "kind": no class default
+          if (prop === undefined) {
+            // "kind": no class default
+            if (lit === "widget") widget = true;
+            else this.sink.error("ABFC2061", `@blueprint option "kind" must be "widget"`, (p as ts.PropertyAssignment).initializer);
+            continue;
+          }
           const isBool = BOOL_DEFAULTS[key] !== undefined;
           if (isBool && (init.kind === ts.SyntaxKind.TrueKeyword || init.kind === ts.SyntaxKind.FalseKeyword)) {
             defaultOpts.push({ key, prop, value: init.kind === ts.SyntaxKind.TrueKeyword ? "True" : "False", node: p });
@@ -256,7 +261,8 @@ class HirBuilder {
       return;
     }
     const extSym = this.checker.getSymbolAtLocation(ext);
-    const extInfo = extSym ? classInfo(resolveAlias(this.checker, extSym)) : undefined;
+    const extInfo0 = extSym ? classInfo(resolveAlias(this.checker, extSym)) : undefined;
+    const extInfo = extInfo0?.fromTs ? undefined : extInfo0;
     if (extInfo === undefined) {
       this.sink.error("ABFC2060", `parent class of ${name} has no Blueprint metadata (@bpPath)`, ext);
       return;
@@ -265,7 +271,14 @@ class HirBuilder {
     parent ??= extInfo.path;
 
     const defaults: Record<string, string> = {};
-    const parentIsActor = this.derivesFromActor(this.checker.getDeclaredTypeOfSymbol(resolveAlias(this.checker, extSym!)));
+    const parentType0 = this.checker.getDeclaredTypeOfSymbol(resolveAlias(this.checker, extSym!));
+    const parentIsActor = this.derivesFromActor(parentType0);
+    const parentIsWidget = this.derivesFrom(parentType0, USER_WIDGET);
+    if (widget && !parentIsWidget) {
+      this.sink.error("ABFC2064", `${name} has kind "widget" but does not extend UserWidget`, node.name ?? node);
+    } else if (!widget && parentIsWidget) {
+      this.sink.error("ABFC2065", `${name} extends UserWidget: add kind: "widget" to @blueprint`, node.name ?? node);
+    }
     for (const o of defaultOpts) {
       if (ACTOR_ONLY_OPTIONS.has(o.key) && !parentIsActor) {
         this.sink.error("ABFC2062", `@blueprint option "${o.key}" only applies to an Actor, but ${name} does not derive from Actor`, o.node);
@@ -284,8 +297,9 @@ class HirBuilder {
       manualUnits: this.manualUnits(node),
       defaults,
       ...(classManagerRow !== undefined ? { classManagerRow } : {}),
+      ...(widget ? { kind: "widget" as const } : {}),
     };
-    this.classMeta[cls.classPath] = BLUEPRINT_META;
+    this.classMeta[cls.classPath] = widget ? WIDGET_META : BLUEPRINT_META;
 
     // Signatures first: a call or delegate reference may point to an event declared further down.
     this.cls = cls;
@@ -318,6 +332,10 @@ class HirBuilder {
         }
         continue;
       }
+      if (ts.isPropertyDeclaration(m) && ts.isIdentifier(m.name) && this.isDesignerWidget(node, m.name.text)) {
+        this.sink.error("ABFC2066", `"${m.name.text}" is a designer widget of ${path}; rename the variable`, m.name);
+        continue;
+      }
       this.sink.error("ABFC2099", `class member of kind ${ts.SyntaxKind[m.kind]} is not supported`, m);
     }
     this.classes.push(cls);
@@ -325,13 +343,34 @@ class HirBuilder {
 
   /** True when the class or one of its base classes is an engine Actor (`@bpPath /Script/<Module>.Actor`). */
   private derivesFromActor(type: ts.Type): boolean {
+    return this.derivesWhere(type, (p) => /^\/Script\/[^.]+\.Actor$/.test(p));
+  }
+
+  /** True when the class or one of its base classes has `@bpPath <classPath>`. */
+  private derivesFrom(type: ts.Type, classPath: string): boolean {
+    return this.derivesWhere(type, (p) => p === classPath);
+  }
+
+  /** True when the `_Manual` stub merged into the class declares `name` as a designer widget (`@bpWidget`). */
+  private isDesignerWidget(node: ts.ClassDeclaration, name: string): boolean {
+    const sym = node.name ? this.checker.getSymbolAtLocation(node.name) : undefined;
+    if (sym === undefined) return false;
+    const type = this.checker.getDeclaredTypeOfSymbol(sym);
+    if (!type.isClassOrInterface()) return false;
+    return this.checker.getBaseTypes(type).some((b) => {
+      const prop = this.checker.getPropertyOfType(b, name);
+      return prop !== undefined && bpTagsOfSymbol(prop).has("bpWidget");
+    });
+  }
+
+  private derivesWhere(type: ts.Type, pred: (classPath: string) => boolean): boolean {
     const seen = new Set<ts.Type>();
     const walk = (t: ts.Type): boolean => {
       if (seen.has(t)) return false;
       seen.add(t);
       const sym = t.getSymbol();
       const info = sym ? classInfo(sym) : undefined;
-      if (info !== undefined && /^\/Script\/[^.]+\.Actor$/.test(info.path)) return true;
+      if (info !== undefined && pred(info.path)) return true;
       return (t.isClassOrInterface() ? this.checker.getBaseTypes(t) : []).some(walk);
     };
     return walk(type);
@@ -682,6 +721,54 @@ class HirBuilder {
     if (ci && ci.kind === "class") this.classMeta[ci.path] = ci.meta;
   }
 
+  /** `` `Hunger ${hunger}` `` where a text is expected: FormatText. Arg names come from the substitutions. */
+  private formatText(node: ts.TemplateExpression, expected: BpType | undefined): HirExpr {
+    const f: DiagSink = this.sink;
+    if (expected !== "text") return f.fail("ABFC2099", "a template literal is only supported where a text value is expected", node);
+    const esc = (s: string): string => s.replace(/`/g, "``").replace(/[{}]/g, (c) => "`" + c);
+    const allowed = new Set(["text", "string", "name", "int", "int64", "float", "double", "real", "bool"]);
+    const used = new Set<string>();
+    const args: Array<{ name: string; value: HirExpr }> = [];
+    let format = esc(node.head.text);
+    node.templateSpans.forEach((span, i) => {
+      const x = span.expression;
+      let base = `Arg${i}`;
+      if (ts.isIdentifier(x)) base = x.text;
+      else if (ts.isPropertyAccessExpression(x)) base = x.name.text;
+      let name = base;
+      for (let n = 2; used.has(name); n++) name = `${base}_${n}`;
+      used.add(name);
+      const value = this.expr(x);
+      if (!allowed.has(value.type)) f.fail("ABFC2099", `a template substitution of type ${value.type} is not supported (text, string, name, int, double, bool)`, x);
+      args.push({ name, value });
+      format += `{${name}}` + esc(span.literal.text);
+    });
+    return { k: "formatText", format, args, type: "text", span: this.sp(node) };
+  }
+
+  /** `{ A: 1, B }` where the contextual type is a stub struct: MakeStruct (full literals, property assignments only). */
+  private makeStruct(node: ts.ObjectLiteralExpression, expected: BpType | undefined): HirExpr {
+    const f: DiagSink = this.sink;
+    if (expected === undefined || !expected.startsWith("struct:")) return f.fail("ABFC2099", "an object literal is only supported where a stub struct is expected", node);
+    const ctx = this.checker.getContextualType(node);
+    const fields: Array<{ name: string; value: HirExpr }> = [];
+    for (const p of node.properties) {
+      let name: string;
+      let init: ts.Expression;
+      if (ts.isPropertyAssignment(p) && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name))) {
+        name = p.name.text;
+        init = p.initializer;
+      } else if (ts.isShorthandPropertyAssignment(p)) {
+        name = p.name.text;
+        init = p.name;
+      } else return f.fail("ABFC2099", "only `name: value` and shorthand properties are supported in a struct literal", p);
+      const prop = ctx ? this.checker.getPropertyOfType(ctx, name) : undefined;
+      const ft = prop ? bpTypeOf(this.checker, this.checker.getTypeOfSymbolAtLocation(prop, node)) : undefined;
+      fields.push({ name, value: this.expr(init, ft) });
+    }
+    return { k: "makeStruct", struct: expected.slice("struct:".length), fields, type: expected, span: this.sp(node) };
+  }
+
   private lit(node: ts.Expression, value: string | number | boolean | null, type: string): HirExpr {
     return { k: "lit", value, type, span: this.sp(node) };
   }
@@ -691,6 +778,17 @@ class HirBuilder {
     if (hole) return hole;
     if (ts.isParenthesizedExpression(node)) return this.expr(node.expression, expected, inCond);
     if (ts.isNonNullExpression(node)) return this.expr(node.expression, expected, inCond);
+    if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) {
+      if (ts.isAsExpression(node) && ts.isTypeReferenceNode(node.type) && node.type.typeName.getText() === "const") {
+        this.sink.fail("ABFC2099", "a type assertion must keep the Blueprint type; \"as const\" is not supported", node);
+      }
+      const inner = this.expr(node.expression, expected, inCond);
+      const to = bpTypeOf(this.checker, this.checker.getTypeFromTypeNode(node.type));
+      if (to === undefined || to !== inner.type) {
+        this.sink.fail("ABFC2099", `a type assertion must keep the Blueprint type (${inner.type} -> ${to ?? "?"}); use cast(value, Class)`, node);
+      }
+      return inner;
+    }
 
     const tsType = this.checker.getTypeAtLocation(node);
     if (tsType.flags & ts.TypeFlags.Any && !("intrinsicName" in tsType && (tsType as { intrinsicName?: string }).intrinsicName === "error")) {
@@ -754,6 +852,10 @@ class HirBuilder {
         return { k: "lit", value: false, type: "bool", span: sp };
       case ts.SyntaxKind.NumericLiteral:
         return this.lit(node, Number((node as ts.NumericLiteral).text), expected !== undefined && NUMERIC.has(expected) ? expected : "number");
+      case ts.SyntaxKind.TemplateExpression:
+        return this.formatText(node as ts.TemplateExpression, expected);
+      case ts.SyntaxKind.ObjectLiteralExpression:
+        return this.makeStruct(node as ts.ObjectLiteralExpression, expected);
       case ts.SyntaxKind.StringLiteral:
         if (expected !== undefined && expected.startsWith("enum:")) return this.enumLit(node as ts.StringLiteral, expected);
         return this.lit(node, (node as ts.StringLiteral).text, expected !== undefined && STRINGY.has(expected) ? expected : "string");
@@ -850,7 +952,10 @@ class HirBuilder {
   }
 
   private identifier(node: ts.Identifier, sp: Span): HirExpr {
-    const sym = this.checker.getSymbolAtLocation(node);
+    // `{ Label }`: the name of a shorthand property stands for the variable of that name, not the property
+    const sym = ts.isShorthandPropertyAssignment(node.parent) && node.parent.name === node
+      ? this.checker.getShorthandAssignmentValueSymbol(node.parent)
+      : this.checker.getSymbolAtLocation(node);
     const local = sym ? this.locals.get(sym) : undefined;
     if (local) {
       if (local.poison) throw new Fail();
@@ -987,7 +1092,7 @@ class HirBuilder {
     }
 
     const sym = this.checker.getSymbolAtLocation(callee.name);
-    const fi = sym ? functionInfo(sym) : undefined;
+    const fi = sym ? (functionInfo(sym) ?? ownEventInfo(this.checker, sym)) : undefined;
     if (!fi) return f.fail("ABFC2060", `function ${callee.name.text} has no Blueprint metadata (@bpPath)`, callee.name);
 
     if (fi.execOutputs !== null) {

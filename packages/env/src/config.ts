@@ -5,7 +5,17 @@ import { USER_CONFIG_LABEL } from "./settings.js";
 
 export interface ProjectConfig {
   mod: { name: string; dir?: string };
-  stubs: { classes: string[]; scriptClasses: string[]; modAssets: "all" | string[]; scriptModules?: string[] };
+  stubs: {
+    classes: string[];
+    scriptClasses: string[];
+    modAssets: "all" | string[];
+    scriptModules?: string[];
+    /**
+     * Designer widgets of Widget Blueprints that cannot be read from an export (those under /Game): class path ->
+     * { member name -> widget class path }, e.g. `{ "/Game/UI/W_Hud.W_Hud_C": { "TitleText": "/Script/UMG.TextBlock" } }`.
+     */
+    widgetMembers: Record<string, Record<string, string>>;
+  };
   backend: { kind: "bp_apply"; minProtocol: number; serverDir?: string; python?: string };
   editor?: { root?: string };
   headlessDir?: string;
@@ -62,6 +72,27 @@ function strArray(file: string, o: Obj, key: string, path: string): string[] | u
   return v as string[];
 }
 
+const WIDGET_MEMBERS_SHAPE = "expected an object of class path -> { member: widget class path }";
+
+function widgetMembers(file: string, v: unknown): Record<string, Record<string, string>> {
+  if (v === undefined) return {};
+  const out: Record<string, Record<string, string>> = {};
+  for (const [cls, members] of Object.entries(asObjShape(file, v))) {
+    const inner: Record<string, string> = {};
+    for (const [member, widget] of Object.entries(asObjShape(file, members))) {
+      if (typeof widget !== "string" || !widget.startsWith("/Script/")) return fail(file, `stubs.widgetMembers.${cls}.${member}`, 'expected a widget class path such as "/Script/UMG.TextBlock"');
+      inner[member] = widget;
+    }
+    out[cls] = inner;
+  }
+  return out;
+}
+
+function asObjShape(file: string, v: unknown): Obj {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return fail(file, "stubs.widgetMembers", WIDGET_MEMBERS_SHAPE);
+  return v as Obj;
+}
+
 function parseConfig(file: string, raw: unknown, partial: boolean): Partial<ProjectConfig> {
   const root = asObj(file, "$", raw);
   const out: Partial<ProjectConfig> = {};
@@ -88,12 +119,13 @@ function parseConfig(file: string, raw: unknown, partial: boolean): Partial<Proj
       classes: strArray(file, s, "classes", "stubs.") ?? [],
       scriptClasses: strArray(file, s, "scriptClasses", "stubs.") ?? [],
       modAssets: (modAssets as "all" | string[] | undefined) ?? "all",
+      widgetMembers: widgetMembers(file, s.widgetMembers),
     };
     const scriptModules = strArray(file, s, "scriptModules", "stubs.");
     if (scriptModules !== undefined) stubs.scriptModules = scriptModules;
     out.stubs = stubs;
   } else if (!partial) {
-    out.stubs = { classes: [], scriptClasses: [], modAssets: "all" };
+    out.stubs = { classes: [], scriptClasses: [], modAssets: "all", widgetMembers: {} };
   }
 
   if (root.backend !== undefined) {

@@ -100,6 +100,26 @@ test("parseExport reads nodes, graphs, pins and links", () => {
   assert.equal(e.nodes.size, 3);
 });
 
+test("parseExport keeps plain node keys for the event graph whatever the graph order is", () => {
+  const graph = (name: string, node: string): string[] => [
+    `   Begin Object Class=/Script/Engine.EdGraph Name="${name}" ExportPath="/Script/Engine.EdGraph'${BP}:${name}'"`,
+    `      Begin Object Class=/Script/Fake.Widget Name="${node}" ExportPath="/Script/Fake.Widget'${BP}:${name}.${node}'"`,
+    "      End Object",
+    "   End Object",
+  ];
+  const head = `Begin Object Class=/Script/Engine.Blueprint Name="BP_Host" ExportPath="/Script/Engine.Blueprint'${BP}'"`;
+  const make = (order: string[]): string =>
+    [head, ...order.flatMap((g) => graph(g, "Fake_Call_0")), "End Object"].join("\n");
+  for (const order of [["EventGraph", "Stub"], ["Stub", "EventGraph"], ["StubA", "EventGraph", "StubB"]]) {
+    const e = parseExport(make(order));
+    assert.equal(e.nodes.get("Fake_Call_0")?.graph, "EventGraph", order.join(","));
+    for (const g of order.filter((x) => x !== "EventGraph")) assert.equal(e.nodes.get(`${g}/Fake_Call_0`)?.graph, g);
+    assert.equal(e.nodes.size, order.length);
+  }
+  // without an event graph the first graph in the file keeps the plain key
+  assert.equal(parseExport(make(["StubA", "StubB"])).nodes.get("Fake_Call_0")?.graph, "StubA");
+});
+
 test("parseExport reads variables and entry pins", () => {
   const e = parseExport(fakeExport());
   assert.deepEqual(e.variables, [

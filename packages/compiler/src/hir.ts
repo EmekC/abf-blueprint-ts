@@ -21,6 +21,8 @@ export interface HirClass {
   defaults: Record<string, string>;
   /** Row asset path of the `classManagerRow` option (verified, not written). */
   classManagerRow?: string;
+  /** `widget`: the asset is a Widget Blueprint (`@blueprint({ kind: "widget" })`). */
+  kind?: "widget";
 }
 
 export interface HirEvent {
@@ -100,6 +102,10 @@ export type HirExpr = (
   | { k: "index"; array: HirExpr; index: HirExpr; elem: BpType }
   /** `arr.indexOf(x)`: Array_Find (-1 when absent). `elem` is the element type. */
   | { k: "arrayFind"; array: HirExpr; value: HirExpr; elem: BpType }
+  /** Template literal where a `text` is expected: FormatText. `format` already has `{`, `}` and backticks escaped. */
+  | { k: "formatText"; format: string; args: Array<{ name: string; value: HirExpr }> }
+  /** Object literal of a stub struct (`@bpKind struct`): MakeStruct. `struct` is the struct path. */
+  | { k: "makeStruct"; struct: string; fields: Array<{ name: string; value: HirExpr }> }
 ) & { type: BpType | "void" | "null"; span: Span };
 
 export interface HirProgram {

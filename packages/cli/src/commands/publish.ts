@@ -1,8 +1,18 @@
 import { grantPublish } from "@abfc/backend";
 import type { Backend, PublishResult, StageStatus } from "@abfc/backend";
-import { blockedMemberHits, loadProgram, readManifest } from "@abfc/compiler";
+import {
+  blockedMemberHits,
+  deleteManifest,
+  deleteSourceMap,
+  listManifests,
+  loadProgram,
+  readManifest,
+  writeManifest,
+} from "@abfc/compiler";
 import type { Diagnostic } from "@abfc/ir";
+import { win32 } from "node:path";
 import type { CliContext } from "../context.js";
+import { dropUnitCacheAsset } from "../unitcache.js";
 import { uploadFileDiagnostics, walkFolder } from "../gate/uploadcheck.js";
 import { BackendSession, Recorder, compileFrontend, emitAll, lockDiagnostics, since } from "./common.js";
 import { runBuild } from "./build.js";
@@ -186,6 +196,11 @@ function wouldPublish(ctx: CliContext, stage: StageStatus | null): PublishList {
     const m = readManifest(ctx.projectDir, a.path);
     if (m !== null && m.units.length > 0) owned.add(a.path);
   }
+  // Classes whose TypeScript is gone: their units (or the retirement of them) still have to reach the mod.
+  for (const m of listManifests(ctx.projectDir)) {
+    if (!m.asset.startsWith(`/${ctx.config.mod.name}/`)) continue;
+    if (m.units.length > 0 || (m.retiredUnpublished?.length ?? 0) > 0) owned.add(m.asset);
+  }
   const ownedKeys = new Set([...owned].map((p) => p.split("/").slice(2).join("/").toLowerCase()));
   const mine = (f: string): boolean => isContentFile(f) && !isHelperFile(f) && ownedKeys.has(contentKey(f));
   const changed = (stage?.changed ?? []).filter(mine);
@@ -221,6 +236,20 @@ async function copyToMod(ctx: CliContext, rec: Recorder, backend: Backend, list:
     for (const c of r.conflicts.slice(0, 10)) output.info(`  ${c}`);
     if (r.backup !== null) output.info(`backup: ${r.backup}`);
     return fail(ctx);
+  }
+  // The retirements of these assets are in the mod now; an asset that nothing owns any more is forgotten.
+  for (const asset of assets) {
+    const m = readManifest(ctx.projectDir, asset);
+    if (m === null || m.retiredUnpublished === undefined) continue;
+    const { retiredUnpublished: _retired, ...rest } = m;
+    if (rest.units.length === 0 && rest.variables.length === 0 && rest.classDefaultsHash === undefined) {
+      deleteManifest(ctx.projectDir, asset);
+      deleteSourceMap(ctx.projectDir, asset);
+      dropUnitCacheAsset(win32.join(ctx.paths.cacheDir, "units.json"), asset);
+      output.info(`no longer owned by abfc: ${asset}`);
+    } else {
+      writeManifest(ctx.projectDir, rest);
+    }
   }
   output.info("published:");
   if (r.published.length === 0) output.info(`  ${r.message}`);
