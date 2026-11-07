@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "node": {
+    "version": "26.7.0",
+    "url": "https://nodejs.org/dist/v26.7.0/win-x64/node.exe",
+    "sha256": "",
+    "shasumsUrl": "https://nodejs.org/dist/v26.7.0/SHASUMS256.txt",
+    "licenseUrl": "https://raw.githubusercontent.com/nodejs/node/v26.7.0/LICENSE",
+    "licenseSha256": ""
+  },
+  "python": {
+    "version": "3.14.7",
+    "url": "https://www.python.org/ftp/python/3.14.7/python-3.14.7-embed-amd64.zip",
+    "sha256": ""
+  },
+  "backend": {
+    "repo": "https://github.com/EmekC/abf-mod-editor-mcp",
+    "version": "2.5.0",
+    "tag": null,
+    "commit": "7ff46879e2daae8fbf11475409537e7fa618d515",
+    "filesSha256": ""
+  },
+  "innosetup": {
+    "version": "",
+    "url": "",
+    "sha256": ""
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "backend": [
+    "server.py",
+    "abfc_tools.py",
+    "bpscan.py",
+    "headless.py",
+    "headless_tools.py",
+    "hiddendesk.py",
+    "paths.py",
+    "staging.py",
+    "wininput.py",
+    "editor/**",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "runtime": [
+    "backend/**",
+    "python/**",
+    "profiles/*.json",
+    "data/descriptions.json",
+    "types/runtime/*.d.ts",
+    "types/testkit/*.d.ts",
+    "types/ir/*.d.ts",
+    "tslib/lib*.d.ts",
+    "schema/abf.config.schema.json",
+    "THIRD-PARTY-NOTICES.txt"
+  ],
+  "zip": ["abfc.exe", "abfc-vscode-*.vsix", "LICENSE.txt", "THIRD-PARTY-NOTICES.txt", "README.txt"],
+  "installer": ["abfc.exe", "abfc-vscode-*.vsix", "LICENSE.txt", "THIRD-PARTY-NOTICES.txt", "README.txt"]
+}

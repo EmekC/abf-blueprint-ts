@@ -11,9 +11,13 @@
   ],
   "scripts": {
     "build": "tsc -b",
-    "test": "node --test \"packages/*/dist/test/**/*.test.js\"",
+    "test": "node --test \"packages/*/dist/test/**/*.test.js\" \"scripts/release/test/*.test.mjs\"",
     "clean": "tsc -b --clean",
-    "vsix": "npm run build && npm run package -w abfc-vscode"
+    "vsix": "npm run build && npm run package -w abfc-vscode",
+    "release:exe": "node scripts/release/build-exe.mjs",
+    "release:installer": "node scripts/release/build-installer.mjs",
+    "release:inspect": "node scripts/release/inspect.mjs",
+    "release:fetch": "node scripts/release/fetch-pins.mjs"
   },
   "devDependencies": {
     "@types/node": "24.19.2",
