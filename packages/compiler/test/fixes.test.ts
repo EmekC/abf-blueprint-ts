@@ -52,6 +52,27 @@ test("idivFix does not import idiv twice and ignores a type-only import", () => 
   assert.equal(apply(typeOnly, second), `import { idiv } from "@abfc/runtime";\nimport type { int } from "@abfc/runtime";\nconst x = idiv(a, b);\n`);
 });
 
+test("idivFix uses an aliased idiv import and adds a named one next to a type-only alias", () => {
+  const aliased = `import { idiv as div } from "@abfc/runtime";\nconst x = a / b;\n`;
+  const [s, e] = range(aliased, "a / b");
+  const first = idivFix(sf(aliased), s, e);
+  assert.ok(first);
+  assert.equal(first.length, 1, "no import edit");
+  assert.equal(apply(aliased, first), `import { idiv as div } from "@abfc/runtime";\nconst x = div(a, b);\n`);
+
+  const typeOnlyAlias = `import { type idiv as div } from "@abfc/runtime";\nconst x = a / b;\n`;
+  const [s2, e2] = range(typeOnlyAlias, "a / b");
+  const second = idivFix(sf(typeOnlyAlias), s2, e2);
+  assert.ok(second);
+  assert.equal(apply(typeOnlyAlias, second), `import { type idiv as div, idiv } from "@abfc/runtime";\nconst x = idiv(a, b);\n`);
+
+  const typeOnlyClause = `import type { idiv as div } from "@abfc/runtime";\nconst x = a / b;\n`;
+  const [s3, e3] = range(typeOnlyClause, "a / b");
+  const third = idivFix(sf(typeOnlyClause), s3, e3);
+  assert.ok(third);
+  assert.equal(apply(typeOnlyClause, third), `import { idiv } from "@abfc/runtime";\nimport type { idiv as div } from "@abfc/runtime";\nconst x = idiv(a, b);\n`);
+});
+
 test("idivFix finds no division where there is none", () => {
   const text = `const x = a + b;\n`;
   const [s, e] = range(text, "a + b");
@@ -95,4 +116,38 @@ test("optionalChainFix refuses an already optional access and a span that is not
   const call = `f(a);\n`;
   const [s2, e2] = range(call, "a");
   assert.equal(optionalChainFix(sf(call), s2, e2), undefined);
+});
+
+test("optionalChainFix offers nothing on assignment targets", () => {
+  const writes: Array<[string, string]> = [
+    [`a.b = 1;\n`, "a"],
+    [`a.b += 1;\n`, "a"],
+    [`a.b++;\n`, "a"],
+    [`--a.b;\n`, "a"],
+    [`a.b.c = 1;\n`, "a"],
+    [`a.b.c = 1;\n`, "a.b"],
+    [`[a.b] = xs;\n`, "a"],
+    [`({ k: a.b } = o);\n`, "a"],
+    [`for (a.b of xs) {}\n`, "a"],
+  ];
+  for (const [text, needle] of writes) {
+    const [s, e] = range(text, needle);
+    assert.equal(optionalChainFix(sf(text), s, e), undefined, text);
+  }
+});
+
+test("optionalChainFix still fixes reads next to assignments", () => {
+  const reads: Array<[string, string, string]> = [
+    [`x = a.b;\n`, "a", `x = a?.b;\n`],
+    [`f(a.b);\n`, "a", `f(a?.b);\n`],
+    [`a.b();\n`, "a", `a?.b();\n`],
+    [`const v = [a.b];\n`, "a", `const v = [a?.b];\n`],
+    [`const v = a.b === 1;\n`, "a", `const v = a?.b === 1;\n`],
+  ];
+  for (const [text, needle, expected] of reads) {
+    const [s, e] = range(text, needle);
+    const edits = optionalChainFix(sf(text), s, e);
+    assert.ok(edits, text);
+    assert.equal(apply(text, edits), expected);
+  }
 });

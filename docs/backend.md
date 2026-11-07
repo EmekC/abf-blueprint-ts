@@ -1,0 +1,104 @@
+# The backend: abf-mod-editor-mcp
+
+abfc does not touch Blueprint assets itself. It talks to a headless Mod Editor backend, the MCP server in https://github.com/EmekC/abf-mod-editor-mcp. That repository is the only supported backend, and it owns its version numbers. abfc spawns the server (`python -I -X utf8 <backend dir>\server.py`), speaks MCP JSON-RPC over stdio and calls its tools (`bp_apply`, `staging_sync`, `bp_compile_report`, `bp_game_test`, `mod_audit`, `bp_publish`, `reflect`, `backend_info`). See [design.md](design.md) section 7 for the transport and the mapping from the IR to `bp_apply`.
+
+## Requirements
+
+| What | Value |
+| --- | --- |
+| Minimum server version | 2.4.0 (tag `v2.4.0`) |
+| Protocol | 1 or higher (`backend_info.protocol`) |
+| Python | 3.9 or newer on the PC (the editor uses its own Python internally) |
+| Mod Editor | installed from the Epic Games Launcher |
+
+An older server still works where it can: abfc gates every feature on a capability and prints a warning, not an error, below 2.4.0. A protocol below 1 is an error.
+
+## Install
+
+1. Clone the repository: `git clone https://github.com/EmekC/abf-mod-editor-mcp <backend dir>`.
+2. Check out the release: `git -C <backend dir> checkout v2.4.0` (or a newer tag).
+3. Make sure Python 3.9 or newer is on `PATH` (not the Microsoft Store alias), or tell abfc where it is (see below).
+
+To update, fetch and check out a newer tag. abfc never modifies the checkout.
+
+## Point abfc at the backend
+
+abfc resolves the backend folder in this order: the `--backend-dir <backend dir>` flag, the environment variable `ABFC_BACKEND_DIR`, the `backend.serverDir` setting of `abf.config.json` (or the user config). There is no auto-discovery of the backend folder, and it must hold `server.py`. The Python executable comes from `--python`, `ABFC_PYTHON`, `backend.python` or `python` on `PATH`.
+
+```json
+{
+  "backend": { "serverDir": "<backend dir>", "python": "<path to python.exe>" }
+}
+```
+
+Both keys are optional. `abfc doctor` prints which source each setting came from.
+
+## What abfc sets for the server
+
+| Variable | Set by abfc | Meaning |
+| --- | --- | --- |
+| `ABF_ABFC_TOOLS=1` | always | registers the opt-in tools `reflect`, `abfc_extensions` and `warm_session`, and makes `backend_info` report `reflect: true` |
+| `ABF_WARM_SESSION=1` | unless `--cold` | keeps one hidden editor alive between operations (a build with several steps starts the editor once). `--cold` removes an inherited value, so the server stays cold even when your shell exports it |
+| `ABF_REFLECT_META` | never | optional, set it yourself. `0` makes `abfc stubs` skip the function tooltip and display-name read in `reflect` (the stubs then carry no hover descriptions). The `reflect` tool argument `meta` wins over the variable. abfc passes no argument, so the variable it inherits decides |
+
+Use `ABF_REFLECT_META=0` if the hidden editor crashes during the function-template chunk of `abfc stubs`; the stubs are complete apart from the descriptions.
+
+## abfc doctor
+
+`abfc doctor` starts the backend, calls `backend_info` and prints what it found, for example:
+
+```
+backend: server 2.4.0 (minimum 2.4.0), protocol 1
+  engine: 5.4.4
+  wildcard pin types: native
+  containers: backend array: true, map: true, set: true; abfc array: true, map: true, set: true, struct: true
+  reflect: yes, compile node refs: yes, game test: yes, audit: yes
+  warm session: yes, stage audit: yes
+  extensions: ...
+```
+
+- `server ... (minimum ...)`: the reported server version next to the minimum abfc is built for.
+- `engine`: the Mod Editor's engine version (`null` is not printed).
+- `wildcard pin types`: `native` is one apply; `fallback` is the slower two-phase route.
+- `containers`: what the backend's type grammar accepts, then what abfc enables (abfc keeps its own policy for maps, sets and structs).
+- The last lines show the capabilities, the warm-session state, the extensions and the headless folder the backend uses.
+
+Warnings and errors from the backend check use the codes below. `abfc doctor` exits 0 with warnings, nonzero with errors. Every command that opens the backend runs the same check.
+
+## backend_info capabilities and what abfc does with them
+
+| Key | abfc feature |
+| --- | --- |
+| `protocol`, `serverVersion`, `engineVersion` | version check (ABFC4001, ABFC4014), `abfc doctor` |
+| `capabilities.pinTypes` | wildcard pins (array length and item, casts) in one apply; without it, the two-phase route |
+| `capabilities.containerTypes` | `Map` and `Set` types; gate ABFC2044 |
+| `capabilities.warmSession` | warm hidden editor between steps |
+| `capabilities.stageAudit` | `mod_audit` audits the staged copy (`abfc publish --full`) |
+| `capabilities.reflect` | `abfc stubs` (abfc also checks the tool list) |
+| `capabilities.compileErrorNodeRefs` | compile errors name the node and graph, mapped back to the TypeScript line |
+| `capabilities.createKinds` | asset kinds that `bp_apply` can create (`Blueprint`, `WidgetBlueprint`, `BlueprintInterface`, `UserDefinedStruct`); gate ABFC2044 |
+| `capabilities.gameTest` | `abfc test`, `abfc publish --full` |
+| `capabilities.audit` | `abfc publish --full` |
+| `capabilities.publish` | `abfc publish` |
+| `capabilities.functionLocals` | always `false` today; abfc hoists temporaries into owned member variables instead |
+| `capabilities.userPureFunctions` | always `false` today; getters are impure functions |
+| `bpApply.features` | per-feature gates, for example `event_meta` (event tooltips, ABFC2071) and `self_event_calls` (ABFC4013) |
+
+## Diagnostics
+
+| Code | Severity | Meaning | Fix |
+| --- | --- | --- | --- |
+| ABFC4001 | error | the backend reports a protocol below the one abfc needs | update the checkout to the tag named above |
+| ABFC4012 | warning | the backend has no `backend_info` tool (an old checkout); abfc uses the two-phase wildcard route, about 10-20 s more per build | update to 2.4.0 or newer |
+| ABFC4014 | warning | the server version is older than the minimum (2.4.0); it may miss capabilities abfc uses. Versions that do not parse (for example in test doubles) never warn | check out tag `v2.4.0` or newer |
+| ABFC2044 | error | a `Map`, `Set` or struct needs a backend capability that is missing | update the backend, or remove the type |
+| ABFC2071 | warning | the backend has no `event_meta`, so an `@event` doc comment is not written as its Blueprint tooltip | update the backend |
+| ABFC2072 | warning | the doc comment of an `@event` is longer than 2000 characters; the Blueprint tooltip, category or keywords are cut to 2000 (ending in `...`) | shorten the comment |
+
+## Known fallbacks
+
+- Without `backend_info` (server older than 2.4.0 and old enough to lack the tool), wildcard pins use a two-phase route: apply, patch the rolled-back graph, apply it again as a raw block. Builds work and take longer.
+- Function-graph tooltips are not written. Event tooltips are written (`event_meta`); a function's doc comment stays in the TypeScript source and in the stubs' hover text. The engine drops function metadata on import, and Python cannot read compiled function metadata back.
+- Function local variables are not supported by the backend; abfc hoists temporaries into members it owns.
+- User pure functions are not supported; use impure functions.
+- Changing the fields of an existing `UserDefinedStruct` is not supported (ABFC2046); abfc creates new structs and compares existing ones.

@@ -65,6 +65,7 @@ function init(modules: { typescript: typeof ts }): {
         return guarded("hover", own, (s) => s.quickInfo(args[0], args[1], own));
       };
       proxy.getCodeFixesAtPosition = (...args: Parameters<ts.LanguageService["getCodeFixesAtPosition"]>): readonly ts.CodeFixAction[] => {
+        guarded("sync", undefined, (s) => s.sync());
         const own = base.getCodeFixesAtPosition(...args);
         return guarded("code fixes", own, (s) => s.codeFixes(args[0], args[1], args[2], args[3], own));
       };

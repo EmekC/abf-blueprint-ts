@@ -1,9 +1,30 @@
 import type { BackendCapabilities } from "@abfc/ir";
 
-/** The JSON of `backend_info` (wildcard-pins branch of abf-mod-editor-mcp); every key optional, unknown keys ignored. */
+/** The minimum abf-mod-editor-mcp server version abfc is built for; an older (parseable) version gets warning ABFC4014. */
+export const MIN_BACKEND_VERSION = "2.4.0";
+
+/**
+ * Compares two `major.minor.patch` versions (an optional leading `v`, anything after the patch number is ignored):
+ * -1 when `version` is older than `min`, 0 when equal, 1 when newer, null when either does not parse (e.g. `fake-1`).
+ */
+export function compareServerVersion(version: string, min: string): number | null {
+  const re = /^v?(\d+)\.(\d+)\.(\d+)/;
+  const a = re.exec(version);
+  const b = re.exec(min);
+  if (a === null || b === null) return null;
+  for (let i = 1; i <= 3; i++) {
+    const x = Number(a[i]);
+    const y = Number(b[i]);
+    if (x !== y) return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
+/** The JSON of `backend_info` (abf-mod-editor-mcp 2.4.0); every key optional, unknown keys ignored. */
 export interface RawBackendInfo {
   protocol?: unknown;
   serverVersion?: unknown;
+  engineVersion?: unknown;
   editorRoot?: unknown;
   headlessDir?: unknown;
   documentsDir?: unknown;
@@ -12,6 +33,10 @@ export interface RawBackendInfo {
     containerTypes?: { array?: unknown; map?: unknown; set?: unknown } | null;
     warmSession?: unknown;
     stageAudit?: unknown;
+    reflect?: unknown;
+    compileErrorNodeRefs?: unknown;
+    functionLocals?: unknown;
+    createKinds?: unknown;
   } | null;
   bpApply?: { features?: unknown; nodeKinds?: unknown } | null;
 }
@@ -105,7 +130,8 @@ export function capabilitiesFrom(
     gameTest: tools.includes("bp_game_test"),
     audit: tools.includes("mod_audit"),
     publish: tools.includes("bp_publish"),
-    compileErrorNodeRefs: ext?.features?.includes("compile_node_refs") ?? false,
+    compileErrorNodeRefs:
+      bool(info?.capabilities?.compileErrorNodeRefs) || (ext?.features?.includes("compile_node_refs") ?? false),
     warmSession: bool(info?.capabilities?.warmSession) && tools.includes("warm_session"),
     stageAudit: bool(info?.capabilities?.stageAudit),
   };

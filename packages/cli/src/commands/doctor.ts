@@ -1,9 +1,11 @@
 import { win32 } from "node:path";
 import { AbfcError, checkHeadlessDir, envWarning, machineKeysInProject } from "@abfc/env";
 import type { Resolved } from "@abfc/env";
+import { MIN_BACKEND_VERSION } from "@abfc/backend";
 import type { Backend } from "@abfc/backend";
 import type { BackendInfo, Diagnostic } from "@abfc/ir";
 import type { CliContext } from "../context.js";
+import { backendInfoDiagnostics } from "./backend-version.js";
 
 function show(label: string, r: Resolved<string>, extra = ""): string {
   const value = r.value === null ? "(not found)" : r.value;
@@ -113,25 +115,7 @@ export async function doctor(ctx: CliContext): Promise<number> {
 
 function checkInfo(ctx: CliContext, info: BackendInfo): void {
   const { output, config, env } = ctx;
-  if (info.protocol === null) {
-    output.diag(
-      envWarning(
-        4012,
-        `the backend at ${env.backendDir.value ?? "?"} (server ${info.serverVersion}) has no backend_info tool (older abf-mod-editor-mcp).`,
-        [],
-        "update the backend to a version with backend_info; until then wildcard pins use the two-phase fallback.",
-      ),
-    );
-  } else if (info.protocol < config.backend.minProtocol) {
-    output.diag({
-      severity: "error",
-      code: "ABFC4001",
-      message:
-        `abf-mod-editor-mcp at ${env.backendDir.value ?? "?"} (server ${info.serverVersion}) reports protocol ${info.protocol}; ` +
-        `abfc needs protocol >= ${config.backend.minProtocol}. Update it (see docs/backend.md).`,
-      fix: "update the abf-mod-editor-mcp checkout.",
-    });
-  }
+  for (const d of backendInfoDiagnostics(info, config.backend.minProtocol, env.backendDir.value ?? "?")) output.diag(d);
   if (info.headlessDir !== null) {
     const d = checkHeadlessDir(info.headlessDir);
     if (d !== null) output.diag(d);
@@ -162,7 +146,10 @@ function printInfo(ctx: CliContext, info: BackendInfo): void {
   const { output } = ctx;
   const c = info.capabilities;
   const yn = (b: boolean): string => (b ? "yes" : "no");
-  output.info(`backend: server ${info.serverVersion}, protocol ${info.protocol === null ? "(no backend_info)" : info.protocol}`);
+  output.info(
+    `backend: server ${info.serverVersion} (minimum ${MIN_BACKEND_VERSION}), protocol ${info.protocol === null ? "(no backend_info)" : info.protocol}`,
+  );
+  if (info.engineVersion !== null) output.info(`  engine: ${info.engineVersion}`);
   output.info(
     `  wildcard pin types: ${c.pinTypes ? "native" : "fallback (two-phase raw graph, +10-20 s per build)"}`,
   );

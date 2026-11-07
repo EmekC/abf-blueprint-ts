@@ -75,6 +75,27 @@ test("info with backend_info and abfc_extensions", async () => {
   });
 });
 
+test("info: engineVersion passes through from backend_info", async () => {
+  const backendInfo = {
+    protocol: 1,
+    serverVersion: "2.4.0",
+    engineVersion: "5.4.4",
+    editorRoot: null,
+    headlessDir: "C:\\fake-headless",
+    documentsDir: "C:\\fake-docs",
+    capabilities: { pinTypes: true },
+    bpApply: { features: ["pin_types"], nodeKinds: ["call"] },
+  };
+  await withBackend({ backendInfo }, async ({ backend }) => {
+    const info = await backend.info();
+    assert.equal(info.engineVersion, "5.4.4");
+    assert.equal(info.serverVersion, "2.4.0");
+  });
+  await withBackend({}, async ({ backend }) => {
+    assert.equal((await backend.info()).engineVersion, null);
+  });
+});
+
 test("info without backend_info: protocol null, no error, fallback capabilities", async () => {
   const tools = ["staging_sync", "staging_status", "bp_apply", "bp_read", "bp_compile_report", "bp_game_test", "mod_audit"];
   await withBackend({ tools }, async ({ backend, calls }) => {
