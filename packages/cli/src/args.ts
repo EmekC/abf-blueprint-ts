@@ -75,6 +75,9 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
         watch: { type: "boolean" },
         mod: { type: "string" },
         "no-stubs": { type: "boolean" },
+        // `abfc lsp` accepts what language clients add; the values are ignored
+        stdio: { type: "boolean" },
+        clientProcessId: { type: "string" },
       },
     });
   } catch (e) {

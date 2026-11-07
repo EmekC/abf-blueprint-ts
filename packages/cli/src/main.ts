@@ -7,6 +7,7 @@ import { build } from "./commands/build.js";
 import { check } from "./commands/check.js";
 import { doctor } from "./commands/doctor.js";
 import { runInit } from "./commands/init.js";
+import { runLsp } from "./commands/lsp.js";
 import { publish } from "./commands/publish.js";
 import { status } from "./commands/status.js";
 import { stubs } from "./commands/stubs.js";
@@ -30,10 +31,11 @@ export const COMMANDS: Record<string, CommandFn> = {
 
 const USAGE = [
   "usage: abfc <command> [options]",
-  "commands: init, " + Object.keys(COMMANDS).join(", "),
+  "commands: init, lsp, " + Object.keys(COMMANDS).join(", "),
   "options: --json --verbose --project <dir> --editor-root <dir> --mods-dir <dir> --mod-dir <dir>",
   "         --backend-dir <dir> --python <exe> --headless-dir <dir> --timings --resync --no-build --yes --dry-run --full --discard-editor-changes --cold --watch (check)",
   "init:    abfc init [dir] [--mod <name>] [--yes] [--no-stubs] [--mods-dir <dir>] [--editor-root <dir>] [--backend-dir <dir>] [--python <exe>]",
+  "lsp:     abfc lsp [--stdio]   language server over stdio (docs/language-service.md)",
 ];
 
 export function defaultDeps(): CliDeps {
@@ -77,6 +79,14 @@ export async function main(argv: string[], deps: CliDeps = defaultDeps()): Promi
         message: `unexpected failure: ${e instanceof Error ? (args.flags.verbose ? (e.stack ?? e.message) : e.message) : String(e)}`,
       });
       output.finish();
+      return 2;
+    }
+  }
+  if (command === "lsp") {
+    try {
+      return await runLsp(args, deps);
+    } catch (e) {
+      err(`abfc: error: language server failed: ${e instanceof Error ? (args.flags.verbose ? (e.stack ?? e.message) : e.message) : String(e)}`);
       return 2;
     }
   }

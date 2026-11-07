@@ -29,6 +29,8 @@ export interface CliDeps {
   prompt?: ((question: string) => Promise<string>) | undefined;
   /** Whether `abfc init` may ask questions (default: stdin and stdout are both terminals). */
   interactive?: boolean | undefined;
+  /** Streams `abfc lsp` speaks on (default: stdin and stdout). */
+  lspStreams?: { input: NodeJS.ReadableStream; output: NodeJS.WritableStream } | undefined;
 }
 
 export interface CliPaths {

@@ -22,6 +22,7 @@
     "@abfc/testkit": "0.1.0",
     "@abfc/compiler": "0.1.0",
     "@abfc/backend": "0.1.0",
-    "@abfc/stubgen": "0.1.0"
+    "@abfc/stubgen": "0.1.0",
+    "@abfc/lsp": "0.1.0"
   }
 }
