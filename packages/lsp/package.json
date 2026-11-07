@@ -1,0 +1,26 @@
+{
+  "name": "@abfc/lsp",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist/src"
+  ],
+  "dependencies": {
+    "@abfc/compiler": "0.1.0",
+    "@abfc/env": "0.1.0",
+    "@abfc/eslint-plugin": "0.1.0",
+    "@abfc/ir": "0.1.0",
+    "@abfc/stubgen": "0.1.0",
+    "@typescript-eslint/parser": "8.72.1",
+    "eslint": "10.14.0",
+    "vscode-languageserver": "9.0.1",
+    "vscode-languageserver-textdocument": "1.0.12"
+  }
+}
