@@ -1,6 +1,6 @@
 // Text checks of the GitHub Actions workflows (design 18.10). There is no YAML library in the repository and actionlint is not
 // run locally, so these tests check the safety properties on the text: nothing publishes on a push or pull request, permissions
-// stay minimal, the npm job sits behind the `npm` environment with provenance, and secrets never reach a script line.
+// stay minimal, only the npm-publish job (dispatch only) has the `npm` environment, the token and provenance, and secrets never reach a script line.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -158,7 +158,7 @@ describe("release.yml", () => {
   const jobs = jobBlocks(text);
 
   it("has the expected jobs", () => {
-    assert.deepEqual([...jobs.keys()], ["build", "github-release", "npm"]);
+    assert.deepEqual([...jobs.keys()], ["build", "github-release", "npm-dry-run", "npm-publish"]);
   });
 
   it("is triggered by a v*.*.* tag push and a manual dispatch, with no branch trigger", () => {
@@ -177,25 +177,40 @@ describe("release.yml", () => {
     assert.deepEqual(topBlock(text, "concurrency"), ["group: release-${{ inputs.tag || github.ref_name }}", "cancel-in-progress: false"]);
   });
 
-  it("every npm publish line has --provenance and the publish happens only in the npm job", () => {
+  it("every real npm publish line has --provenance, every dry-run line has --dry-run, and publishing happens only in the two npm jobs", () => {
     const publishLines = lines.filter((l) => l.includes("npm publish"));
     assert.ok(publishLines.length > 0);
-    for (const l of publishLines) assert.ok(l.includes("--provenance"), l);
     for (const l of publishLines) assert.ok(l.includes("--access public"), l);
-    for (const [job, block] of jobs) if (job !== "npm") assert.ok(!block.includes("npm publish"), `npm publish in ${job}`);
+    for (const l of jobs.get("npm-publish").split("\n").filter((x) => x.includes("npm publish"))) {
+      assert.ok(l.includes("--provenance") && !l.includes("--dry-run"), l);
+    }
+    for (const l of jobs.get("npm-dry-run").split("\n").filter((x) => x.includes("npm publish"))) {
+      assert.ok(l.includes("--dry-run") && !l.includes("--provenance"), l);
+    }
+    for (const [job, block] of jobs) if (!job.startsWith("npm-")) assert.ok(!block.includes("npm publish"), `npm publish in ${job}`);
   });
 
-  it("the npm job sits behind the npm environment and is the only one with id-token: write", () => {
-    const npm = jobs.get("npm");
+  it("the dry-run job has no environment, no secret and no id-token, and only reads contents", () => {
+    const dry = jobs.get("npm-dry-run");
+    assert.ok(!dry.includes("environment:"));
+    assert.ok(!dry.includes("secrets."));
+    assert.ok(!dry.includes("id-token"));
+    assert.ok(!dry.includes("NODE_AUTH_TOKEN"));
+    assert.ok(!dry.includes("if: "), "the dry run runs for tag pushes and dispatches alike");
+    assert.match(dry, /^ {4}permissions:\n {6}contents: read\n {4}steps:$/m);
+  });
+
+  it("the publish job runs only on a manual dispatch with publish_npm, behind the npm environment, and is the only one with id-token: write", () => {
+    const pub = jobs.get("npm-publish");
+    assert.match(pub, /^ {4}if: github\.event_name == 'workflow_dispatch' && inputs\.publish_npm$/m);
     assert.equal(count(code, "id-token: write"), 1);
-    assert.ok(npm.includes("id-token: write"));
-    assert.ok(text.indexOf("id-token: write") > text.indexOf("\n  npm:\n"));
+    assert.ok(pub.includes("id-token: write"));
     assert.equal(count(code, "environment:"), 1);
-    assert.match(npm, /^ {4}environment: npm$/m);
+    assert.match(pub, /^ {4}environment: npm$/m);
     assert.deepEqual(
-      npm
+      pub
         .split("\n")
-        .slice(npm.split("\n").findIndex((l) => l === "    permissions:") + 1)
+        .slice(pub.split("\n").findIndex((l) => l === "    permissions:") + 1)
         .filter((l) => l.startsWith("      ") && !l.startsWith("       "))
         .slice(0, 2)
         .map((l) => l.trim()),
@@ -203,20 +218,15 @@ describe("release.yml", () => {
     );
   });
 
-  it("the npm token is used only by the npm job, as NODE_AUTH_TOKEN", () => {
+  it("the npm token is used only by the publish job, as NODE_AUTH_TOKEN", () => {
     assert.equal(count(code, "secrets.NPM_TOKEN"), 1);
-    assert.ok(jobs.get("npm").includes("NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}"));
+    assert.ok(jobs.get("npm-publish").includes("NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}"));
   });
 
-  it("publishes for real only on a manual dispatch with publish_npm, otherwise dry-run", () => {
-    const npm = jobs.get("npm");
-    assert.ok(npm.includes("PUBLISH: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_npm }}"));
-    assert.ok(npm.includes('if [ "$PUBLISH" != "true" ]; then extra+=(--dry-run); fi'));
-    assert.ok(npm.includes("extra+=(--tag next)"), "prereleases go to the next tag");
+  it("prereleases go to the next tag and publish_npm is an input read once", () => {
+    for (const job of ["npm-dry-run", "npm-publish"]) assert.ok(jobs.get(job).includes("extra+=(--tag next)"), job);
     assert.equal(count(code, "publish_npm"), 2, "publish_npm is an input and is read once");
     assert.ok(!/--dry-run=false/.test(code));
-    // the npm job runs for tag pushes too, but a tag push alone never reaches a real publish
-    assert.ok(!npm.includes("if: "), "no job-level condition that could skip the dry-run default");
   });
 
   it("only the github-release job can write, and it only creates a draft", () => {

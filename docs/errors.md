@@ -827,11 +827,11 @@ Fix: update the backend. If it persists with a current one, report it with the m
 
 Severity: error · Exit: 2
 
-Meaning: abfc built a pin type that the backend refuses (internal error).
+Meaning: abfc built a pin type that the backend refuses, or a struct member name that is not of the form `<Field>_<index>_<GUID>` (internal error).
 
-Typical cause: an abfc bug or a version mismatch between abfc and the backend.
+Typical cause: an abfc bug or a version mismatch between abfc and the backend. For a struct member name, the struct in the stage was created or changed in a way abfc did not expect.
 
-Fix: report it with the message and the node it names. Updating abfc and the backend to matching versions may help.
+Fix: report it with the message and the node or struct member it names. Updating abfc and the backend to matching versions may help.
 
 ### ABFC4011
 
@@ -891,7 +891,7 @@ Meaning: a build failed to compile in Unreal, and abfc then could not restore th
 
 Typical cause: the mod folder is locked, the backend stopped responding or the disk is full.
 
-Fix: run `abfc build --resync` before the next build. That discards unpublished work in the staged copy, which the next build applies again. `--keep-failed-stage` keeps the failed stage for inspection instead (see [cli.md](cli.md)).
+Fix: run `abfc build --resync` before the next build. That discards all unpublished work in the staged copy, in every asset of the mod and not only the assets that failed to compile; the next build applies the units again. `--keep-failed-stage` keeps the failed stage for inspection instead (see [cli.md](cli.md)).
 
 ### ABFC4020
 

@@ -1,6 +1,7 @@
-# Release workflow. A tag push (v*.*.*) builds, scans and creates a DRAFT GitHub release; the npm job then only
-# runs `npm publish --dry-run`. Packages are published to npm for real only on a manual run of this workflow
-# (workflow_dispatch) with publish_npm: true, behind the `npm` environment and with provenance.
+# Release workflow. A tag push (v*.*.*) builds, scans and creates a DRAFT GitHub release; the npm-dry-run job then only
+# runs `npm publish --dry-run` (no environment, no token). Packages are published to npm for real only by the npm-publish
+# job, which runs only on a manual run of this workflow (workflow_dispatch) with publish_npm: true, behind the `npm`
+# environment and with provenance.
 # Nothing here publishes a GitHub release: a person publishes the draft. Maintainer notes are in docs/releasing.md.
 # Actions are pinned to @v4 tags; re-pinning to commit SHAs is a maintainer task.
 name: Release
@@ -177,9 +178,43 @@ jobs:
           case "$VERSION" in *-*) flags+=(--prerelease) ;; esac
           gh release create "$TAG" "${flags[@]}" --title "abfc $VERSION" --notes-file release-notes.md "${files[@]}"
 
-  npm:
-    name: npm packages
+  npm-dry-run:
+    name: npm dry run
     needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Download the npm tarballs
+        uses: actions/download-artifact@v4
+        with:
+          name: npm-tarballs
+          path: npm-tarballs
+
+      - name: Dry-run publish in dependency order
+        working-directory: npm-tarballs
+        run: |
+          set -euo pipefail
+          count=$(node -p "require('./packages.json').length")
+          for i in $(seq 0 $((count - 1))); do
+            file=$(node -p "require('./packages.json')[$i].filename")
+            version=$(node -p "require('./packages.json')[$i].version")
+            extra=()
+            case "$version" in *-*) extra+=(--tag next) ;; esac
+            npm publish "./$file" --access public --dry-run "${extra[@]}"
+          done
+
+  npm-publish:
+    name: publish to npm
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_npm
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: npm
@@ -203,7 +238,6 @@ jobs:
         working-directory: npm-tarballs
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-          PUBLISH: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_npm }}
         run: |
           set -euo pipefail
           count=$(node -p "require('./packages.json').length")
@@ -212,6 +246,5 @@ jobs:
             version=$(node -p "require('./packages.json')[$i].version")
             extra=()
             case "$version" in *-*) extra+=(--tag next) ;; esac
-            if [ "$PUBLISH" != "true" ]; then extra+=(--dry-run); fi
             npm publish "./$file" --access public --provenance "${extra[@]}"
           done

@@ -151,6 +151,22 @@ describe("scanArtifact rules", () => {
     assert.deepEqual(scan("pkg-1.0.0.tgz", tgz, "npm").map((h) => h.entry), ["pkg-1.0.0.tgz > package/lib.js"]);
   });
 
+  it("a name in a file or folder name of the entry chain is replaced by its label in the entry", () => {
+    const inner = writeZip([{ name: `${NAME}-dir/${GUARD_WORDS[0]}.txt`, data: utf("fine") }]);
+    const outer = writeZip([{ name: `${NAME.toUpperCase()}.vsix`, data: inner }]);
+    const hits = scan("outer.zip", outer);
+    assert.ok(hits.length > 0);
+    for (const h of hits) {
+      assert.ok(!h.entry.toLowerCase().includes(NAME), h.entry);
+      assert.ok(!h.entry.toLowerCase().includes(GUARD_WORDS[0]), h.entry);
+    }
+    assert.ok(hits.some((h) => h.entry === "outer.zip > <denylist entry #1>.vsix > <denylist entry #1>-dir/<guard word #1>.txt"));
+    // an exception is matched against the masked entry
+    const target = hits.find((h) => h.rule === "name");
+    const exc = { rule: target.rule, artifact: "zip", entry: target.entry, context: target.context, reason: "test" };
+    assert.equal(applyExceptions([target], [exc]).excepted.length, 1);
+  });
+
   it("runtime.zip: python/ entries are scanned but not recursed", () => {
     const inner = writeZip([{ name: "mod.py", data: utf(`# ${NAME}
 `.repeat(200)) }]);

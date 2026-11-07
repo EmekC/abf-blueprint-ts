@@ -18,6 +18,10 @@ function versionTs(version) {
   return `/** The abfc version. Kept equal to the version of \`packages/cli/package.json\` by \`scripts/release/set-version.mjs\` and a test. */\nexport const ABFC_VERSION = "${version}";\n`;
 }
 
+function backendVersionTs(version) {
+  return `/** The version reported as the MCP client version. Kept equal to the version of \`packages/backend/package.json\` by \`scripts/release/set-version.mjs\`. */\nexport const CLIENT_VERSION = "${version}";\n`;
+}
+
 /** Every workspace package: `[{dir, file, json}]`, sorted by directory name. */
 export function readWorkspace(repoRoot) {
   const out = [];
@@ -68,6 +72,9 @@ export function applyVersion(repoRoot, version, { write }) {
   const cliTs = "packages/cli/src/version.ts";
   if (existsSync(join(repoRoot, cliTs))) put(cliTs, versionTs(version));
 
+  const backendTs = "packages/backend/src/version.ts";
+  if (existsSync(join(repoRoot, backendTs))) put(backendTs, backendVersionTs(version));
+
   const lockRel = "package-lock.json";
   const lockFile = join(repoRoot, lockRel);
   if (existsSync(lockFile)) {
@@ -105,6 +112,12 @@ export function checkVersions(repoRoot, version) {
     const m = /ABFC_VERSION\s*=\s*"([^"]*)"/.exec(readFileSync(cliTs, "utf8"));
     if (m === null) problems.push("packages/cli/src/version.ts: ABFC_VERSION not found");
     else if (m[1] !== version) problems.push(`packages/cli/src/version.ts: ABFC_VERSION is ${m[1]}, expected ${version}`);
+  }
+  const backendTs = join(repoRoot, "packages", "backend", "src", "version.ts");
+  if (existsSync(backendTs)) {
+    const m = /CLIENT_VERSION\s*=\s*"([^"]*)"/.exec(readFileSync(backendTs, "utf8"));
+    if (m === null) problems.push("packages/backend/src/version.ts: CLIENT_VERSION not found");
+    else if (m[1] !== version) problems.push(`packages/backend/src/version.ts: CLIENT_VERSION is ${m[1]}, expected ${version}`);
   }
   const lockFile = join(repoRoot, "package-lock.json");
   if (existsSync(lockFile)) {

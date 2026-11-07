@@ -121,7 +121,7 @@ Compiles the project and applies only the units whose TypeScript changed to a pr
 | --- | --- |
 | `--resync` | Recreate the staging copy from the mod before building. Unpublished staged work of every project that targets the same mod is discarded. Use it after you changed the mod by hand, or when abfc reports a conflict with the real mod ([ABFC4020](errors.md#abfc4020)). |
 | `--drift` | Read and drift-check every owned asset, not only the changed ones. It finds edits made in the Mod Editor to units that did not change in TypeScript ([ABFC5001](errors.md#abfc5001)) at the cost of one read per asset. It does not change what is applied. Only `abfc build` accepts it. |
-| `--keep-failed-stage` | After an Unreal compile failure keep the failed graphs in the staging copy for inspection. Without it abfc re-syncs the staging copy from the mod, which discards all unpublished staged work (like `--resync`), and the next build applies the units again. If that re-sync fails, abfc warns with [ABFC4016](errors.md#abfc4016) and you run `abfc build --resync` before the next build. Also accepted by `abfc test` and `abfc publish`. |
+| `--keep-failed-stage` | After an Unreal compile failure keep the failed graphs in the staging copy for inspection. Without it abfc re-syncs the staging copy from the mod, which discards all unpublished staged work in every asset of the mod (like `--resync`), not only in the assets that failed to compile. abfc forgets the units that were never published, and the next build applies them again. If that re-sync fails, abfc warns with [ABFC4016](errors.md#abfc4016) and you run `abfc build --resync` before the next build. Also accepted by `abfc test` and `abfc publish`. |
 
 `build --json` result:
 

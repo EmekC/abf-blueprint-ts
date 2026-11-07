@@ -13,6 +13,10 @@ import { backendInfoDiagnostics } from "./backend-version.js";
 import { formatTimings, recordRun } from "../runs.js";
 import type { RunEntry } from "../runs.js";
 
+/**
+ * A codegen epoch, not the release version: it is stored in units.json, and a change marks every unit for forceReplan
+ * (every unit is re-applied, which means a republish). Change it only when code generation changes; never on a release bump.
+ */
 export const COMPILER_ID = "abfc 0.1.0";
 
 /** What the compiler frontend needs from the project config (derived asset paths, migration hints). */

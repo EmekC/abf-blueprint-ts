@@ -261,6 +261,69 @@ test("(b1w) a failing re-sync after a failed compile is the warning ABFC4016; th
   });
 });
 
+test("(b1r) a failed compile in one asset re-syncs the whole stage: unpublished units of another asset are applied again, without ABFC5002", async () => {
+  await withRig({ handMadeEvent: false, emptyAssets: [TALLY_ASSET] }, async (r) => {
+    // asset X (Relay): built and compiled, not published
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.units.length, 1);
+    const builtNodes = readManifest(r.dir, RELAY_ASSET)!.units[0]!.nodes;
+    assert.ok(builtNodes.length > 0);
+
+    // asset Y (Tally): its compile fails, the re-sync drops X's staged nodes too
+    writeFileSync(join(r.dir, "src", "Tally.ts"), TALLY, "utf8");
+    r.backend.reportMessages = [{ severity: "error", asset: TALLY_ASSET, message: "boom" }];
+    x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, /all unpublished changes in the staged copy were discarded/);
+    assert.ok(!r.backend.nodeNames(RELAY_ASSET).includes(builtNodes[0]!), "the re-synced stage does not hold the unit of the other asset");
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.units.length, 0, "the manifest of the other asset forgets its unpublished unit");
+    assert.equal(readManifest(r.dir, TALLY_ASSET)!.units.length, 0);
+
+    // the next build applies both again on the clean stage
+    r.backend.reportMessages = [];
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC5002/);
+    assert.match(x.out, /applied .*UpdateTarget/);
+    assert.match(x.out, /applied .*Bump/);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.units.length, 1);
+    assert.equal(readManifest(r.dir, TALLY_ASSET)!.units.length, 1);
+    const held = r.backend.nodeNames(RELAY_ASSET);
+    assert.ok(readManifest(r.dir, RELAY_ASSET)!.units[0]!.nodes.every((n) => held.includes(n)));
+  });
+});
+
+test("(b1p) a published unit that is changed and fails to compile keeps the entry for the nodes the mod still holds", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    r.backend.markPublished();
+    const publishedNodes = readManifest(r.dir, RELAY_ASSET)!.units[0]!.nodes;
+    assert.ok(publishedNodes.length > 0);
+
+    // a changed re-apply gets new node names, then fails Unreal's compile
+    const src = join(r.dir, "src", "Relay.ts");
+    writeFileSync(src, readFileSync(src, "utf8").replace("const rowName = Lib.RowToName(pot.Row);", "const rowName = Lib.RowToName(pot.Row); this.LastName = rowName;"), "utf8");
+    r.backend.reportMessages = [{ severity: "error", asset: RELAY_ASSET, message: "boom" }];
+    x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, /re-synced from the mod/);
+    const kept = readManifest(r.dir, RELAY_ASSET)!.units;
+    assert.equal(kept.length, 1, "the published unit keeps its entry");
+    assert.deepEqual(kept[0]!.nodes, publishedNodes, "with the node names the mod holds");
+    const held = r.backend.nodeNames(RELAY_ASSET);
+    assert.ok(publishedNodes.every((n) => held.includes(n)), "the re-synced stage holds the published nodes");
+
+    // the next build replaces it: no existing hand-made event (ABFC5003), no missing nodes (ABFC5002)
+    r.backend.reportMessages = [];
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC500[23]/);
+    assert.match(x.out, /applied UpdateTarget/);
+  });
+});
+
 test("(d1) build --drift reads every owned asset, a plain build of an up-to-date project reads none", async () => {
   await withRig({}, async (r) => {
     assert.equal((await r.run(["adopt", RELAY_ASSET, "UpdateTarget", "--yes"])).code, 0);

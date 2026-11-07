@@ -1,5 +1,5 @@
 import { applyPlan, nodeKey, specNodeId } from "@abfc/backend";
-import type { AssetApplyOutcome } from "@abfc/backend";
+import type { AssetApplyOutcome, Backend } from "@abfc/backend";
 import {
   assetsNeedingRead,
   fingerprintUnit,
@@ -102,6 +102,49 @@ function errorDiagnostics(
   const sm = sourceMapOf(irAsset, outcome.nodeIds);
   const { specIds, ownCalls } = callMaps(irAsset);
   return mapCompileMessages(asset.asset, outcome.compile, sm, invert(outcome.nodeIds), specIds, ownCalls);
+}
+
+/**
+ * After a failed Unreal compile and a successful re-sync: the stage holds only what the mod holds, so the unpublished work of
+ * every asset of the mod is gone, not only that of the assets this build applied. The manifests and source maps go back to the
+ * state from before this build (`manifests`, read before any write), minus the units whose nodes the re-synced stage does not
+ * hold (never published, so the next build applies them again instead of reporting their nodes as missing, ABFC5002).
+ * Units this build removed come back with the stage and are tracked again; a published unit this build re-applied keeps the node
+ * names the mod still holds. Adopted units keep their entry. Best effort per asset: a failure leaves that manifest as it is.
+ */
+async function restoreManifestsAfterResync(
+  ctx: CliContext,
+  backend: Backend,
+  o: { mod: string; manifests: ReadonlyMap<string, Manifest | null>; appliedAssets: readonly string[]; ir: IrModule; owned: readonly IrAsset[] },
+): Promise<void> {
+  const { projectDir } = ctx;
+  const applied = new Set(o.appliedAssets);
+  const assets = new Set(o.appliedAssets);
+  for (const m of listManifests(projectDir)) if (m.asset.startsWith(`/${o.mod}/`)) assets.add(m.asset);
+  for (const asset of assets) {
+    try {
+      const current = readManifest(projectDir, asset);
+      const base = o.manifests.get(asset) ?? current;
+      if (base === null || base.structFieldsHash !== undefined) continue;
+      let units = base.units;
+      if (units.length > 0) {
+        let held: Set<string>;
+        try {
+          held = new Set((await readAsset(ctx, backend, asset)).parsed.nodes.keys());
+        } catch {
+          held = new Set();
+        }
+        units = base.units.filter((u) => u.adopt !== null || u.nodes.every((n) => held.has(n)));
+      }
+      if (!applied.has(asset) && units.length === base.units.length) continue;
+      const restored: Manifest = { ...base, units };
+      writeManifest(projectDir, restored);
+      const irAsset = o.owned.find((a) => a.path === asset) ?? o.ir.assets.find((a) => a.path === asset);
+      if (irAsset !== undefined) writeSourceMap(projectDir, sourceMapOf(irAsset, previousNames(restored)));
+    } catch {
+      // the manifest stays as it is; the next build reports what it finds
+    }
+  }
 }
 
 /**
@@ -438,25 +481,8 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
       try {
         await backend.stage(env.modDir.value, { discardChanges: true });
         stageResynced = true;
-        // Units abfc applied that the mod does not hold (never published) are gone from the re-synced stage: forget them, or the next
-        // build would report their nodes as missing (ABFC5002) instead of applying them again. Adopted units keep their entry.
-        for (const asset of appliedAssets) {
-          try {
-            const m = readManifest(projectDir, asset);
-            if (m === null) continue;
-            let held: Set<string>;
-            try {
-              held = new Set((await readAsset(ctx, backend, asset)).parsed.nodes.keys());
-            } catch {
-              held = new Set();
-            }
-            const kept = m.units.filter((u) => u.adopt !== null || u.nodes.every((n) => held.has(n)));
-            if (kept.length !== m.units.length) writeManifest(projectDir, { ...m, units: kept });
-          } catch {
-            // the manifest stays as it is; the next build reports what it finds
-          }
-        }
-        output.info("the stage was re-synced from the mod: the graphs that failed to compile were discarded; the next build applies the units again (--keep-failed-stage keeps them for inspection)");
+        await restoreManifestsAfterResync(ctx, backend, { mod, manifests, appliedAssets, ir, owned });
+        output.info("the stage was re-synced from the mod: all unpublished changes in the staged copy were discarded; the next build applies the units again (--keep-failed-stage keeps them for inspection)");
       } catch (e) {
         output.diag({
           severity: "warning",

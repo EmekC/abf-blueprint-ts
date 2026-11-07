@@ -94,7 +94,14 @@ function compile(ctx) {
       roots.push({ lower: key, label, re: new RegExp(escapeRe(form), "gi") });
     }
   }
-  const c = { names, roots };
+  // one alternation over all names (longest first), used to replace a name in an entry chain with its label
+  const byLongest = [...names].sort((a, b) => b.word.length - a.word.length);
+  const entryRe = byLongest.length > 0 ? new RegExp(byLongest.map((n) => escapeRe(n.word)).join("|"), "gi") : null;
+  const maskEntry = (chain) =>
+    entryRe === null
+      ? chain
+      : chain.replace(entryRe, (hit) => `<${(names.find((n) => n.word === hit.toLowerCase()) ?? { label: "name" }).label}>`);
+  const c = { names, roots, maskEntry };
   compiled.set(ctx, c);
   return c;
 }
@@ -211,10 +218,13 @@ export function scanArtifact({ artifact, name, buf, ctx }) {
   const hits = [];
   const seen = new Set();
   const push = (chain, f) => {
-    const key = `${chain}\0${f.rule}\0${f.detail}\0${f.context}`;
+    // names inside the entry chain (a file or folder named after a mod) are replaced by their label before the hit is
+    // printed or matched against an exception
+    const entry = c.maskEntry(chain);
+    const key = `${entry}\0${f.rule}\0${f.detail}\0${f.context}`;
     if (seen.has(key)) return;
     seen.add(key);
-    hits.push({ artifact, entry: chain, rule: f.rule, detail: f.detail, context: f.context });
+    hits.push({ artifact, entry, rule: f.rule, detail: f.detail, context: f.context });
   };
 
   const visit = (chain, inner, data, depth, recurse) => {

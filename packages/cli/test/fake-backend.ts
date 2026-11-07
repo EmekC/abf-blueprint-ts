@@ -108,6 +108,8 @@ export interface FakeBackendOptions {
   handMadeEvent?: boolean;
   /** `staging_sync` with discardChanges (a resync) fails; the first sync of a missing stage still works (default false). */
   failResync?: boolean;
+  /** Further Blueprint assets (paths) the mod holds from the start, empty: they are in the stage after every resync. */
+  emptyAssets?: string[];
   /** `backend_info` reports the stageAudit capability (default false: mod_audit audits the real mod). */
   stageAudit?: boolean;
   /** The initial asset also holds a hand-made engine override event (`ReceiveTick`, calling HideAll). */
@@ -374,6 +376,8 @@ export class FakeBackend implements Backend {
   private counter = 9000;
   private runs = 0;
   private changed = new Set<string>();
+  /** The mod as published (set by `markPublished`): a resync restores this instead of the initial assets. */
+  private published: Map<string, FAsset> | null = null;
 
   constructor(o: FakeBackendOptions = {}) {
     const withInfo = o.backendInfo === true;
@@ -405,6 +409,12 @@ export class FakeBackend implements Backend {
   /** Updates the backend: it has (or loses) the bp_apply feature `event_meta` from the next session on. */
   setEventMeta(on: boolean): void {
     this.infoValue.capabilities.eventMeta = on;
+  }
+
+  /** Publishes the stage as it is now: the mod holds these assets from now on, and a resync restores them (published nodes survive it). */
+  markPublished(): void {
+    this.published = structuredClone(this.assets);
+    this.changed.clear();
   }
 
   /** The recorded `bp_apply` labels, in order. */
@@ -460,7 +470,13 @@ export class FakeBackend implements Backend {
     this.calls.push({ tool: "staging_sync" });
     if (o.discardChanges && this.options.failResync === true) throw new Error("fake staging_sync failed");
     if (!this.staged || (o.discardChanges && !this.keepAssetsOnSync)) {
-      this.assets = new Map([[RELAY_ASSET, initialAsset(this.withUpdateTarget, this.options)]]);
+      this.assets =
+        this.published !== null
+          ? structuredClone(this.published)
+          : new Map([
+              [RELAY_ASSET, initialAsset(this.withUpdateTarget, this.options)],
+              ...(this.options.emptyAssets ?? []).map((p): [string, FAsset] => [p, { path: p, variables: [], nodes: [] }]),
+            ]);
       this.changed.clear();
       this.rowClasses.clear();
     }

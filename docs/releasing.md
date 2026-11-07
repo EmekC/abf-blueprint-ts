@@ -9,7 +9,7 @@ Two workflows live in `.github/workflows/`. Neither one publishes anything on a 
 | Workflow | Runs on | What it does |
 | --- | --- | --- |
 | `ci.yml` | pull requests, pushes to `main`, manual dispatch | Job `test`: build and `npm test` on Node 24 and on the pinned Node 26.7.0, plus `pack-npm.mjs --dry-run`. Job `artifacts`: builds `abfc.exe`, the runtime, the zip, the `.vsix`, the installer and the npm tarballs at the package version, runs `inspect.mjs` and the artifact scan, and keeps the files for 3 days as the `ci-artifacts` workflow artifact. Permissions: `contents: read`. |
-| `release.yml` | a tag push `v*.*.*`, manual dispatch | Job `build`: checks the tag against `set-version.mjs --check`, builds, tests, scans with `--require-denylist`, stages `build/release/github/` (files, `SHA256SUMS.txt`, `release-notes.md`). Job `github-release` (tag push, or dispatch with `draft_release`): creates a draft GitHub release. Job `npm`: runs `npm publish --dry-run` for every package, and a real `npm publish --provenance` only on a manual dispatch with `publish_npm: true`. |
+| `release.yml` | a tag push `v*.*.*`, manual dispatch | Job `build`: checks the tag against `set-version.mjs --check`, builds, tests, scans with `--require-denylist`, stages `build/release/github/` (files, `SHA256SUMS.txt`, `release-notes.md`). Job `github-release` (tag push, or dispatch with `draft_release`): creates a draft GitHub release. Job `npm-dry-run`: runs `npm publish --dry-run` for every package (no environment, no token, `contents: read`). Job `npm-publish`: a real `npm publish --provenance`, only on a manual dispatch with `publish_npm: true`, behind the `npm` environment with `id-token: write`. |
 
 Pull requests from forks have no secrets. The scan then uses the committed guard words only and prints a notice; the release workflow refuses to run without the name denylist.
 
@@ -27,10 +27,10 @@ Pull requests from forks have no secrets. The scan then uses the committed guard
 3. Open a pull request. CI must be green, including the `artifacts` job (a full build with the scan).
 4. Merge to `main`.
 5. Tag the merge commit yourself: `git tag v<version>` and `git push origin v<version>`. The tag must equal `v` plus the package version, otherwise the `build` job stops at the version check.
-6. The tag push starts `release.yml`. It creates a draft GitHub release with the exe, the installer, the zip, the `.vsix`, `SHA256SUMS.txt` and the changelog section. The npm job also starts; it waits for approval of the `npm` environment and then does a dry run only.
+6. The tag push starts `release.yml`. It creates a draft GitHub release with the exe, the installer, the zip, the `.vsix`, `SHA256SUMS.txt` and the changelog section. The `npm-dry-run` job also starts; it needs no approval, has no environment, token or `id-token`, and runs `npm publish --dry-run` only. The `npm-publish` job does not start on a tag push.
 7. Check the draft: compare the files against `SHA256SUMS.txt`, run the installer on a clean machine or virtual machine (SmartScreen prompt, PATH, the VS Code extension task, `abfc --version`), and unzip the zip once. The files are unsigned.
 8. Publish the draft on GitHub (a person clicks the button).
-9. Publish to npm: start `release.yml` by hand (Actions, Release, Run workflow) with `tag` set to the same tag and `publish_npm` ticked, approve the `npm` environment, and watch the packages go out in dependency order with provenance. Prerelease versions are published under the `next` dist-tag.
+9. Publish to npm: start `release.yml` by hand (Actions, Release, Run workflow) with `tag` set to the same tag and `publish_npm` ticked, approve the `npm` environment (only the `npm-publish` job uses it), and watch the packages go out in dependency order with provenance. Prerelease versions are published under the `next` dist-tag.
 
 If a build fails after the tag was pushed, fix forward with a new version. Do not move a published tag.
 
