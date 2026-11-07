@@ -3,6 +3,8 @@
 // then written through `CliDeps.fs`.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { win32 } from "node:path";
+import { createInterface } from "node:readline/promises";
+import type { Interface } from "node:readline/promises";
 import type { Diagnostic, Profile } from "@abfc/ir";
 import {
   AbfcError,
@@ -13,6 +15,7 @@ import {
   findDocuments,
   findEditorRoot,
   findModsDir,
+  formatDiagnostic,
   loadProfile,
   loadProjectConfig,
   loadUserConfig,
@@ -57,14 +60,22 @@ interface Selection {
   profile: Profile;
 }
 
-/** What `chooseModInteractively` gets to work with. */
+/** What the mod choice gets to work with. */
 interface Session {
   args: ParsedArgs;
   deps: CliDeps;
   target: string;
   existing: ProjectConfig | null;
   userConfig: Partial<ProjectConfig> | null;
+  output: Output;
+  /** Asks one question; null with `--yes` (no prompt). */
+  ask: ((question: string) => Promise<string>) | null;
+  /** Settings the user typed in the prompt (shown as "entered"; they go into the user config). */
+  entered: Set<"editorRoot" | "modsDir">;
 }
+
+/** The user chose `q` (or an empty-handed exit): nothing is written, exit 0. */
+class QuitInit extends Error {}
 
 const nodeFs = {
   writeFile: (p: string, text: string): void => writeFileSync(p, text, "utf8"),
@@ -123,6 +134,11 @@ function selectNonInteractive(s: Session, editorRoot: Resolved<string>, modsDir:
   }
   const wanted = s.args.flags.mod ?? s.existing?.mod.name;
   if (wanted === undefined) throw noTerminal("--yes needs --mod <name> when the folder has no project yet");
+  return { mod: matchMod(mods, modsPath, wanted), editorRoot, modsDir, profile };
+}
+
+/** The scanned mod called `wanted` (case-insensitive); ABFC1042 listing the mods found when there is none. */
+function matchMod(mods: readonly ModEntry[], modsPath: string, wanted: string): ModEntry {
   const hit = mods.find((m) => m.name.toLowerCase() === wanted.toLowerCase());
   if (hit === undefined || !MOD_NAME.test(hit.name)) {
     throw envError(
@@ -134,13 +150,176 @@ function selectNonInteractive(s: Session, editorRoot: Resolved<string>, modsDir:
       "pick one of the listed mods with --mod <name>, or create the mod in the Mod Editor first.",
     );
   }
-  return { mod: hit, editorRoot, modsDir, profile };
+  return hit;
 }
 
-/** Step 6 (the prompt); implemented with the interactive flow. */
-async function chooseModInteractively(s: Session): Promise<Selection> {
-  void s;
-  throw noTerminal("the interactive prompt is not available");
+/** How a resolved setting is named on the screen. */
+function sourceLabel(r: Resolved<string>, entered: boolean): string {
+  if (entered) return "entered";
+  switch (r.source) {
+    case "flag":
+      return "flag";
+    case "env":
+      return "environment";
+    case "project":
+      return "project config";
+    case "user":
+      return "user config";
+    default: {
+      const last = r.tried[r.tried.length - 1]?.source;
+      if (last === "Epic manifests") return "Epic manifest";
+      if (last === "Program Files wildcard") return "Program Files";
+      return "auto";
+    }
+  }
+}
+
+/** An answer that names a folder: trimmed, surrounding quotes removed. */
+const folderAnswer = (answer: string): string => answer.trim().replace(/^"(.*)"$/, "$1").trim();
+
+/** The question of a prompt that cannot be asked (never happens with --yes). */
+function asker(s: Session): (question: string) => Promise<string> {
+  if (s.ask === null) throw noTerminal("--yes was given");
+  return s.ask;
+}
+
+/** Asks `question` until the answer is a folder that passes `problem` (null = fine); `q` quits. */
+async function askFolder(s: Session, question: string, problem: (abs: string) => string | null): Promise<string> {
+  const ask = asker(s);
+  const base = s.deps.cwd ?? process.cwd();
+  for (;;) {
+    const answer = folderAnswer(await ask(question));
+    if (answer === "") continue;
+    if (answer.toLowerCase() === "q") throw new QuitInit();
+    const abs = win32.resolve(base, answer);
+    const bad = problem(abs);
+    if (bad === null) return abs;
+    s.output.info(`  ${bad}`);
+  }
+}
+
+/** Step 3: the Mod Editor; when it is not found and there is a prompt, asks for the folder (validated, re-asked). */
+async function locateEditorRoot(s: Session, profile: Profile): Promise<ReturnType<typeof findEditorRoot>> {
+  const host = s.deps.host;
+  const find = (flag?: string): ReturnType<typeof findEditorRoot> =>
+    findEditorRoot(host, profile, flag, undefined, s.userConfig?.editor?.root);
+  try {
+    return find(s.args.flags.editorRoot);
+  } catch (e) {
+    if (!(e instanceof AbfcError) || e.diagnostic.code !== "ABFC1001" || s.ask === null) throw e;
+    s.output.info(formatDiagnostic(e.diagnostic));
+    const abs = await askFolder(s, "Mod Editor folder (q to quit): ", (p) =>
+      host.exists(win32.join(p, profile.exeRelPath)) ? null : `no ${profile.exeRelPath} in ${p}`,
+    );
+    s.entered.add("editorRoot");
+    return find(abs);
+  }
+}
+
+/** Step 4: the mods folder; when it does not exist and there is a prompt, asks for it (validated, re-asked). */
+async function locateModsDir(s: Session, profile: Profile, documents: Resolved<string> | null): Promise<Resolved<string>> {
+  const host = s.deps.host;
+  const find = (flag?: string): Resolved<string> => findModsDir(host, profile, documents, flag, undefined, s.userConfig?.modsDir);
+  try {
+    return find(s.args.flags.modsDir);
+  } catch (e) {
+    if (!(e instanceof AbfcError) || e.diagnostic.code !== "ABFC1003" || s.ask === null) throw e;
+    s.output.info(formatDiagnostic(e.diagnostic));
+    const abs = await askFolder(s, "Mods folder (q to quit): ", (p) => (host.exists(p) ? null : `${p} does not exist`));
+    s.entered.add("modsDir");
+    return find(abs);
+  }
+}
+
+/** One screen line per scanned mod, columns aligned. */
+function modScreenLines(mods: readonly ModEntry[]): string[] {
+  const nameW = Math.max(0, ...mods.map((m) => m.name.length));
+  const friendly = mods.map((m) => (m.friendlyName === null ? "" : `"${m.friendlyName}"`));
+  const friendlyW = Math.max(0, ...friendly.map((f) => f.length));
+  const numW = String(mods.length).length;
+  return mods.map(
+    (m, i) =>
+      `  ${String(i + 1).padStart(numW)}) ${m.name.padEnd(nameW)}  ${(friendly[i] as string).padEnd(friendlyW)}  ${m.assetCount}${m.assetCountCapped ? "+" : ""} assets`,
+  );
+}
+
+/**
+ * Step 6 (design 18.5): shows the Mod Editor, the mods folder and the scanned mods, and asks which one to link.
+ * `c` changes the mods folder and rescans, `q` quits. `--mod X` preselects X (no menu) while the scan holds mods.
+ */
+async function chooseModInteractively(s: Session, editorRoot: Resolved<string>, modsDir: Resolved<string>, profile: Profile): Promise<Selection> {
+  const ask = asker(s);
+  const host = s.deps.host;
+  const out = s.output;
+  let dir = modsDir;
+  let preselect = s.args.flags.mod;
+  for (;;) {
+    const modsPath = dir.value as string;
+    const mods = scanMods(host, modsPath);
+    if (preselect !== undefined && mods.length > 0) {
+      return { mod: matchMod(mods, modsPath, preselect), editorRoot, modsDir: dir, profile };
+    }
+    preselect = undefined;
+
+    out.info(`Mod Editor: ${editorRoot.value as string}  (${sourceLabel(editorRoot, s.entered.has("editorRoot"))})`);
+    out.info(`Mods folder: ${modsPath}  (${sourceLabel(dir, s.entered.has("modsDir"))})`);
+    for (const l of modScreenLines(mods)) out.info(l);
+    if (mods.length === 0) {
+      out.info(
+        formatDiagnostic({
+          severity: "error",
+          code: "ABFC1044",
+          message: `no mods found in ${modsPath}.`,
+          tried: [{ source: modsPath, detail: "no folder holds <name>\\<name>.uplugin" }],
+          fix: "create a mod in the Mod Editor first, or change the mods folder (c).",
+        }),
+      );
+    }
+    out.info("  c) change the mods folder and rescan");
+    out.info("  q) quit without writing anything");
+    const range = mods.length === 0 ? "" : mods.length === 1 ? "1, " : `1-${mods.length}, `;
+    const question = `Link which mod? [${range}c, q]: `;
+
+    let rescan = false;
+    while (!rescan) {
+      const answer = (await ask(question)).trim().toLowerCase();
+      if (answer === "q") throw new QuitInit();
+      if (answer === "c") {
+        const abs = await askFolder(s, "Mods folder (q to quit): ", (p) => (host.exists(p) ? null : `${p} does not exist`));
+        dir = { value: abs, source: "flag", tried: [] };
+        s.entered.add("modsDir");
+        rescan = true;
+      } else if (/^\d+$/.test(answer) && Number(answer) >= 1 && Number(answer) <= mods.length) {
+        const hit = mods[Number(answer) - 1] as ModEntry;
+        if (MOD_NAME.test(hit.name)) return { mod: hit, editorRoot, modsDir: dir, profile };
+        out.info(`  mod folder "${hit.name}" has characters Unreal does not allow in asset paths (A-Z, a-z, 0-9, _); pick another.`);
+      } else {
+        out.info(`  please answer ${range}c or q.`);
+      }
+    }
+  }
+}
+
+/** The prompt of `abfc init`: `deps.prompt`, else readline on stdin and stdout (opened on first use, closed after init). */
+function makePrompter(deps: CliDeps): { ask: (question: string) => Promise<string>; close: () => void } {
+  if (deps.prompt !== undefined) return { ask: deps.prompt, close: () => {} };
+  let rl: Interface | null = null;
+  let ended: Promise<never> | null = null;
+  const open = (): Interface => {
+    if (rl !== null) return rl;
+    const made = createInterface({ input: process.stdin, output: process.stdout });
+    ended = new Promise<never>((_, reject) => made.once("close", () => reject(noTerminal("input ended"))));
+    ended.catch(() => {});
+    rl = made;
+    return made;
+  };
+  return {
+    ask: (question) => {
+      const r = open();
+      return Promise.race([r.question(question), ended as Promise<never>]);
+    },
+    close: () => rl?.close(),
+  };
 }
 
 /** True when a `.ts` file exists below `dir`. */
@@ -361,31 +540,38 @@ async function initProject(args: ParsedArgs, deps: CliDeps, target: string, outp
   const interactive = deps.interactive ?? (process.stdin.isTTY === true && process.stdout.isTTY === true);
   if (!flags.yes && !interactive) throw noTerminal("stdin or stdout is not a terminal");
 
-  // 3 and 4: Mod Editor and mods folder (design 9.1 order, without the project config)
   const userConfig = loadUserConfig(host.env, host);
-  const defaultProfile = loadProfile();
-  const editorRoot = findEditorRoot(host, defaultProfile, flags.editorRoot, undefined, userConfig?.editor?.root);
-  const profile = profileForBuild(editorRoot.appVersion) ?? defaultProfile;
-  let documents: Resolved<string> | null = null;
+  const prompter = flags.yes ? null : makePrompter(deps);
+  const session: Session = {
+    args,
+    deps,
+    target,
+    existing,
+    userConfig,
+    output,
+    ask: prompter === null ? null : prompter.ask,
+    entered: new Set(),
+  };
   try {
-    documents = findDocuments(host);
-  } catch {
-    documents = null;
+    return await initFlow(session, fs);
+  } catch (e) {
+    if (e instanceof QuitInit) {
+      output.info("Nothing written.");
+      return output.finish();
+    }
+    throw e;
+  } finally {
+    prompter?.close();
   }
-  const modsDir = findModsDir(host, profile, documents, flags.modsDir, undefined, userConfig?.modsDir);
+}
 
-  // 5 to 7: the mod
-  const session: Session = { args, deps, target, existing, userConfig };
-  const sel = flags.yes ? selectNonInteractive(session, editorRoot, modsDir, profile) : await chooseModInteractively(session);
-
-  // 8 and 9: the plan, then the writes
-  const plan = buildPlan(session, sel);
-  applyOps(fs, [plan.userConfig.backup, ...plan.ops, plan.userConfig.op]);
-
-  output.info(`abfc init ${target}`);
+/** The files, notes and warnings of a plan as printed on the summary (and, after the writes, as the result). */
+function printSummary(s: Session, sel: Selection, plan: Plan): void {
+  const output = s.output;
+  output.info(`abfc init ${s.target}`);
   output.info(`  mod              ${sel.mod.name}${sel.mod.friendlyName === null ? "" : `  "${sel.mod.friendlyName}"`}`);
-  output.info(`  Mod Editor       ${sel.editorRoot.value as string}  [${sel.editorRoot.source}]`);
-  output.info(`  mods folder      ${sel.modsDir.value as string}  [${sel.modsDir.source}]`);
+  output.info(`  Mod Editor       ${sel.editorRoot.value as string}  [${sourceLabel(sel.editorRoot, s.entered.has("editorRoot"))}]`);
+  output.info(`  mods folder      ${sel.modsDir.value as string}  [${sourceLabel(sel.modsDir, s.entered.has("modsDir"))}]`);
   const line = (rel: string, action: FileAction): void => output.info(`  ${action.padEnd(8)} ${rel}`);
   for (const op of plan.ops) line(op.rel, op.action);
   if (plan.userConfig.op !== null) {
@@ -393,6 +579,48 @@ async function initProject(args: ParsedArgs, deps: CliDeps, target: string, outp
   }
   for (const n of plan.notes) output.info(`  note: ${n}`);
   for (const w of plan.warnings) output.diag(w);
+}
+
+async function initFlow(session: Session, fs: NonNullable<CliDeps["fs"]>): Promise<number> {
+  const { args, deps, target, output } = session;
+  const flags = args.flags;
+  const host = deps.host;
+
+  // 3 and 4: Mod Editor and mods folder (design 9.1 order, without the project config)
+  const defaultProfile = loadProfile();
+  const editorRoot = await locateEditorRoot(session, defaultProfile);
+  const profile = profileForBuild(editorRoot.appVersion) ?? defaultProfile;
+  let documents: Resolved<string> | null = null;
+  try {
+    documents = findDocuments(host);
+  } catch {
+    documents = null;
+  }
+  const modsDir = await locateModsDir(session, profile, documents);
+
+  // 5 to 7: the mod
+  const sel = flags.yes
+    ? selectNonInteractive(session, editorRoot, modsDir, profile)
+    : await chooseModInteractively(session, editorRoot, modsDir, profile);
+
+  // 8 and 9: the plan, then (after the final question when asking) the writes
+  const plan = buildPlan(session, sel);
+  const writes = [plan.userConfig.backup, ...plan.ops, plan.userConfig.op].filter(
+    (op) => op !== null && op.text !== null && op.action !== "kept",
+  );
+  if (session.ask !== null) {
+    printSummary(session, sel, plan);
+    if (writes.length === 0) {
+      output.info("Nothing to write.");
+    } else {
+      const answer = (await session.ask("Write these files? [y/N]: ")).trim().toLowerCase();
+      if (answer !== "y" && answer !== "yes") throw new QuitInit();
+    }
+    applyOps(fs, [plan.userConfig.backup, ...plan.ops, plan.userConfig.op]);
+  } else {
+    applyOps(fs, [plan.userConfig.backup, ...plan.ops, plan.userConfig.op]);
+    printSummary(session, sel, plan);
+  }
 
   // 10 and 11: stubs, then doctor (in process, sharing the output)
   let stubsCode: number | null = null;

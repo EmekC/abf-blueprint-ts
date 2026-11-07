@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { win32 } from "node:path";
+import { loadProfile } from "@abfc/env";
 import { main } from "../src/index.js";
 import { ALL_TOOLS, fakeEnvironmentFiles, fixInfo, mutableCapture, scriptedBackend } from "./helpers.js";
 import type { FakeEnvironment, MutableCaptured } from "./helpers.js";
@@ -249,4 +250,170 @@ test("--json prints one document with the result shape", async () => {
   assert.deepEqual(doc.result.userConfig.keys, ["schemaVersion", "editor.root", "modsDir"]);
   assert.ok(doc.result.files.every((f) => f.action === "written"));
   assert.ok(doc.result.files.some((f) => f.path === "abf.config.json"));
+});
+
+// ---------------------------------------------------------------- interactive prompt
+
+interface Asked {
+  questions: string[];
+  left: () => number;
+}
+
+/** Makes `s` interactive; the prompt answers from `answers` in order and records the questions. */
+function interactive(s: Setup, answers: string[]): Asked {
+  const questions: string[] = [];
+  const queue = [...answers];
+  s.cap.deps.interactive = true;
+  s.cap.deps.prompt = async (q) => {
+    questions.push(q);
+    const a = queue.shift();
+    if (a === undefined) throw new Error(`no scripted answer for: ${q}`);
+    return a;
+  };
+  return { questions, left: () => queue.length };
+}
+
+const userConfigOf = (s: Setup): Record<string, unknown> => JSON.parse(s.fake.files[USER_CONFIG] as string) as Record<string, unknown>;
+const modOf = (s: Setup): string => (JSON.parse(read(s, "abf.config.json")) as { mod: { name: string } }).mod.name;
+
+test("interactive: the mod is picked by number, the screen lists the mods, then y writes", async () => {
+  const s = setup();
+  const asked = interactive(s, ["2", "y"]);
+  const code = await main(["init", TARGET, "--no-stubs"], s.cap.deps);
+  assert.equal(code, 0, s.cap.text());
+  const out = s.cap.text();
+  assert.match(out, /Mod Editor: C:\\Epic\\ModEdit_X1\s+\(Epic manifest\)/);
+  assert.match(out, /Mods folder: .*\(auto\)/);
+  assert.match(out, /1\) ModA\s+"Mod A"\s+1 assets/);
+  assert.match(out, /2\) ModB/);
+  assert.match(out, /c\) change the mods folder and rescan/);
+  assert.match(out, /q\) quit without writing anything/);
+  assert.doesNotMatch(out, /NotAMod/);
+  assert.deepEqual(asked.questions, ["Link which mod? [1-2, c, q]: ", "Write these files? [y/N]: "]);
+  assert.equal(asked.left(), 0);
+  assert.equal(modOf(s), "ModB");
+  assert.ok(s.cap.writes.includes(USER_CONFIG));
+});
+
+test("interactive: garbage is re-asked, 'yes' also confirms", async () => {
+  const s = setup();
+  const asked = interactive(s, ["", "7", "x", "0", "1", "yes"]);
+  const code = await main(["init", TARGET, "--no-stubs"], s.cap.deps);
+  assert.equal(code, 0, s.cap.text());
+  assert.equal(asked.questions.filter((q) => q.startsWith("Link which mod?")).length, 5);
+  assert.match(s.cap.text(), /please answer 1-2, c or q/);
+  assert.equal(modOf(s), "ModA");
+});
+
+test("interactive: c asks for another mods folder (re-asked until it exists), rescans and a mod there can be picked", async () => {
+  const other = "D:\\MoreMods";
+  const s = setup({ [win32.join(other, "ModC", "ModC.uplugin")]: JSON.stringify({ FriendlyName: "Mod C" }) });
+  const asked = interactive(s, ["c", "D:\\Missing", `"${other}"`, "1", "y"]);
+  const code = await main(["init", TARGET, "--no-stubs"], s.cap.deps);
+  assert.equal(code, 0, s.cap.text());
+  const out = s.cap.text();
+  assert.match(out, /D:\\Missing does not exist/);
+  assert.match(out, /Mods folder: D:\\MoreMods\s+\(entered\)/);
+  assert.match(out, /1\) ModC\s+"Mod C"/);
+  assert.deepEqual(asked.questions, [
+    "Link which mod? [1-2, c, q]: ",
+    "Mods folder (q to quit): ",
+    "Mods folder (q to quit): ",
+    "Link which mod? [1, c, q]: ",
+    "Write these files? [y/N]: ",
+  ]);
+  assert.equal(modOf(s), "ModC");
+  assert.equal(userConfigOf(s).modsDir, other, "the chosen mods folder goes into the user config");
+});
+
+test("interactive: q writes nothing and exits 0", async () => {
+  const s = setup();
+  const asked = interactive(s, ["q"]);
+  const code = await main(["init", TARGET, "--no-stubs"], s.cap.deps);
+  assert.equal(code, 0, s.cap.text());
+  assert.deepEqual(s.cap.writes, []);
+  assert.match(s.cap.text(), /Nothing written\./);
+  assert.equal(asked.questions.length, 1);
+});
+
+test("interactive: anything but y or yes to the final question writes nothing", async () => {
+  for (const answer of ["n", "", "maybe"]) {
+    const s = setup();
+    interactive(s, ["1", answer]);
+    const code = await main(["init", TARGET, "--no-stubs"], s.cap.deps);
+    assert.equal(code, 0, s.cap.text());
+    assert.deepEqual(s.cap.writes, [], `answer "${answer}"`);
+    assert.match(s.cap.text(), /Nothing written\./);
+    assert.match(s.cap.text(), /written\s+abf\.config\.json/, "the summary was shown before the question");
+  }
+});
+
+test("interactive: --mod X preselects the mod and asks only the final question", async () => {
+  const s = setup();
+  const asked = interactive(s, ["y"]);
+  const code = await main(["init", TARGET, "--mod", "modb", "--no-stubs"], s.cap.deps);
+  assert.equal(code, 0, s.cap.text());
+  assert.deepEqual(asked.questions, ["Write these files? [y/N]: "]);
+  assert.equal(modOf(s), "ModB");
+});
+
+test("interactive: --mod with an unknown mod is ABFC1042 before any question", async () => {
+  const s = setup();
+  const asked = interactive(s, []);
+  const code = await main(["init", TARGET, "--mod", "Nope", "--no-stubs"], s.cap.deps);
+  assert.equal(code, 1, s.cap.text());
+  assert.match(s.cap.text(), /error ABFC1042/);
+  assert.equal(asked.questions.length, 0);
+  assert.deepEqual(s.cap.writes, []);
+});
+
+test("interactive: an empty mods folder prints ABFC1044 and offers only c and q", async () => {
+  const s = setup({}, /\\(ModA|ModB)\\/);
+  const asked = interactive(s, ["1", "q"]);
+  const code = await main(["init", TARGET, "--no-stubs"], s.cap.deps);
+  assert.equal(code, 0, s.cap.text());
+  assert.match(s.cap.text(), /ABFC1044: no mods found in/);
+  assert.deepEqual(asked.questions, ["Link which mod? [c, q]: ", "Link which mod? [c, q]: "]);
+  assert.deepEqual(s.cap.writes, []);
+});
+
+test("interactive: a missing Mod Editor is asked for, validated, re-asked and goes into the user config", async () => {
+  const exeRel = loadProfile().exeRelPath;
+  const s = setup({ [win32.join("C:\\Epic\\OtherEdit", exeRel)]: "exe" }, /ModEdit_X1\\.*\.exe$/i);
+  const asked = interactive(s, ["C:\\Epic\\Nowhere", "C:\\Epic\\OtherEdit", "1", "y"]);
+  await main(["init", TARGET, "--no-stubs"], s.cap.deps);
+  const out = s.cap.text();
+  assert.match(out, /ABFC1001/);
+  assert.match(out, /\.exe in C:\\Epic\\Nowhere/);
+  assert.match(out, /Mod Editor: C:\\Epic\\OtherEdit\s+\(entered\)/);
+  assert.equal(asked.questions[0], "Mod Editor folder (q to quit): ");
+  assert.equal(asked.questions[1], "Mod Editor folder (q to quit): ");
+  assert.equal(asked.left(), 0);
+  assert.deepEqual((userConfigOf(s).editor as { root: string }).root, "C:\\Epic\\OtherEdit");
+  assert.equal(modOf(s), "ModA");
+});
+
+test("interactive: a missing mods folder is asked for (ABFC1003 is not fatal)", async () => {
+  const modsRoot = win32.dirname(setup().fake.modDir).replace(/[\\.]/g, "\\$&");
+  const s = setup({ "D:\\MoreMods\\ModC\\ModC.uplugin": "{}" }, new RegExp(`^${modsRoot}\\\\`, "i"));
+  const asked = interactive(s, ["D:\\Nope", "D:\\MoreMods", "1", "y"]);
+  await main(["init", TARGET, "--no-stubs"], s.cap.deps);
+  const out = s.cap.text();
+  assert.match(out, /ABFC1003/);
+  assert.match(out, /D:\\Nope does not exist/);
+  assert.equal(asked.questions[0], "Mods folder (q to quit): ");
+  assert.equal(asked.left(), 0);
+  assert.equal(modOf(s), "ModC");
+});
+
+test("interactive: a re-run with nothing to change says so and asks no final question", async () => {
+  const s = setup();
+  assert.equal(await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs"], s.cap.deps), 0, s.cap.text());
+  s.cap.writes.length = 0;
+  const asked = interactive(s, []);
+  const code = await main(["init", TARGET, "--mod", "ModA", "--no-stubs"], s.cap.deps);
+  assert.equal(code, 0, s.cap.text());
+  assert.match(s.cap.text(), /Nothing to write\./);
+  assert.deepEqual(asked.questions, []);
+  assert.deepEqual(s.cap.writes, []);
 });
