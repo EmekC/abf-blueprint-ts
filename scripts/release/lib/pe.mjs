@@ -18,7 +18,20 @@ export function stripAuthenticode(buf) {
   if (off === 0 || size === 0) return { buf, removed: false };
   const tail = buf.subarray(off + size);
   if (off + size > buf.length || tail.length > 7 || tail.some((b) => b !== 0)) {
-    throw new Error("certificate table is not at the end of the file");
+    // `node --build-sea` (LIEF) adds its section before the certificate and moves the certificate to the end of the file
+    // without updating the directory entry: the entry then points into the new section, while the last `size` bytes of
+    // the file are still the WIN_CERTIFICATE (dwLength == size, wRevision 0x0100/0x0200, wCertificateType 2).
+    const at = buf.length - size;
+    const moved =
+      at > off &&
+      buf.readUInt32LE(at) === size &&
+      (buf.readUInt16LE(at + 4) === 0x0200 || buf.readUInt16LE(at + 4) === 0x0100) &&
+      buf.readUInt16LE(at + 6) === 0x0002;
+    if (!moved) throw new Error("certificate table is not at the end of the file");
+    const relocated = Buffer.from(buf.subarray(0, at));
+    relocated.writeUInt32LE(0, sec);
+    relocated.writeUInt32LE(0, sec + 4);
+    return { buf: relocated, removed: true };
   }
   const out = Buffer.from(buf.subarray(0, off));
   out.writeUInt32LE(0, sec);

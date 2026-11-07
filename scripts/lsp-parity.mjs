@@ -28,7 +28,9 @@ if (!existsSync(lspPath) || !existsSync(binPath)) {
 const { StdioLspClient, compilerConfigOf, loadProjectEnvironment } = await import(pathToFileURL(lspPath).href);
 const { checkProject, loadProgram } = await import("@abfc/compiler");
 
-const USAGE = "usage: node scripts/lsp-parity.mjs --project <dir> [--project <dir> ...]";
+const USAGE = "usage: node scripts/lsp-parity.mjs [--abfc <abfc.exe>] --project <dir> [--project <dir> ...]";
+// --abfc <exe>: start `<exe> lsp --stdio` instead of `node bin.js lsp --stdio` (checks the built single executable).
+let abfcExe = null;
 const OVERALL_MS = 180_000;
 const QUIET_MS = 1_000;
 
@@ -39,6 +41,7 @@ function projectsFromArgs(argv) {
   const out = [];
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === "--project" && argv[i + 1] !== undefined) out.push(resolve(argv[++i]));
+    else if (argv[i] === "--abfc" && argv[i + 1] !== undefined) abfcExe = resolve(argv[++i]);
     else {
       console.error(`lsp-parity: unexpected argument ${argv[i]}\n${USAGE}`);
       process.exit(2);
@@ -86,7 +89,8 @@ function reference(dir) {
 
 /** What `abfc lsp --stdio` publishes for the opened files. */
 async function viaLsp(dir, files) {
-  const child = spawn(process.execPath, [binPath, "lsp", "--stdio"], { cwd: dir, env: process.env, stdio: ["pipe", "pipe", "pipe"] });
+  const [command, args] = abfcExe === null ? [process.execPath, [binPath, "lsp", "--stdio"]] : [abfcExe, ["lsp", "--stdio"]];
+  const child = spawn(command, args, { cwd: dir, env: process.env, stdio: ["pipe", "pipe", "pipe"] });
   let stderr = "";
   child.stderr.on("data", (d) => (stderr += d.toString("utf8")));
   const exited = new Promise((resolveExit) => child.on("exit", (code) => resolveExit(code)));

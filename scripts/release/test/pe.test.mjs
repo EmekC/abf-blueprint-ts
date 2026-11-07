@@ -51,6 +51,22 @@ describe("stripAuthenticode", () => {
     assert.throws(() => stripAuthenticode(makePe({ cert: 32, pad: 64 })), /not at the end/);
   });
 
+  it("removes a certificate that was moved to the end while the directory entry went stale", () => {
+    // layout: headers, payload, an added section (0x80 bytes) where the entry still points, then the WIN_CERTIFICATE
+    const base = makePe({ cert: 96 });
+    const added = Buffer.alloc(0x80, 0x33);
+    const cert = base.subarray(0x400 + 64);
+    cert.writeUInt32LE(96, 0);
+    cert.writeUInt16LE(0x0200, 4);
+    cert.writeUInt16LE(0x0002, 6);
+    const buf = Buffer.concat([base.subarray(0, 0x400 + 64), added, cert]);
+    const r = stripAuthenticode(buf);
+    assert.equal(r.removed, true);
+    assert.equal(r.buf.length, 0x400 + 64 + 0x80);
+    assert.equal(r.buf.readUInt32LE(SEC), 0);
+    assert.equal(r.buf.readUInt32LE(SEC + 4), 0);
+  });
+
   it("rejects non-PE input", () => {
     assert.throws(() => stripAuthenticode(Buffer.alloc(256)), /not a PE file/);
   });
