@@ -30,6 +30,8 @@ abfc uses semantic versioning for its command-line surface: the commands, their 
 ### Known issues
 
 - `abfc publish --full` stops at gate 5 (ABFC7002) on the machine where it was tried: the audit's hidden Mod Editor shows the Epic/mod.io login window, which no wait or sign-in in a normal session resolved (two live runs, 60 s and 240 s). Build, test and the default publish do not need it; run the Asset Audit in the Mod Editor before an upload. See the troubleshooting guide, "The Epic login window of the stage audit".
+- The backend gives the audit's hidden editor a private home whose `AppData\Local` folder is linked to the backend's own headless folder instead of the real Local folder, so a stored mod.io session cannot be seen there. A fix is recorded for the backend; whether a bypass flag for gate 5 is wanted is an open decision.
+- There is no `abfc mv`: Unreal's asset rename is not available through the headless backend. A moved or renamed file stops the build with ABFC5012; the quick fix keeps the old asset path.
 - Function locals and changing the fields of an existing struct are not supported yet.
 - The exe, installer and zip are not code-signed, so Windows SmartScreen warns on the first run.
 
