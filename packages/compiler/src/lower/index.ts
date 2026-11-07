@@ -30,6 +30,7 @@ export function lower(h: HirProgram, profile: Profile): IrModule {
       units,
       ...(Object.keys(cls.defaults).length > 0 ? { classDefaults: { ...cls.defaults } } : {}),
       ...(cls.classManagerRow !== undefined ? { classManagerRow: cls.classManagerRow } : {}),
+      ...(cls.director !== undefined ? { director: cls.director } : {}),
     };
   });
   return { irVersion: 1, profile: profile.id, mod: h.mod, assets: [...structs, ...classes], classMeta: h.classMeta };

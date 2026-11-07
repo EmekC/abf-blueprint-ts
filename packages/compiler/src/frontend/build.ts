@@ -1,9 +1,9 @@
 // HIR builder: checks the TypeScript subset and resolves every name through the stub tags.
 import ts from "typescript";
-import { BpTypeError, parseBpType } from "@abfc/ir";
+import { BpTypeError, DEFAULT_CLASS_MANAGER_TABLE, joinModPath, parseBpType, segmentProblem } from "@abfc/ir";
 import type { Diagnostic, Profile, Span } from "@abfc/ir";
 import type { BpType, HirClass, HirEvent, HirField, HirExpr, HirProgram, HirStmt, HirStruct, LocalId } from "../hir.js";
-import { assetPathOf, bindPathContext, modImportHints } from "./assetpaths.js";
+import { assetPathOf, bindPathContext, modImportHints, pathContextOf } from "./assetpaths.js";
 import type { AssetPathInfo, CompilerProjectConfig } from "./assetpaths.js";
 import { DiagSink, Fail, relFile, spanOf } from "./diag.js";
 import type { LoadedProgram } from "./program.js";
@@ -241,13 +241,17 @@ class HirBuilder {
     const st = (ts.getDecorators(node) ?? []).find((d) => runtimeName(this.checker, d.expression) === "struct");
     if (st) {
       if (bp) this.sink.error("ABFC2046", `${node.name?.text ?? "(anonymous)"} cannot be both a @blueprint and a @struct`, node.name ?? node);
-      else this.structDecl(node, st);
+      else {
+        this.directorOf(node, true, undefined);
+        this.structDecl(node, st);
+      }
       return;
     }
     if (!bp) return;
     const name = node.name?.text ?? "(anonymous)";
     let parentOption: string | undefined;
     let classManagerRow: string | undefined;
+    let classManagerRowNode: ts.Node | undefined;
     let widget = false;
     const defaultOpts: Array<{ key: string; prop: string; value: string; node: ts.Node }> = [];
     const opts = ts.isCallExpression(bp.expression) ? bp.expression.arguments[0] : undefined;
@@ -258,7 +262,10 @@ class HirBuilder {
         if (key === "path") {
           // the asset path is resolved by assetPathOf below
         } else if (key === "parent") parentOption = lit;
-        else if (key === "classManagerRow") classManagerRow = lit;
+        else if (key === "classManagerRow") {
+          classManagerRow = lit;
+          classManagerRowNode = p;
+        }
         else if (key === "tickEnabled") {
           this.sink.error(
             "ABFC2063",
@@ -323,6 +330,11 @@ class HirBuilder {
     } else if (!widget && parentIsWidget) {
       this.sink.error("ABFC2065", `${name} extends UserWidget: add kind: "widget" to @blueprint`, node.name ?? node);
     }
+    const director = this.directorOf(node, widget || parentIsWidget, classManagerRowNode);
+    if (!(ts.getDecorators(node) ?? []).some((d) => runtimeName(this.checker, d.expression) === "director") && classManagerRow !== undefined && classManagerRowNode !== undefined && pathContextOf(node.getSourceFile())?.migrationHints === true) {
+      this.sink.warning("ABFC2076", `classManagerRow is deprecated; use @director("${classManagerRow.slice(classManagerRow.lastIndexOf("/") + 1)}")`, classManagerRowNode);
+      this.sink.diagnostics[this.sink.diagnostics.length - 1]!.fix = "replace classManagerRow with @director (quick fix)";
+    }
     for (const o of defaultOpts) {
       if (ACTOR_ONLY_OPTIONS.has(o.key) && !parentIsActor) {
         this.sink.error("ABFC2062", `@blueprint option "${o.key}" only applies to an Actor, but ${name} does not derive from Actor`, o.node);
@@ -343,6 +355,7 @@ class HirBuilder {
       manualUnits: this.manualUnits(node),
       defaults,
       ...(classManagerRow !== undefined ? { classManagerRow } : {}),
+      ...(director !== undefined ? { director } : {}),
       ...(widget ? { kind: "widget" as const } : {}),
     };
     this.classMeta[cls.classPath] = widget ? WIDGET_META : BLUEPRINT_META;
@@ -395,6 +408,41 @@ class HirBuilder {
       this.sink.error("ABFC2099", `class member of kind ${ts.SyntaxKind[m.kind]} is not supported`, m);
     }
     this.classes.push(cls);
+  }
+
+  /**
+   * The `@director("Row")` of a class: undefined when there is none or it has an error (reported here). `notAllowed` is true for a
+   * widget class or a `@struct` (ABFC2074).
+   */
+  private directorOf(node: ts.ClassDeclaration, notAllowed: boolean, classManagerRowNode: ts.Node | undefined): { row: string; asset: string } | undefined {
+    const decs = (ts.getDecorators(node) ?? []).filter((d) => runtimeName(this.checker, d.expression) === "director");
+    if (decs.length === 0) return undefined;
+    const dec = decs[0]!;
+    if (decs.length > 1) {
+      this.sink.error("ABFC2061", "one @director per class", decs[1]!);
+      return undefined;
+    }
+    if (notAllowed) {
+      this.sink.error("ABFC2074", "@director only applies to a non-widget @blueprint class", dec);
+      return undefined;
+    }
+    const arg = ts.isCallExpression(dec.expression) && dec.expression.arguments.length === 1 ? dec.expression.arguments[0]! : undefined;
+    if (arg === undefined || !(ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg))) {
+      this.sink.error("ABFC2061", "@director takes the row name as a string literal", arg ?? dec);
+      return undefined;
+    }
+    const row = arg.text;
+    const why = segmentProblem(row);
+    if (why !== null) {
+      this.sink.error("ABFC2073", `row name "${row}" ${why}`, arg);
+      return undefined;
+    }
+    if (classManagerRowNode !== undefined) {
+      this.sink.error("ABFC2061", "use @director or classManagerRow, not both", classManagerRowNode);
+      return undefined;
+    }
+    const table = pathContextOf(node.getSourceFile())?.classManagerTable ?? DEFAULT_CLASS_MANAGER_TABLE;
+    return { row, asset: joinModPath(this.mod, `${table}/${row}`) };
   }
 
   /**
@@ -1639,6 +1687,23 @@ export function buildHir(loaded: LoadedProgram, config: CompilerProjectConfig, _
           code: "ABFC2007",
           message: `asset path ${x.path} of ${x.name} is already used by ${first.name} (${first.file})`,
           span: x.span,
+        });
+      }
+    }
+  }
+  if (only === undefined) {
+    const rows = new Map<string, string>();
+    for (const c of b.classes) {
+      if (c.director === undefined) continue;
+      const key = c.director.row.toLowerCase();
+      const first = rows.get(key);
+      if (first === undefined) rows.set(key, c.name);
+      else {
+        b.sink.diagnostics.push({
+          severity: "error",
+          code: "ABFC2075",
+          message: `class-manager row ${c.director.row} of ${c.name} is already used by ${first}`,
+          span: c.span,
         });
       }
     }

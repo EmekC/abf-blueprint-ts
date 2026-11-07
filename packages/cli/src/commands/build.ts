@@ -134,7 +134,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   const ir = fe.ir;
   // Mod-defined structs (UserDefinedStruct): created from the TS, never read; planned first.
   const structAssets = ir.assets.filter((a) => a.structFields !== undefined);
-  const owned = ir.assets.filter((a) => a.units.length > 0 || a.classDefaults !== undefined || a.classManagerRow !== undefined || a.variables.some((v) => v.temp !== true));
+  const owned = ir.assets.filter((a) => a.units.length > 0 || a.classDefaults !== undefined || a.classManagerRow !== undefined || a.director !== undefined || a.variables.some((v) => v.temp !== true));
   // A class whose TypeScript is gone but whose manifest still lists units: its units are retired like those of a removed event.
   for (const m of listManifests(projectDir)) {
     if (!m.asset.startsWith(`/${mod}/`) || m.units.length === 0 || owned.some((a) => a.path === m.asset)) continue;

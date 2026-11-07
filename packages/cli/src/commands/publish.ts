@@ -190,7 +190,7 @@ function wouldPublish(ctx: CliContext, stage: StageStatus | null): PublishList {
   const fe = compileFrontend(ctx);
   const owned = new Set<string>();
   for (const a of fe.ir?.assets ?? []) {
-    if (a.units.length > 0 || a.classDefaults !== undefined || a.classManagerRow !== undefined || a.structFields !== undefined || a.variables.some((v) => v.temp !== true)) owned.add(a.path);
+    if (a.units.length > 0 || a.classDefaults !== undefined || a.classManagerRow !== undefined || a.director !== undefined || a.structFields !== undefined || a.variables.some((v) => v.temp !== true)) owned.add(a.path);
   }
   for (const a of fe.ir?.assets ?? []) {
     const m = readManifest(ctx.projectDir, a.path);

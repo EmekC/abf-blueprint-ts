@@ -77,8 +77,8 @@ function tagsOf(snapshot: Map<string, T3dNode>, unitId: string, graph: string): 
 
 /** Does the asset's class defaults pass need to run (hash or stage changed)? */
 function defaultsStale(asset: IrModule["assets"][number], manifest: Manifest | null, stage: StageInfo): boolean {
-  if (asset.classDefaults === undefined && asset.classManagerRow === undefined) return false;
-  const hash = classDefaultsHash(asset.classDefaults ?? {}, asset.classManagerRow);
+  if (asset.classDefaults === undefined && asset.classManagerRow === undefined && asset.director === undefined) return false;
+  const hash = classDefaultsHash(asset.classDefaults ?? {}, asset.classManagerRow, asset.director?.asset);
   return manifest?.classDefaultsHash !== hash || (manifest.classDefaultsStageSyncedAt ?? null) !== stage.syncedAt;
 }
 
@@ -366,15 +366,17 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
     }
 
     let defaults: AssetPlan["defaults"];
-    if (asset.classDefaults !== undefined || asset.classManagerRow !== undefined) {
+    if (asset.classDefaults !== undefined || asset.classManagerRow !== undefined || asset.director !== undefined) {
       const values = asset.classDefaults ?? {};
-      const hash = classDefaultsHash(values, asset.classManagerRow);
+      const hash = classDefaultsHash(values, asset.classManagerRow, asset.director?.asset);
       if (defaultsStale(asset, manifest, input.stage)) {
+        const classPath = `${asset.path}.${asset.path.slice(asset.path.lastIndexOf("/") + 1)}_C`;
         defaults = {
-          classPath: `${asset.path}.${asset.path.slice(asset.path.lastIndexOf("/") + 1)}_C`,
+          classPath,
           values,
           hash,
           ...(asset.classManagerRow !== undefined ? { classManagerRow: asset.classManagerRow } : {}),
+          ...(asset.director !== undefined ? { director: { asset: asset.director.asset, classPath } } : {}),
         };
       }
     }

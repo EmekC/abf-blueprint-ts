@@ -280,7 +280,7 @@ function patchRefs(a: AssetPlan, spec: BpApplyAssetSpec, caps: BackendCapabiliti
 /** Spec of the class-defaults pass of one asset: one fixed Python template (see defaults-template.ts). */
 export function renderDefaultsSpec(a: AssetPlan): BpApplyAssetSpec {
   const d = a.defaults!;
-  return { asset: a.asset, raw: [{ kind: "python", code: renderDefaultsCode(d.classPath, d.values, d.classManagerRow) }] };
+  return { asset: a.asset, raw: [{ kind: "python", code: renderDefaultsCode(d.classPath, d.values, d.director?.asset ?? d.classManagerRow) }] };
 }
 
 /** Pass 5: class defaults of every asset whose plan has a `defaults` item. A failure is a warning (the next build repeats it). */

@@ -260,6 +260,24 @@ test("class defaults are their own plan item, keyed by hash and by the stage the
   assert.equal(planBuild(ir2, input2(other, snapshot)).plan.assets[0]?.defaults?.hash, d.hash);
 });
 
+test("a director row is part of the defaults item (with the class path) and of its hash", () => {
+  const snapshot = snapshot2();
+  const plain = planBuild(ir2, input2(appliedManifest(snapshot), snapshot)).plan.assets[0]!.defaults!;
+  assert.equal(plain.director, undefined);
+  const row = "/TestMod/DataTables/DT_ClassManager/EntityDirector_Test";
+  const withDirector = { ...ir2, assets: [{ ...ir2.assets[0]!, director: { row: "EntityDirector_Test", asset: row } }] };
+  const d = planBuild(withDirector, input2(appliedManifest(snapshot), snapshot)).plan.assets[0]!.defaults!;
+  assert.deepEqual(d.director, { asset: row, classPath: `${asset2}.BP_Director_C` });
+  assert.notEqual(d.hash, plain.hash);
+  // a director alone (no class defaults) still produces the item, and an applied one is not planned again
+  const { classDefaults: _unused, ...noDefaults } = ir2.assets[0]!;
+  const bare = { ...ir2, assets: [{ ...noDefaults, director: { row: "EntityDirector_Test", asset: row } }] };
+  const bareItem = planBuild(bare, input2(appliedManifest(snapshot), snapshot)).plan.assets[0]!.defaults!;
+  assert.deepEqual(bareItem.director, d.director);
+  const done = appliedManifest(snapshot, { classDefaultsHash: bareItem.hash, classDefaultsStageSyncedAt: "T1" });
+  assert.deepEqual(planBuild(bare, input2(done, snapshot)).plan.assets, []);
+});
+
 test("a changed delegate target replans the unit that takes its delegate; the reverse does not", () => {
   const snapshot = snapshot2();
   const hash = planBuild(ir2, input2(appliedManifest(snapshot), snapshot)).plan.assets[0]!.defaults!.hash;

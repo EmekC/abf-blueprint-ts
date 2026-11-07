@@ -47,7 +47,7 @@ export interface BlueprintOptions {
   tickInterval?: number;
   /** Not supported yet (ABFC2063): writing the saved bStartWithTickEnabled is unverified. */
   tickEnabled?: boolean;
-  /** row asset path, verified (Phase 2) */
+  /** row asset path, verified (Phase 2) @deprecated Use `@director("RowName")`. */
   classManagerRow?: string;
   /** The asset is a Widget Blueprint; the class must extend a UserWidget. The designer layout (WidgetTree) stays hand-made; designer widgets are read-only members of the `_Manual` stub. */
   kind?: "widget";
@@ -61,6 +61,12 @@ export interface StructOptions {
   path?: string;
 }
 
+/**
+ * Names the class-manager row of a `@blueprint` class (not a widget): the row asset `/<mod>/<classManager.table>/<row>` (default table
+ * `DataTables/DT_ClassManager`) references the generated class. The build writes the row when the backend supports it, else it only
+ * verifies it. The row name is a string literal made of A-Z, a-z, 0-9 and _.
+ */
+export declare function director(row: string): <T extends abstract new (...a: any) => any>(c: T, ctx: ClassDecoratorContext<T>) => void;
 export declare function blueprint(o?: BlueprintOptions): <T extends abstract new (...a: any) => any>(c: T, ctx: ClassDecoratorContext<T>) => void;
 /**
  * A mod-defined struct (UserDefinedStruct) created by abfc. Declare the fields as `Name!: Type;` (no initializer, no methods, no

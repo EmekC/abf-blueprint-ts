@@ -33,6 +33,6 @@ export function structFieldsHash(fields: ReadonlyArray<{ name: string; type: str
 }
 
 /** Hash of the class defaults of an asset (plan item `defaults`): the validated property map plus the class manager row. */
-export function classDefaultsHash(values: Record<string, string>, classManagerRow?: string): string {
-  return "sha256:" + sha256(canonicalJson({ values, classManagerRow }));
+export function classDefaultsHash(values: Record<string, string>, classManagerRow?: string, directorAsset?: string): string {
+  return "sha256:" + sha256(canonicalJson({ values, classManagerRow, directorAsset }));
 }

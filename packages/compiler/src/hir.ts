@@ -28,6 +28,8 @@ export interface HirClass {
   defaults: Record<string, string>;
   /** Row asset path of the `classManagerRow` option (verified, not written). */
   classManagerRow?: string;
+  /** `@director("Row")`: the class-manager row (asset `/<mod>/<classManager.table>/<Row>`) that references this class. */
+  director?: { row: string; asset: string };
   /** `widget`: the asset is a Widget Blueprint (`@blueprint({ kind: "widget" })`). */
   kind?: "widget";
 }
