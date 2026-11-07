@@ -1711,7 +1711,7 @@ export function buildHir(loaded: LoadedProgram, config: CompilerProjectConfig, _
   return { mod: config.mod, classes: b.classes, structs: orderStructs(b.structs), classMeta: b.classMeta, diagnostics: b.sink.diagnostics };
 }
 
-/** Diagnostics (TypeScript's and the subset checker's) of one file; the entry point of the future ts-plugin. */
+/** Diagnostics (TypeScript's and the subset checker's) of one file. */
 export function checkSubset(loaded: LoadedProgram, file: ts.SourceFile, config: CompilerProjectConfig, profile: Profile): Diagnostic[] {
   const hir = buildHir(loaded, config, profile, [file]);
   const rel = relFile(loaded.projectDir, file.fileName);

@@ -6,6 +6,10 @@ language service's); run ESLint with `npx eslint` or the ESLint editor extension
 
 ## Setup
 
+`abfc lsp` (and so the VS Code extension, see [language-service.md](language-service.md)) runs the recommended rules
+in-process on the files you edit: no ESLint config is needed, and findings show up as warnings with the rule id as code.
+The ESLint config route below stays for CI and for editors that run ESLint themselves.
+
 Install `eslint`, `@typescript-eslint/parser` and `@abfc/eslint-plugin`, then create `eslint.config.js`:
 
 ```js

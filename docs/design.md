@@ -111,7 +111,7 @@ npm workspaces monorepo `abf-blueprint-ts`, built with `tsc -b`, tests on `node:
 | `@abfc/backend` | `Backend` interface, MCP-over-stdio client, the `bp_apply`, `import_nodes` and `paste_graph` adapters. | `@abfc/ir`, `@abfc/env` |
 | `@abfc/stubgen` | Reflection result -> `.d.ts` files plus stub lock. | `@abfc/backend`, `@abfc/env` |
 | `@abfc/testkit` | `*.test.ts` recorder -> bp_game_test steps. | `@abfc/ir` |
-| `@abfc/ts-plugin` | Language-service plugin that reuses `@abfc/compiler`'s subset checker. Retired in 1.0 (replaced by `@abfc/lsp`; not published, not shipped; the folder is deleted in 7b once LSP parity passes). | `@abfc/compiler` |
+| `@abfc/ts-plugin` | Retired; deleted in 7b (replaced by `@abfc/lsp`). | |
 | `@abfc/lsp` (1.0) | Stdio language server behind `abfc lsp`: diagnostics, hover, code actions (section 18.6). | `@abfc/compiler`, `@abfc/env`, `@abfc/ir`, `@abfc/stubgen` (stub lock check), `@abfc/eslint-plugin`, `eslint` (`Linter` only), `@typescript-eslint/parser`, `vscode-languageserver`, `vscode-languageserver-textdocument` |
 | `@abfc/eslint-plugin` | Network and performance rules. | `@typescript-eslint/utils` |
 | `@abfc/cli` | `abfc` bin. Orchestration and diagnostics printing. | all |
@@ -131,7 +131,7 @@ manifest + bp_read snapshot --planner--> ApplyPlan (ordered passes, only changed
             node-name map + compile log --> source map --> file.ts:l:c diagnostics
 ```
 
-Type-checker isolation: `packages/compiler/src/frontend/` is the only code that imports `typescript`. It turns the checked program into HIR, a small typed tree that holds resolved symbols, Blueprint types and source spans. Lowering, planning and backends never see a `ts.Node` or `ts.Type`. Replacing the frontend with a native TypeScript (tsgo / TS 7) API is then a change in one folder. The ts-plugin calls `frontend.checkSubset(program, file)`, the same function `abfc check` uses, so the subset rules have a single source of truth.
+Type-checker isolation: `packages/compiler/src/frontend/` is the only code that imports `typescript`. It turns the checked program into HIR, a small typed tree that holds resolved symbols, Blueprint types and source spans. Lowering, planning and backends never see a `ts.Node` or `ts.Type`. Replacing the frontend with a native TypeScript (tsgo / TS 7) API is then a change in one folder. The language server (`@abfc/lsp`) calls the compiler's `checkProject()`, the same function `abfc check` uses, so the subset rules have a single source of truth.
 
 ## 4. The TS subset and lowering rules
 
