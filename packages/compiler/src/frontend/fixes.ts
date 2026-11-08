@@ -291,3 +291,41 @@ export function keepPathFix(sf: ts.SourceFile, classNameStart: number, relPath: 
   const indent = sf.text.slice(lineStart, firstProp.getStart(sf));
   return [{ start: firstProp.getStart(sf), length: 0, newText: `${option},\n${indent}` }];
 }
+
+/**
+ * ABFC2078: `@event Name()` -> `@override override Name()`. Replaces the decorator covering [start, end) with `@override`, inserts the
+ * TS `override` modifier before the method name (before `async` when present) if missing, and imports `override` from `@abfc/runtime`.
+ */
+export function useOverrideFix(sf: ts.SourceFile, start: number, end: number): TextEdit[] | undefined {
+  let found: ts.MethodDeclaration | undefined;
+  let decorator: ts.Decorator | undefined;
+  const visit = (node: ts.Node): void => {
+    if (found !== undefined) return;
+    if (ts.isMethodDeclaration(node)) {
+      const d = (ts.getDecorators(node) ?? []).find((x) => x.getStart(sf) <= start && end <= x.getEnd());
+      if (d !== undefined) {
+        found = node;
+        decorator = d;
+        return;
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  if (found === undefined || decorator === undefined) return undefined;
+  const binding = runtimeBinding(sf, "override");
+  const at = decorator.getStart(sf);
+  const edits: TextEdit[] = [];
+  let decoratorEdit: TextEdit = { start: at, length: decorator.getEnd() - at, newText: `@${binding.name}` };
+  if (binding.edit !== undefined) {
+    if (binding.edit.start === at) decoratorEdit = { ...decoratorEdit, newText: binding.edit.newText + decoratorEdit.newText };
+    else edits.push(binding.edit);
+  }
+  edits.push(decoratorEdit);
+  const mods = ts.getModifiers(found) ?? [];
+  if (!mods.some((k) => k.kind === ts.SyntaxKind.OverrideKeyword)) {
+    const asyncMod = mods.find((k) => k.kind === ts.SyntaxKind.AsyncKeyword);
+    edits.push({ start: (asyncMod ?? found.name).getStart(sf), length: 0, newText: "override " });
+  }
+  return edits;
+}

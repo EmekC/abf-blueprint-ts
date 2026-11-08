@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Diagnostic, Profile } from "@abfc/ir";
 import { buildHir, checkSubset, compileTests, loadProgram } from "../src/index.js";
@@ -615,4 +616,74 @@ test("@struct: member names, topological order, Break/Make pins use <Field>_<ind
   const got = badHir.diagnostics.filter((d) => d.severity === "error").map((d) => `${d.span?.line}:${d.code}`);
   assert.deepEqual([...got].sort(), [...expected].sort());
   assert.deepEqual(badHir.structs, []);
+});
+
+// ---- ABFC2078: @event named like a parent Blueprint member ----
+
+const here78 = fileURLToPath(new URL("./", import.meta.url));
+
+/** Diagnostics and class events of a one-class file `BP_Shadow` extending the phase2 Actor stub (which also has a member without @bpPath: PlainMember). */
+function shadowHir(members: string): { diagnostics: Diagnostic[]; events: string[] } {
+  const dir = mkdtempSync(join(here78, "shadow-"));
+  try {
+    cpSync(phase2Dir, dir, { recursive: true });
+    for (const f of ["Phase2Bad.ts", "Counter.ts", "Director.ts"]) rmSync(join(dir, "src", f));
+    const stub = join(dir, ".abfc", "stubs", "test", "Script", "FakeEngine.d.ts");
+    const stubText = readFileSync(stub, "utf8");
+    assert.ok(stubText.includes("K2_DestroyActor(): void;"));
+    writeFileSync(stub, stubText.replace("K2_DestroyActor(): void;", "K2_DestroyActor(): void;\n  PlainMember(): void;"), "utf8");
+    writeFileSync(
+      join(dir, "src", "Shadow.ts"),
+      `import { blueprint, event, override } from "@abfc/runtime";
+import { Actor } from "/Script/FakeEngine";
+import type { BP_Shadow_Manual } from "/TestMod/Relay/BP_Shadow";
+
+export interface BP_Shadow extends BP_Shadow_Manual {}
+
+@blueprint({ path: "/TestMod/Relay/BP_Shadow" })
+export class BP_Shadow extends Actor {
+${members}
+}
+`,
+      "utf8",
+    );
+    const ld = loadProgram(dir);
+    const sf = ld.files.classes.find((f) => f.fileName.endsWith("/Shadow.ts"));
+    assert.ok(sf);
+    const res = buildHir(ld, config, profile, [sf]);
+    return { diagnostics: res.diagnostics, events: res.classes.flatMap((c) => c.events.map((e) => e.name)) };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("ABFC2078: @event ReceiveBeginPlay is an error at the decorator, with and without the override keyword, and is not lowered", () => {
+  for (const kw of ["", "override "]) {
+    const r = shadowHir(`  @event\n  ${kw}ReceiveBeginPlay(): void {}\n`);
+    const d = r.diagnostics.filter((x) => x.code === "ABFC2078");
+    assert.equal(d.length, 1, `override keyword "${kw}"`);
+    assert.equal(d[0]!.severity, "error");
+    assert.deepEqual(d[0]!.data, { fix: "useOverride" });
+    assert.match(d[0]!.message, /@event ReceiveBeginPlay would create a custom event named like the parent's ReceiveBeginPlay \(\/Script\/FakeEngine\.Actor\)/);
+    assert.match(d[0]!.message, /Use @override/);
+    assert.equal(d[0]!.span?.line, 9,"reported on the decorator line");
+    assert.deepEqual(r.events, []);
+  }
+});
+
+test("ABFC2078: the override keyword alone is reported, a parent member without @bpPath is not, a new custom event is not", () => {
+  // `override` modifier on an @event with a name the parent does not have
+  const kw = shadowHir(`  @event\n  override Brand(): void {}\n`);
+  assert.equal(kw.diagnostics.filter((d) => d.code === "ABFC2078").length, 1);
+  // PlainMember exists in the parent type but carries no @bpPath, and there is no override keyword
+  const plain = shadowHir(`  @event\n  PlainMember(): void {}\n`);
+  assert.deepEqual(plain.diagnostics.filter((d) => d.code === "ABFC2078"), []);
+  assert.deepEqual(plain.events, ["PlainMember"]);
+  // a name the parent's declared type does not have (a hand-made _Manual event is such a name): an @event stays allowed
+  const fresh = shadowHir(`  @event\n  Brand(): void {}\n`);
+  assert.deepEqual(fresh.diagnostics.filter((d) => d.code === "ABFC2078"), []);
+  assert.deepEqual(fresh.events, ["Brand"]);
+  // @override of the same parent member is fine
+  const ov = shadowHir(`  @override\n  override ReceiveBeginPlay(): void {}\n`);
+  assert.deepEqual(ov.diagnostics.filter((d) => d.code === "ABFC2078"), []);
 });

@@ -167,6 +167,41 @@ test("code action for ABFC2076 replaces classManagerRow with @director", async (
   }
 });
 
+test("code action for ABFC2078 turns @event into @override (+ override keyword and import)", async () => {
+  const dir = copyFixture("phase2", (d) => {
+    for (const f of ["Phase2Bad.ts", "Counter.ts", "Director.ts"]) rmSync(join(d, "src", f), { force: true });
+    writeFileSync(
+      join(d, "src", "Shadow.ts"),
+      [
+        'import { blueprint, event } from "@abfc/runtime";',
+        'import { Actor } from "/Script/FakeEngine";',
+        'import type { BP_Shadow_Manual } from "/TestMod/Relay/BP_Shadow";',
+        "",
+        "export interface BP_Shadow extends BP_Shadow_Manual {}",
+        "",
+        '@blueprint({ path: "/TestMod/Relay/BP_Shadow" })',
+        "export class BP_Shadow extends Actor {",
+        "  @event",
+        "  ReceiveBeginPlay(): void {}",
+        "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+  });
+  const started = await startInMemory();
+  try {
+    const { uri, text, range } = await open2(started, join(dir, "src", "Shadow.ts"), "ABFC2078");
+    const action = only(await actionsAt(started, uri, range), "Use @override");
+    const fixed = apply(uri, text, action);
+    assert.match(fixed, /import \{ blueprint, event, override \} from "@abfc\/runtime";/);
+    assert.match(fixed, /  @override\n  override ReceiveBeginPlay\(\): void \{\}/);
+  } finally {
+    await started.dispose();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("code action for ABFC5012 keeps the recorded asset path", async () => {
   const dir = copyFixture("phase7", (d) => {
     rmSync(join(d, "src"), { recursive: true, force: true });

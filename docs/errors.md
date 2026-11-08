@@ -685,6 +685,16 @@ Typical cause: a backend older than 2.5.0 (source install).
 
 Fix: update the backend to 2.5.0 or newer ([backend.md](backend.md)), or create the row in the Mod Editor. `abfc.exe` bundles a current backend.
 
+### ABFC2078
+
+Severity: error · Exit: 1
+
+Meaning: an `@event` method has the name of an event or function of the parent class (or carries the TypeScript `override` modifier). `@event` creates a custom event, and Unreal refuses a custom event named like a native member (ABFC6001). The method is not built.
+
+Typical cause: implementing `ReceiveBeginPlay` or `ReceiveTick` of the parent with `@event` instead of `@override`.
+
+Fix: use `@override` to implement the parent's event (quick fix "Use @override" replaces the decorator, adds the `override` modifier and imports `override` from `@abfc/runtime`). Keep `@event` for new custom events with names the parent does not have.
+
 ### ABFC2099
 
 Severity: error · Exit: 1

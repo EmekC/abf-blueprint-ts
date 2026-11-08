@@ -381,6 +381,7 @@ class HirBuilder {
       if (!ts.isMethodDeclaration(m) || !ts.isIdentifier(m.name) || !m.body) continue;
       const kind = methodKind(m);
       if (kind === undefined) continue;
+      if (kind === "event" && this.shadowsParentEvent(m, parentType)) continue; // ABFC2078 reported, not lowered
       const sig = this.signature(m, kind, parentType);
       if (sig) this.ownSigs.set(m.name.text, sig);
     }
@@ -590,6 +591,27 @@ class HirBuilder {
       return (t.isClassOrInterface() ? this.checker.getBaseTypes(t) : []).some(walk);
     };
     return walk(type);
+  }
+
+  /**
+   * ABFC2078: an `@event` method named like a Blueprint member of the parent class (or carrying the TS `override` modifier) would create a
+   * custom event with a native name, which Unreal refuses. Reported at the `@event` decorator with a fix to `@override`; true = reported.
+   * Only the parent's declared type counts (not the class's own `_Manual` merge), so hand-made events are not affected.
+   */
+  private shadowsParentEvent(m: ts.MethodDeclaration, parentType: ts.Type): boolean {
+    const name = (m.name as ts.Identifier).text;
+    const prop = this.checker.getPropertyOfType(parentType, name);
+    const hasOverride = (ts.getModifiers(m) ?? []).some((k) => k.kind === ts.SyntaxKind.OverrideKeyword);
+    if (!((prop !== undefined && functionInfo(prop) !== undefined) || hasOverride)) return false;
+    const dec = (ts.getDecorators(m) ?? []).find((x) => runtimeName(this.checker, x.expression) === "event");
+    const owner = prop !== undefined ? functionInfo(prop)?.owner : undefined;
+    this.sink.error(
+      "ABFC2078",
+      `@event ${name} would create a custom event named like the parent's ${name}${owner !== undefined ? ` (${owner})` : ""}; Unreal refuses that (ABFC6001). Use @override to implement the parent's event.`,
+      dec ?? m.name,
+      { fix: "useOverride" },
+    );
+    return true;
   }
 
   /** Parameters of an owned method; for `@override` they come from the parent stub (`@bpParam`), not from the annotations. */
