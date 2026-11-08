@@ -95,7 +95,7 @@ function merge(into: ReflectData, add: ReflectData): void {
   into.errors.push(...add.errors);
 }
 
-/** What one `abfc stubs` run reflects and writes (decided by {@link generateStubs}). */
+/** What one `abfc generate` run reflects and writes (decided by {@link generateStubs}). */
 interface StubRun {
   mode: StubMode;
   /** Every game class of the catalog is reflected (no valid cache). */
@@ -196,7 +196,7 @@ async function reflectAndRead(ctx: CliContext, backend: Backend, run: StubRun): 
       severity: "warning",
       code: "ABFC3012",
       message: "the backend cannot list the game's gameplay tags; .abfc/tags.d.ts holds only the mod's own tags.",
-      fix: "update abf-mod-editor-mcp to 2.6.0 or newer, then run abfc stubs again.",
+      fix: "update abf-mod-editor-mcp to 2.6.0 or newer, then run abfc generate again.",
     });
   }
   const data: ReflectData = { engineVersion: null, classes: {}, structs: {}, errors: [] };
@@ -253,7 +253,7 @@ async function reflectAndRead(ctx: CliContext, backend: Backend, run: StubRun): 
       severity: "warning",
       code: "ABFC3023",
       message: `${failedNow.length} class(es) could not be reflected and are left out of the stubs: ${failedNow.slice(0, 10).map(shortName).join(", ")}${failedNow.length > 10 ? ", ..." : ""}`,
-      fix: "abfc stubs --add <path> retries one; abfc stubs --refresh retries all.",
+      fix: "abfc generate --add <path> retries one; abfc generate --refresh retries all.",
     });
   }
 
@@ -275,14 +275,14 @@ async function reflectAndRead(ctx: CliContext, backend: Backend, run: StubRun): 
       severity: "warning",
       code: "ABFC3013",
       message: `the backend could not confirm the Blueprint parent chain of ${index.noSupers.length} class(es) (${firstFew(index.noSupers)}); they extend the nearest native class, so members declared on Blueprint parents are missing.`,
-      fix: 'check the reflect warnings (ABFC4002) above for the parent that failed to load, then run "abfc stubs" again.',
+      fix: 'check the reflect warnings (ABFC4002) above for the parent that failed to load, then run "abfc generate" again.',
     });
   } else if (index.noSupers.length > 0) {
     output.diag({
       severity: "warning",
       code: "ABFC3013",
       message: `the backend did not report the Blueprint parent classes of ${index.noSupers.length} class(es) (${firstFew(index.noSupers)}); their stubs extend the nearest native class, so members declared on Blueprint parents are missing.`,
-      fix: 'update abf-mod-editor-mcp to a version whose reflect reports "supers" (see docs/backend.md), then run "abfc stubs".',
+      fix: 'update abf-mod-editor-mcp to a version whose reflect reports "supers" (see docs/backend.md), then run "abfc generate".',
     });
   }
   if (index.chainGaps.length > 0) {
@@ -290,7 +290,7 @@ async function reflectAndRead(ctx: CliContext, backend: Backend, run: StubRun): 
       severity: "warning",
       code: "ABFC3013",
       message: `${index.chainGaps.length} stub class(es) inherit from a class without members: ${firstFew(index.chainGaps)}.`,
-      fix: 'check the reflect warnings (ABFC4002) above and run "abfc stubs" again; report the class if the warning stays.',
+      fix: 'check the reflect warnings (ABFC4002) above and run "abfc generate" again; report the class if the warning stays.',
     });
   }
   // Members that class defaults cannot list (widgets, components, widget/component variables) come from the backend's member pass.
@@ -306,7 +306,7 @@ async function reflectAndRead(ctx: CliContext, backend: Backend, run: StubRun): 
       message: partial
         ? `the backend found the designer widgets and components of ${gameClasses.length} Blueprint class(es) but could not list their other variables; plain variables of widget or component type are missing from the stubs.`
         : `the backend did not list the members that class defaults cannot show (widget and component variables) for ${gameClasses.length} Blueprint class(es); such members are missing from the stubs.`,
-      fix: 'update abf-mod-editor-mcp (see docs/backend.md) and check the reflect warnings (ABFC4002) above, then run "abfc stubs" again.',
+      fix: 'update abf-mod-editor-mcp (see docs/backend.md) and check the reflect warnings (ABFC4002) above, then run "abfc generate" again.',
     });
   }
   const discovered = new Set(index.discovered.map((d) => d.slice(0, d.lastIndexOf(" (")).toLowerCase()));
@@ -318,7 +318,7 @@ async function reflectAndRead(ctx: CliContext, backend: Backend, run: StubRun): 
           severity: "warning",
           code: "ABFC3011",
           message: `stubs.widgetMembers: ${cls} ${member} is a ${widget}, which is not in the stubs; it is typed UObject.`,
-          fix: `"${widget}" is requested automatically; check that it is a class of this editor build, then run "abfc stubs --add ${widget}" to retry it.`,
+          fix: `"${widget}" is requested automatically; check that it is a class of this editor build, then run "abfc generate --add ${widget}" to retry it.`,
         });
       }
     }
@@ -330,7 +330,7 @@ async function reflectAndRead(ctx: CliContext, backend: Backend, run: StubRun): 
     output.diag({
       severity: "warning",
       code: "ABFC3015",
-      message: `stubs.widgetMembers: ${e.cls} ${e.member} is found by abfc stubs itself now; remove the entry (stubs.widgetMembers is deprecated).`,
+      message: `stubs.widgetMembers: ${e.cls} ${e.member} is found by abfc generate itself now; remove the entry (stubs.widgetMembers is deprecated).`,
     });
   }
   const kept = widgetEntries.filter((e) => !found.includes(e));
@@ -415,7 +415,7 @@ async function reflectAndRead(ctx: CliContext, backend: Backend, run: StubRun): 
 
 /**
  * Decides what the stubs of this project still need (catalog, cache, source imports, `--add`), reflects it and writes
- * `.abfc/stubs/<profile>/`. `explicit` is `abfc stubs`, `add` is `abfc stubs --add`, `build` is the generation at the start of a build.
+ * `.abfc/stubs/<profile>/`. `explicit` is `abfc generate`, `add` is `abfc generate --add`, `build` is the generation at the start of a build.
  */
 export async function generateStubs(ctx: CliContext, backend: Backend, mode: StubMode): Promise<number> {
   const { config, env, output, deps, paths, args } = ctx;
@@ -431,7 +431,7 @@ export async function generateStubs(ctx: CliContext, backend: Backend, mode: Stu
     throw new AbfcError({
       severity: "error",
       code: "ABFC4011",
-      message: `the backend at ${env.backendDir.value ?? "?"} has no "reflect" tool; abfc stubs needs the abfc-p1-backend branch of abf-mod-editor-mcp.`,
+      message: `the backend at ${env.backendDir.value ?? "?"} has no "reflect" tool; abfc generate needs the abfc-p1-backend branch of abf-mod-editor-mcp.`,
       fix: "point ABFC_BACKEND_DIR at a checkout that provides reflect (see docs/backend.md).",
     });
   }
@@ -489,7 +489,7 @@ export async function generateStubs(ctx: CliContext, backend: Backend, mode: Stu
       severity: "warning",
       code: "ABFC3022",
       message: `${arg} is not a class, struct or enum of this editor build; nothing generated`,
-      fix: "check the path; run abfc stubs --refresh after a game update.",
+      fix: "check the path; run abfc generate --refresh after a game update.",
     });
   }
   const classes = mode === "explicit" || full ? req.want.classes : req.missing.classes;
@@ -539,8 +539,8 @@ export async function generateStubs(ctx: CliContext, backend: Backend, mode: Stu
   return code;
 }
 
-/** `abfc stubs`: reflects the game's classes and mod assets through the backend and writes `.abfc/stubs/<profile>/`. */
-export async function stubs(ctx: CliContext): Promise<number> {
+/** `abfc generate`: reflects the game's classes and mod assets through the backend and writes `.abfc/stubs/<profile>/`. */
+export async function generate(ctx: CliContext): Promise<number> {
   const backend = await ctx.deps.startBackend(ctx.env);
   try {
     return await generateStubs(ctx, backend, ctx.args.flags.add.length > 0 ? "add" : "explicit");
@@ -563,7 +563,7 @@ export async function ensureStubsForBuild(ctx: CliContext, session: BackendSessi
       severity: "warning",
       code: "ABFC3020",
       message: `could not generate stubs (${reason}): ${e instanceof Error ? e.message : String(e)}; the build continues with the existing stubs`,
-      fix: 'run "abfc stubs" once the Mod Editor backend works.',
+      fix: 'run "abfc generate" once the Mod Editor backend works.',
     });
   let opened: Awaited<ReturnType<BackendSession["open"]>>;
   try {
@@ -584,7 +584,7 @@ export async function ensureStubsForBuild(ctx: CliContext, session: BackendSessi
         severity: "warning",
         code: "ABFC3021",
         message: 'the backend has no "catalog" tool: stubs for engine and game classes are generated only for the classes in stubs.classes and stubs.scriptClasses.',
-        fix: "update abf-mod-editor-mcp to 2.6.0 or newer, then run abfc stubs (this is reported once).",
+        fix: "update abf-mod-editor-mcp to 2.6.0 or newer, then run abfc generate (this is reported once).",
       });
     }
     return;

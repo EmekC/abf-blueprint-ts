@@ -159,7 +159,7 @@ export function loadProgram(projectDir: string, oldProgram?: ts.Program, opts: L
     if (x) diagnostics.push(x);
   }
   const filter = ownedManualFilter(root, (file, why) =>
-    diagnostics.push({ severity: "warning", code: "ABFC2000", message: `ignoring unreadable ${file}: ${why}; run abfc stubs to rewrite it` }),
+    diagnostics.push({ severity: "warning", code: "ABFC2000", message: `ignoring unreadable ${file}: ${why}; run abfc generate to rewrite it` }),
   );
   const host = ts.createCompilerHost(parsed.options);
   const { overlay, cache } = opts;

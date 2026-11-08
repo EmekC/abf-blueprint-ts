@@ -54,7 +54,7 @@ async function finish(child: Fake, stdout: string, stderr: string, code: number)
   child.emitter.emit("close", code);
 }
 
-const okEnvelope = (result: object): string => JSON.stringify({ command: "stubs", ok: true, diagnostics: [], result });
+const okEnvelope = (result: object): string => JSON.stringify({ command: "generate", ok: true, diagnostics: [], result });
 
 test("runGenerateStubs: success builds the command line and reports the names", async () => {
   const child = fakeChild();
@@ -64,7 +64,7 @@ test("runGenerateStubs: success builds the command line and reports the names", 
   const r = await p;
   assert.deepEqual(r, { ok: true, message: "abfc: stubs generated for /Script/FakeEngine.Thing, /Game/Fake/BP_Fake" });
   assert.equal(calls[0]?.command, "node");
-  assert.deepEqual(calls[0]?.args, ["abfc.js", "stubs", "--project", "C:\\proj\\a", "--json", "--add=/Script/FakeEngine.Thing", "--add=/Game/Fake/BP_Fake"]);
+  assert.deepEqual(calls[0]?.args, ["abfc.js", "generate", "--project", "C:\\proj\\a", "--json", "--add=/Script/FakeEngine.Thing", "--add=/Game/Fake/BP_Fake"]);
   assert.equal(calls[0]?.options.windowsHide, true);
   assert.equal(calls[0]?.options.stdio?.[0], "ignore", "stdin is not connected");
 });
@@ -86,7 +86,7 @@ test("runGenerateStubs: already up to date, and names the backend did not know",
 test("runGenerateStubs: a failed envelope reports its first error; without one the last stderr line; start errors are reported", async () => {
   const a = fakeChild();
   const p = runGenerateStubs(LAUNCH, "C:\\proj\\c", ["/Script/FakeEngine.Thing"], spawner(a));
-  const failed = { command: "stubs", ok: false, diagnostics: [{ severity: "warning", code: "ABFC3021", message: "w" }, { severity: "error", code: "ABFC4019", message: "another abfc command is running" }], result: null };
+  const failed = { command: "generate", ok: false, diagnostics: [{ severity: "warning", code: "ABFC3021", message: "w" }, { severity: "error", code: "ABFC4019", message: "another abfc command is running" }], result: null };
   await finish(a, JSON.stringify(failed), "", 1);
   assert.deepEqual(await p, { ok: false, message: "ABFC4019: another abfc command is running" });
 
@@ -98,19 +98,19 @@ test("runGenerateStubs: a failed envelope reports its first error; without one t
   const c = fakeChild();
   const r = runGenerateStubs(LAUNCH, "C:\\proj\\c", ["/Script/FakeEngine.Thing"], spawner(c));
   c.emitter.emit("error", new Error("spawn ENOENT"));
-  assert.deepEqual(await r, { ok: false, message: "could not start abfc stubs: spawn ENOENT" });
+  assert.deepEqual(await r, { ok: false, message: "could not start abfc generate: spawn ENOENT" });
 
   const throwing: SpawnFn = () => {
     throw new Error("no such file");
   };
-  assert.deepEqual(await runGenerateStubs(LAUNCH, "C:\\proj\\c", ["/Script/FakeEngine.Thing"], throwing), { ok: false, message: "could not start abfc stubs: no such file" });
+  assert.deepEqual(await runGenerateStubs(LAUNCH, "C:\\proj\\c", ["/Script/FakeEngine.Thing"], throwing), { ok: false, message: "could not start abfc generate: no such file" });
 });
 
 test("runGenerateStubs: one run per project at a time, other projects are independent", async () => {
   const a = fakeChild();
   const first = runGenerateStubs(LAUNCH, "C:\\proj\\d", ["/Script/FakeEngine.A"], spawner(a));
   const second = await runGenerateStubs(LAUNCH, "C:\\proj\\d", ["/Script/FakeEngine.B"], spawner(fakeChild()));
-  assert.deepEqual(second, { ok: false, message: "abfc stubs is already running for this project" });
+  assert.deepEqual(second, { ok: false, message: "abfc generate is already running for this project" });
   const other = fakeChild();
   const third = runGenerateStubs(LAUNCH, "C:\\proj\\e", ["/Script/FakeEngine.C"], spawner(other));
   await finish(other, okEnvelope({ reflected: 1 }), "", 0);
@@ -152,7 +152,7 @@ test("abfc.generateStubs over the server: runs the CLI and tells the client; bad
 
     const bad = exec(failStarted, { projectDir: dir, add: ["/Script/FakeEngine.Thing"] });
     await sleep(100);
-    const failed = { command: "stubs", ok: false, diagnostics: [{ severity: "error", code: "ABFC4019", message: "another abfc command is running" }], result: null };
+    const failed = { command: "generate", ok: false, diagnostics: [{ severity: "error", code: "ABFC4019", message: "another abfc command is running" }], result: null };
     await finish(failing, JSON.stringify(failed), "", 1);
     assert.equal((await bad).ok, false);
     const msgs = failStarted.client.serverRequests.filter((r) => r.method === "window/showMessageRequest");

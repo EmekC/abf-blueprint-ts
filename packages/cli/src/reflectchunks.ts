@@ -27,7 +27,7 @@ function mergeGeneric(into: Record<string, unknown>, add: Record<string, unknown
   }
 }
 
-/** The predicate `abfc stubs` uses to merge rounds: Blueprint classes were reflected (not just cast targets) but the cooked-class reader did not run. */
+/** The predicate `abfc generate` uses to merge rounds: Blueprint classes were reflected (not just cast targets) but the cooked-class reader did not run. */
 export function lacksCookedClass(data: Pick<ReflectResult["data"], "classes" | "memberSources">): boolean {
   const reflectedGame = Object.entries(data.classes).some(([p, c]) => p.startsWith("/Game/") && c.castOnly !== true);
   return reflectedGame && !(data.memberSources ?? []).includes("cookedClass");

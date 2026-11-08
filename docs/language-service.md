@@ -135,7 +135,7 @@ The VS Code extension sends `tsDiagnostics: false` and `tsHover: false`.
     added after the last import. An existing import (also under an alias) is reused, and an item is left out when the
     container name is bound to something else in scope. Deprecated functions are not listed; at most 100 items are
     returned. The list comes from the stubs of the project's profile (`.abfc/stubs/<profile>`) and is rebuilt when
-    `stubs.lock.json` changes (run `abfc stubs` to refresh it). The node name is read from the stub description
+    `stubs.lock.json` changes (run `abfc generate` to refresh it). The node name is read from the stub description
     `(<Node Name>).`; stubs made with `ABF_REFLECT_META=0` only have the prettified C++ name there. Unreal's search
     keywords are not in the stubs and are not matched.
   - *Members by node name.* After `this.`, `x.` or `Library.` (3+ characters), abfc adds the stub members whose node name
@@ -241,8 +241,8 @@ a run after a one-file edit takes well under a second on a project of this size.
 
 ## Classes, structs and enums
 
-Completion also offers the classes, structs and enums of the game and the engine, from the names catalog `abfc stubs` stores (`_names.json`), including names that have no stub yet. Typing `BP_Fa` in a type position or an expression offers `BP_Fake_C`, shows its path and module, and adds the import (`import { BP_Fake_C } from "/Game/..."`; structs and enums get `import type`). After `extends` only classes are offered. Library functions that exist only in the catalog rank after generated ones and say "not generated yet".
+Completion also offers the classes, structs and enums of the game and the engine, from the names catalog `abfc generate` stores (`_names.json`), including names that have no stub yet. Typing `BP_Fa` in a type position or an expression offers `BP_Fake_C`, shows its path and module, and adds the import (`import { BP_Fake_C } from "/Game/..."`; structs and enums get `import type`). After `extends` only classes are offered. Library functions that exist only in the catalog rank after generated ones and say "not generated yet".
 
 ## Generate stubs quick fix
 
-A TypeScript error about an unresolved `/Script/...` or `/Game/...` import (TS2305, TS2307, TS2614, TS2724) has the quick fix "Generate stubs for <names>". It runs the command `abfc.generateStubs`, which starts `abfc stubs --add` for those names (the CLI that started the server, so it is offered only when the server was started by `abfc lsp`). This is the only time the language server starts the Mod Editor backend; checks and completion never do. The result (generated, already up to date, or the error, for example [ABFC4019](errors.md#abfc4019) while a build holds the project lock) is shown as a message, and the diagnostics refresh afterwards. Only one run per project at a time.
+A TypeScript error about an unresolved `/Script/...` or `/Game/...` import (TS2305, TS2307, TS2614, TS2724) has the quick fix "Generate stubs for <names>". It runs the command `abfc.generateStubs`, which starts `abfc generate --add` for those names (the CLI that started the server, so it is offered only when the server was started by `abfc lsp`). This is the only time the language server starts the Mod Editor backend; checks and completion never do. The result (generated, already up to date, or the error, for example [ABFC4019](errors.md#abfc4019) while a build holds the project lock) is shown as a message, and the diagnostics refresh afterwards. Only one run per project at a time.

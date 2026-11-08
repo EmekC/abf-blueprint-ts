@@ -27,7 +27,7 @@ export interface ProjectConfig {
      * Designer widgets of Widget Blueprints that cannot be read from an export (those under /Game): class path ->
      * { member name -> widget class path }, e.g. `{ "/Game/UI/W_Hud.W_Hud_C": { "TitleText": "/Script/UMG.TextBlock" } }`.
      *
-     * @deprecated members are found by abfc stubs; kept for old configs.
+     * @deprecated members are found by abfc generate; kept for old configs.
      */
     widgetMembers: Record<string, Record<string, string>>;
   };

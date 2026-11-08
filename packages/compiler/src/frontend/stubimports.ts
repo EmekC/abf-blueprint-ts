@@ -1,5 +1,5 @@
 // Imports of generated stubs (`/Script/...`, `/Game/...`) in the project source: which engine and game names the source asks for,
-// so that `abfc stubs` can generate exactly those, and which names a diagnostic range of an unresolved import points at.
+// so that `abfc generate` can generate exactly those, and which names a diagnostic range of an unresolved import points at.
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import ts from "typescript";

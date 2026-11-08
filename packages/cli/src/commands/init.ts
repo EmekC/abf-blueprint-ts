@@ -42,7 +42,7 @@ import { Output } from "../output.js";
 import { renderTagsDts } from "@abfc/stubgen";
 import { iniTagsOf } from "../tags.js";
 import { doctor } from "./doctor.js";
-import { stubs } from "./stubs.js";
+import { generate } from "./generate.js";
 
 type FileAction = "written" | "kept" | "updated";
 
@@ -440,8 +440,8 @@ function buildPlan(s: Session, sel: Selection): Plan {
     }
   }
 
-  // .abfc/tags.d.ts: the constants of the mod's own Config/Tags ini (also with --no-stubs); an existing file is kept, because
-  // `abfc stubs` and `abfc build` own it from then on and it holds the game's tags too
+  // .abfc/tags.d.ts: the constants of the mod's own Config/Tags ini (also with --no-generate); an existing file is kept, because
+  // `abfc generate` and `abfc build` own it from then on and it holds the game's tags too
   if (host.exists(at(".abfc/tags.d.ts"))) add(".abfc/tags.d.ts", "kept", null);
   else add(".abfc/tags.d.ts", "written", renderTagsDts(iniTagsOf(host, sel.mod.dir)));
 
@@ -638,11 +638,11 @@ async function initFlow(session: Session, fs: NonNullable<CliDeps["fs"]>): Promi
     printSummary(session, sel, plan);
   }
 
-  // 10 and 11: stubs, then doctor (in process, sharing the output)
+  // 10 and 11: generate, then doctor (in process, sharing the output)
   let stubsCode: number | null = null;
-  if (!flags.noStubs) {
-    output.info("abfc stubs");
-    stubsCode = await guarded(output, () => stubs(subContext(args, deps, target, "stubs", output)));
+  if (!flags.noGenerate) {
+    output.info("abfc generate");
+    stubsCode = await guarded(output, () => generate(subContext(args, deps, target, "generate", output)));
   }
   const doctorCode = await guarded(output, () => doctor(subContext(args, deps, target, "doctor", output)));
 
@@ -660,7 +660,7 @@ async function initFlow(session: Session, fs: NonNullable<CliDeps["fs"]>): Promi
   return Math.max(stubsCode ?? 0, doctorCode, output.finish());
 }
 
-/** `abfc init [dir] [--mod <name>] [--yes] [--no-stubs] ...`: returns the exit code; never needs an existing project. */
+/** `abfc init [dir] [--mod <name>] [--yes] [--no-generate] ...`: returns the exit code; never needs an existing project. */
 export async function runInit(args: ParsedArgs, deps: CliDeps): Promise<number> {
   const flags = args.flags;
   const base = deps.cwd ?? process.cwd();

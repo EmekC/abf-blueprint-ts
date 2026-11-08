@@ -267,7 +267,7 @@ export function startServer(o: ServerOptions): Promise<number> {
     }
   });
 
-  // The explicit "Generate stubs" command: the one place where the server starts the Mod Editor (through `abfc stubs --add`).
+  // The explicit "Generate stubs" command: the one place where the server starts the Mod Editor (through `abfc generate --add`).
   connection.onExecuteCommand(async (params) => {
     if (params.command !== GENERATE_STUBS_COMMAND) return null;
     const launch = o.cliLaunch;

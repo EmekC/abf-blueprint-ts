@@ -54,14 +54,14 @@ test("checkLock: missing lock is ABFC3003", () => {
   assert.deepEqual(d.map((x) => [x.code, x.severity]), [["ABFC3003", "error"]]);
 });
 
-test("checkLock: stubs from another generator version are a warning (ABFC3001) that names abfc stubs, in check and build mode", () => {
+test("checkLock: stubs from another generator version are a warning (ABFC3001) that names abfc generate, in check and build mode", () => {
   for (const mode of ["check", "build"] as const) {
     const d = checkLock(lock({ generator: "0.0.1" }), env(), config, mode);
     assert.equal(d.length, 1);
     assert.equal(d[0]!.code, "ABFC3001");
     assert.equal(d[0]!.severity, "warning");
-    assert.match(d[0]!.message, /abfc stubs 0.0.1/);
-    assert.match(d[0]!.message, /Run "abfc stubs"/);
+    assert.match(d[0]!.message, /abfc generate 0.0.1/);
+    assert.match(d[0]!.message, /Run "abfc generate"/);
   }
 });
 
@@ -73,7 +73,7 @@ test("checkLock: fingerprint change is ABFC3001, error in build and warning in c
   const e = env({ fingerprint: "fp-2" });
   const build = checkLock(lock(), e, config, "build");
   assert.deepEqual(build.map((x) => [x.code, x.severity]), [["ABFC3001", "error"]]);
-  assert.match(build[0]?.message ?? "", /Run "abfc stubs" to regenerate/);
+  assert.match(build[0]?.message ?? "", /Run "abfc generate" to regenerate/);
   const check = checkLock(lock(), e, config, "check");
   assert.deepEqual(check.map((x) => [x.code, x.severity]), [["ABFC3001", "warning"]]);
 });
@@ -184,7 +184,7 @@ test("a lock with auto round-trips; a missing lock says abfc build also generate
     assert.equal(lock().auto, undefined);
     const missing = checkLock(null, env(), config, "build");
     assert.equal(missing[0]?.code, "ABFC3003");
-    assert.equal(missing[0]?.fix, 'run "abfc stubs" (abfc build also generates them).');
+    assert.equal(missing[0]?.fix, 'run "abfc generate" (abfc build also generates them).');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

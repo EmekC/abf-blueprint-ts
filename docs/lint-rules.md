@@ -46,7 +46,7 @@ members of the mod's own hand-made assets (read from the Blueprint's `PropertyFl
 `/Script` and `/Game` classes have no replication or RPC flags in the reflection data, and TypeScript-owned
 `@replicated` fields and RPC events do not exist yet, so none of them are covered. The rules never guess: a member
 without a tag is treated as local, so the limitation hides findings but does not create false ones. Regenerate the
-stubs with `abfc stubs` to pick the tags up.
+stubs with `abfc generate` to pick the tags up.
 
 ## Tick context
 

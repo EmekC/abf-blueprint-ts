@@ -1,4 +1,4 @@
-// The generated `.abfc/tags.d.ts` from the CLI side: the mod's own tag ini files and the rewrite after a build or `abfc stubs`.
+// The generated `.abfc/tags.d.ts` from the CLI side: the mod's own tag ini files and the rewrite after a build or `abfc generate`.
 import { win32 } from "node:path";
 import { parseTagsIni, readGameTags, readTagsFileTags, writeTagsFile } from "@abfc/stubgen";
 import type { CliContext } from "./context.js";
@@ -27,7 +27,7 @@ export function iniTagsOf(host: CliContext["deps"]["host"], modDir: string | nul
 /**
  * Rewrites `.abfc/tags.d.ts` from the stored game list, the mod's ini tags and `added` (tags the last apply put into the stage's
  * list, which reach the mod only with `abfc publish`). Tags already in the file stay, so a stage-only tag does not vanish on the next build.
- * `abfc stubs` passes `stagingPath` instead: it rebuilds the file from the game list, the mod's ini and the stage's own
+ * `abfc generate` passes `stagingPath` instead: it rebuilds the file from the game list, the mod's ini and the stage's own
  * `Config/Tags/*.ini` (where a stage-only tag lives), so a tag that was removed everywhere also leaves the file. An empty or null
  * `stagingPath` (no stage, or a backend that does not report it) then adds no stage tags.
  */

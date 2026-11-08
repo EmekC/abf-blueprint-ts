@@ -4,7 +4,7 @@ Known limitations and their workarounds (stale entries in the open Mod Editor, a
 
 Start with `abfc doctor`. It prints every setting with the place it came from (flag, environment variable, project config, user config or auto-discovery), the versions it found, and the problems it can see. Each problem has an `ABFCnnnn` code; the meaning of every code is in [errors.md](errors.md). All paths below use placeholders such as `C:\Users\<you>`; replace them with your own.
 
-Sections: [OneDrive Documents](#onedrive-redirected-documents), [user names with spaces](#user-names-with-spaces-and-the-headless-folder), [non-English Windows](#non-english-windows), [long paths](#long-paths), [SmartScreen](#smartscreen), [antivirus](#antivirus-quarantine-or-locked-files), [runtime folder](#damaged-or-stale-runtime-folder), [bundled backend overridden](#abfc1053-the-exe-uses-a-backend-outside-its-runtime), [first stubs](#the-first-abfc-stubs-needs-the-network), [abfc not found](#abfc-is-not-found-after-installing), [extension](#the-vs-code-extension-cannot-find-abfc), [publish refused](#publish-is-refused), [two builds](#a-second-build-is-refused-abfc4019), [staged file in use](#a-staged-file-is-still-in-use), [deleted assets still listed](#the-editor-still-lists-a-deleted-asset), [edits in the editor disappear](#my-edits-in-the-mod-editor-disappeared), [superseded struct](#a-struct-stays-after-a-rename-abfc5018), [Epic login](#the-epic-login-window-of-the-stage-audit). Fixed problems and limitations of this version are collected in [known-issues.md](known-issues.md).
+Sections: [OneDrive Documents](#onedrive-redirected-documents), [user names with spaces](#user-names-with-spaces-and-the-headless-folder), [non-English Windows](#non-english-windows), [long paths](#long-paths), [SmartScreen](#smartscreen), [antivirus](#antivirus-quarantine-or-locked-files), [runtime folder](#damaged-or-stale-runtime-folder), [bundled backend overridden](#abfc1053-the-exe-uses-a-backend-outside-its-runtime), [first stubs](#the-first-abfc-generate-needs-the-network), [abfc not found](#abfc-is-not-found-after-installing), [extension](#the-vs-code-extension-cannot-find-abfc), [publish refused](#publish-is-refused), [two builds](#a-second-build-is-refused-abfc4019), [staged file in use](#a-staged-file-is-still-in-use), [deleted assets still listed](#the-editor-still-lists-a-deleted-asset), [edits in the editor disappear](#my-edits-in-the-mod-editor-disappeared), [superseded struct](#a-struct-stays-after-a-rename-abfc5018), [Epic login](#the-epic-login-window-of-the-stage-audit). Fixed problems and limitations of this version are collected in [known-issues.md](known-issues.md).
 
 ## OneDrive-redirected Documents
 
@@ -61,9 +61,9 @@ Antivirus software may remove a freshly downloaded `abfc.exe`, or scan the files
 
 [ABFC1053](errors.md#abfc1053) is a warning. `abfc.exe` carries its own backend and Python, but an older source-install setting still wins by the normal precedence: `ABFC_BACKEND_DIR`, `ABFC_PYTHON`, `--backend-dir`, `--python`, or `backend.serverDir` and `backend.python` in a config file. Remove those settings to use the bundled ones, or keep them on purpose and ignore the warning.
 
-## The first `abfc stubs` needs the network
+## The first `abfc generate` needs the network
 
-`abfc stubs` reads the installed Mod Editor through the backend. The backend also keeps a list of Blueprint functions that the upload check allows, and it downloads that list the first time it needs it. The first run on a machine therefore needs internet access once. If a firewall blocks it, the command fails with a backend error; allow the access or run it once on another connection. The file is stored inside the backend folder and is reused afterwards. Nothing derived from the game is part of abfc's own files or releases.
+`abfc generate` reads the installed Mod Editor through the backend. The backend also keeps a list of Blueprint functions that the upload check allows, and it downloads that list the first time it needs it. The first run on a machine therefore needs internet access once. If a firewall blocks it, the command fails with a backend error; allow the access or run it once on another connection. The file is stored inside the backend folder and is reused afterwards. Nothing derived from the game is part of abfc's own files or releases.
 
 ## abfc is not found after installing
 
@@ -94,11 +94,11 @@ That is by design: TypeScript wins. A build replaces what you changed by hand in
 
 ## A second build is refused (ABFC4019)
 
-[ABFC4019](errors.md#abfc4019): another `abfc build`, `test`, `publish`, `status`, `stubs` or `adopt` is running in the same project (the message gives its command and process id). Often it is a build from the editor's task while a terminal build is still going. Wait until it ends and run the command again. After a crash the next run replaces the dead lock by itself; delete `.abfc/lock.json` only if abfc names a process that certainly does not exist.
+[ABFC4019](errors.md#abfc4019): another `abfc build`, `test`, `publish`, `status`, `generate` or `adopt` is running in the same project (the message gives its command and process id). Often it is a build from the editor's task while a terminal build is still going. Wait until it ends and run the command again. After a crash the next run replaces the dead lock by itself; delete `.abfc/lock.json` only if abfc names a process that certainly does not exist.
 
 ## A staged file is still in use
 
-A build or publish can fail with a message like "the staged file BP_X.uasset is still in use after 60 s" (or, on older backends, `WinError 32`, "being used by another process"). A virus scanner, the search indexer, a hidden editor of a previous run that is still shutting down, or a second abfc run on the same mod holds the file. Nothing was changed. Wait a moment and run the command again; it was seen right after `abfc stubs`. If it keeps happening, close other abfc runs and exclude the abfc runtime and headless folders from the scanner ([Antivirus](#antivirus-quarantine-or-locked-files)).
+A build or publish can fail with a message like "the staged file BP_X.uasset is still in use after 60 s" (or, on older backends, `WinError 32`, "being used by another process"). A virus scanner, the search indexer, a hidden editor of a previous run that is still shutting down, or a second abfc run on the same mod holds the file. Nothing was changed. Wait a moment and run the command again; it was seen right after `abfc generate`. If it keeps happening, close other abfc runs and exclude the abfc runtime and headless folders from the scanner ([Antivirus](#antivirus-quarantine-or-locked-files)).
 
 ## The editor still lists a deleted asset
 

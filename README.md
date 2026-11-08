@@ -54,7 +54,7 @@ abfc doctor
 | `@abfc/stubgen` | writes the `.d.ts` stubs and `stubs.lock.json` from reflection data |
 | `@abfc/compiler` | TypeScript frontend, lowering to IR, ownership (manifest, drift, adoption, source map), build planner |
 | `@abfc/backend` | the `Backend` interface, the `bp_apply` adapter and the two-phase wildcard fallback, MCP client |
-| `@abfc/cli` | the `abfc` command: `init`, `doctor`, `stubs`, `check` (also `--watch`), `build`, `test`, `status`, `adopt`, `publish`, `lsp`, `version` |
+| `@abfc/cli` | the `abfc` command: `init`, `doctor`, `generate`, `check` (also `--watch`), `build`, `test`, `status`, `adopt`, `publish`, `lsp`, `version` |
 | `@abfc/lsp` | `abfc lsp`: the language server (abfc diagnostics, lint rules, Blueprint-node hover, quick fixes) for any LSP editor ([docs/language-service.md](docs/language-service.md)) |
 | `abfc-vscode` | the VS Code extension, a `.vsix` built with `npm run vsix`; not on the marketplace |
 | `@abfc/eslint-plugin` | five lint rules for tick cost, replication and RPC use ([docs/lint-rules.md](docs/lint-rules.md)) |

@@ -1,5 +1,5 @@
 // What the automatic stub set has to hold, decided from the catalog, the profile's default set, the config and the source imports.
-// No class tables here: every list comes from those inputs. Used by `abfc stubs` (commands/stubs.ts) and by `abfc build` to decide,
+// No class tables here: every list comes from those inputs. Used by `abfc generate` (commands/generate.ts) and by `abfc build` to decide,
 // without opening the backend, whether stubs have to be generated first.
 import { win32 } from "node:path";
 import { sourceStubImports } from "@abfc/compiler";
@@ -9,7 +9,7 @@ import { catalogLookup, readCatalog, readCoverage, readLock } from "@abfc/stubge
 import type { Catalog } from "@abfc/stubgen";
 import type { CliContext } from "./context.js";
 
-/** `explicit`: `abfc stubs`; `add`: `abfc stubs --add ...`; `build`: generation at the start of build, test and publish. */
+/** `explicit`: `abfc generate`; `add`: `abfc generate --add ...`; `build`: generation at the start of build, test and publish. */
 export type StubMode = "explicit" | "build" | "add";
 
 export interface StubRequestInput {

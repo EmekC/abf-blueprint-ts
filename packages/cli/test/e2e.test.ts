@@ -355,10 +355,10 @@ test("(u1) --drift is an option of build only; --keep-failed-stage of build, tes
     assert.match(x.out, /--keep-failed-stage is an option of abfc build, test and publish/);
     x = await r.run(["build", "--add", "/Script/FakeEngine.Thing"]);
     assert.equal(x.code, 2, x.out);
-    assert.match(x.out, /--add and --refresh are options of abfc stubs/);
+    assert.match(x.out, /--add and --refresh are options of abfc generate/);
     x = await r.run(["check", "--refresh"]);
     assert.equal(x.code, 2, x.out);
-    assert.match(x.out, /--add and --refresh are options of abfc stubs/);
+    assert.match(x.out, /--add and --refresh are options of abfc generate/);
   });
 });
 
@@ -2721,7 +2721,7 @@ test("(s2) a reflect failure at the start of a build is a warning ABFC3020 once;
     assert.equal(x.code, 0, x.out);
     assert.equal(countOf(x.out, "ABFC3020"), 1, x.out);
     assert.match(x.out, /warning ABFC3020: could not generate stubs \(missing stubs for Extra\): reflect exploded; the build continues with the existing stubs/);
-    assert.match(x.out, /abfc stubs/);
+    assert.match(x.out, /abfc generate/);
     assert.doesNotMatch(x.out, /error ABFC/);
     assert.ok(r.backend.applyLabels().length > 0, "the build went on to apply");
   });
@@ -2793,7 +2793,7 @@ test("(s6) a backend without the catalog tool is detected once: later builds nei
     assert.notEqual(x.code, 0, x.out);
     assert.equal(r.started.count, 1, "detected: the backend is started once");
     assert.equal(countOf(x.out, "ABFC3021"), 1, x.out);
-    assert.match(x.out, /then run abfc stubs/);
+    assert.match(x.out, /then run abfc generate/);
     assert.match(lockOf(r).auto?.noCatalog as string, /^[0-9a-f]{16}$/);
 
     x = await r.run(["build"]);
@@ -2834,7 +2834,7 @@ test("(s7) the backend cannot start at the start of a build: ABFC3020 once with 
     assert.equal(attempts, 1, "tried once; the frontend error ends the build before it needs the backend");
     assert.equal(countOf(x.out, "ABFC3020"), 1, x.out);
     assert.match(x.out, /warning ABFC3020: could not generate stubs \(missing stubs for Extra\): the Mod Editor is not installed; the build continues with the existing stubs/);
-    assert.match(x.out, /abfc stubs/);
+    assert.match(x.out, /abfc generate/);
     assert.match(x.out, /ABFC2000/, "the build went on to the frontend");
     assert.doesNotMatch(x.out, /ABFC3003|ABFC3001/, "the existing stubs are usable");
   });

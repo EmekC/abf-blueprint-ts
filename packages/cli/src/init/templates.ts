@@ -3,7 +3,7 @@ import { DEFAULT_CLASS_MANAGER_TABLE, DEFAULT_SOURCE_ROOT } from "@abfc/ir";
 
 /**
  * `abf.config.json` of a new project (schema 2). `scriptClasses` is an optional list of extras: `abfc init` passes none, because
- * `abfc stubs` always adds the profile's default set and generates every game class and every imported engine name itself.
+ * `abfc generate` always adds the profile's default set and generates every game class and every imported engine name itself.
  */
 export function projectConfigText(mod: string, scriptClasses: readonly string[]): string {
   const config = {

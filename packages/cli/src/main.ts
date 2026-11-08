@@ -6,11 +6,11 @@ import { adopt } from "./commands/adopt.js";
 import { build } from "./commands/build.js";
 import { check } from "./commands/check.js";
 import { cleanRuntimesCommand, doctor } from "./commands/doctor.js";
+import { generate } from "./commands/generate.js";
 import { runInit } from "./commands/init.js";
 import { runLsp } from "./commands/lsp.js";
 import { publish } from "./commands/publish.js";
 import { status } from "./commands/status.js";
-import { stubs } from "./commands/stubs.js";
 import { test } from "./commands/test.js";
 import { loadContext } from "./context.js";
 import type { CliContext, CliDeps } from "./context.js";
@@ -23,7 +23,7 @@ export type CommandFn = (ctx: CliContext) => Promise<number>;
 
 export const COMMANDS: Record<string, CommandFn> = {
   doctor,
-  stubs,
+  generate,
   check,
   build,
   test,
@@ -32,15 +32,18 @@ export const COMMANDS: Record<string, CommandFn> = {
   publish,
 };
 
+/** Hidden, deprecated command names: still accepted with a warning on stderr, never listed in the usage text. */
+export const COMMAND_ALIASES: Readonly<Record<string, string>> = { stubs: "generate" };
+
 const USAGE = [
   "usage: abfc <command> [options]",
   "commands: init, lsp, version, " + Object.keys(COMMANDS).join(", "),
   "options: --json --verbose --project <dir> --editor-root <dir> --mods-dir <dir> --mod-dir <dir>",
   "         --backend-dir <dir> --python <exe> --headless-dir <dir> --timings --resync --no-build --yes --dry-run --full --discard-editor-changes --cold --watch (check)",
   "         --drift (build) --keep-failed-stage (build, test, publish)",
-  "stubs:   abfc stubs [--add <path>]... [--refresh] [--resync]",
+  "generate: abfc generate [--add <path>]... [--refresh] [--resync]",
   "doctor:  abfc doctor [--deep] [--clean-runtimes]",
-  "init:    abfc init [dir] [--mod <name>] [--yes] [--no-stubs] [--mods-dir <dir>] [--editor-root <dir>] [--backend-dir <dir>] [--python <exe>]",
+  "init:    abfc init [dir] [--mod <name>] [--yes] [--no-generate] [--mods-dir <dir>] [--editor-root <dir>] [--backend-dir <dir>] [--python <exe>]",
   "lsp:     abfc lsp [--stdio]   language server over stdio (docs/language-service.md)",
   "version: abfc version [--json] | abfc --version",
 ];
@@ -90,6 +93,7 @@ export async function main(argv: string[], deps: CliDeps = defaultDeps()): Promi
     for (const l of USAGE) out(l);
     return 0;
   }
+  if (command === "init" && args.flags.noStubsAlias) err("abfc: warning: --no-stubs is deprecated; use --no-generate");
   if (command === "init") {
     try {
       return await runInit(args, deps);
@@ -120,7 +124,10 @@ export async function main(argv: string[], deps: CliDeps = defaultDeps()): Promi
       return 2;
     }
   }
-  const run = COMMANDS[command];
+  const alias = Object.hasOwn(COMMAND_ALIASES, command) ? COMMAND_ALIASES[command] : undefined;
+  if (alias !== undefined) err(`abfc: warning: "abfc ${command}" is deprecated; use "abfc ${alias}"`);
+  const name = alias ?? command;
+  const run = COMMANDS[name];
   if (run === undefined) {
     err(`abfc: error: unknown or not yet available command "${command}"`);
     for (const l of USAGE) err(l);
@@ -131,7 +138,7 @@ export async function main(argv: string[], deps: CliDeps = defaultDeps()): Promi
   let lock: ProjectLock | null = null;
   try {
     ctx = loadContext(args, deps);
-    if (LOCKED_COMMANDS.includes(command)) lock = acquireProjectLock(ctx.projectDir, command, deps.now());
+    if (LOCKED_COMMANDS.includes(name)) lock = acquireProjectLock(ctx.projectDir, name, deps.now());
     await run(ctx);
     return ctx.output.finish();
   } catch (e) {

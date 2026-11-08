@@ -644,7 +644,7 @@ class HirBuilder {
       if (type !== undefined && type.isStringLiteral()) tag = type.value;
     }
     if (tag === undefined) {
-      this.sink.error("ABFC2080", "the @director gameplay tag must be a string literal or a GameplayTag constant such as ClassManager.EntityDirector.MyDirector (run abfc stubs to generate the constants)", arg);
+      this.sink.error("ABFC2080", "the @director gameplay tag must be a string literal or a GameplayTag constant such as ClassManager.EntityDirector.MyDirector (run abfc generate to generate the constants)", arg);
       return undefined;
     }
     const why = gameplayTagProblem(tag);
@@ -1781,7 +1781,7 @@ class HirBuilder {
         const value = this.expr(arg0);
         const ci = this.classArg(node.arguments[1]);
         if (!ci) return f.fail("ABFC2060", "the cast target has no Blueprint metadata (@bpPath)", node.arguments[1] ?? node);
-        if (ci.castPin === null) return f.fail("ABFC3004", `no cast pin known for ${ci.path}; run "abfc stubs"`, node);
+        if (ci.castPin === null) return f.fail("ABFC3004", `no cast pin known for ${ci.path}; run "abfc generate"`, node);
         this.classMeta[ci.path] = ci.meta;
         return { k: "cast", value, target: ci.path, castPin: ci.castPin, type: `object:${ci.path}`, span: sp };
       }

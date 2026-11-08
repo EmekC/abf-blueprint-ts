@@ -1,5 +1,5 @@
 // The stub folder `.abfc/stubs/<profile>/` as a set of files written one by one and atomically (auto stubs).
-// The writer is serialized by the project lock (`.abfc/lock.json`), which every `abfc stubs` and `abfc build` holds.
+// The writer is serialized by the project lock (`.abfc/lock.json`), which every `abfc generate` and `abfc build` holds.
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";

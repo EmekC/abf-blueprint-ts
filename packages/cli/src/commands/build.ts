@@ -43,7 +43,7 @@ import {
 import { refreshTagsFile } from "../tags.js";
 import { deleteRetiredRows, runAssetOps, runParentChange } from "./assetops.js";
 import { ensureStage } from "./stage.js";
-import { ensureStubsForBuild } from "./stubs.js";
+import { ensureStubsForBuild } from "./generate.js";
 
 /** True for an @event whose doc comment is its tooltip: the backend only writes it with the bp_apply feature `event_meta`. */
 function hasEventTooltip(u: IrUnit): boolean {
@@ -475,7 +475,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     // nodes would make the next build report them as missing (ABFC5002).
     const dropIds = new Set([...(a.removeUnits ?? []).map((r) => r.id), ...(a.forgetUnits ?? [])]);
     for (const r of a.removeUnits ?? []) removedUnits.push(r.id.slice(r.id.indexOf(":") + 1));
-    // The stubs still list a removed event as a hand-made member: hide it until `abfc stubs` reads the stage again.
+    // The stubs still list a removed event as a hand-made member: hide it until `abfc generate` reads the stage again.
     // Only units whose nodes were really deleted: a forgotten unit (never applied, or adopted hand-made nodes) left them on the stage.
     const retired = (a.removeUnits ?? []).map((r) => r.id);
     writeRetired(win32.join(paths.stubsDir, profile.id), a.asset, retired);

@@ -5,7 +5,7 @@ import type { CliDeps } from "../context.js";
 /**
  * `abfc lsp [--stdio]`: the language server over stdio (docs/language-service.md). Stdout carries only the protocol;
  * logs go to stderr. `@abfc/lsp` is loaded here so that the other commands do not pay for ESLint and the LSP libraries.
- * The server gets the command line that started this process, so its "Generate stubs" quick fix can run `abfc stubs`.
+ * The server gets the command line that started this process, so its "Generate stubs" quick fix can run `abfc generate`.
  */
 export async function runLsp(_args: ParsedArgs, deps: CliDeps): Promise<number> {
   const { startServer } = await import("@abfc/lsp");

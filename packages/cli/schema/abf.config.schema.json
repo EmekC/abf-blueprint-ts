@@ -44,7 +44,7 @@
     },
     "stubs": {
       "type": "object",
-      "description": "Which declarations abfc stubs generates.",
+      "description": "Which declarations abfc generate writes.",
       "properties": {
         "classes": {
           "type": "array",
@@ -65,7 +65,7 @@
         },
         "widgetMembers": {
           "type": "object",
-          "description": "Deprecated: members are found by abfc stubs. Designer widgets of widget Blueprints that cannot be read from an export: class path to { member name: widget class path }.",
+          "description": "Deprecated: members are found by abfc generate. Designer widgets of widget Blueprints that cannot be read from an export: class path to { member name: widget class path }.",
           "additionalProperties": {
             "type": "object",
             "additionalProperties": { "type": "string" }
