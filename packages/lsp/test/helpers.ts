@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PassThrough } from "node:stream";
 import { StdioLspClient, startServer } from "../src/index.js";
-import type { InitOptions } from "../src/index.js";
+import type { InitOptions, ServerOptions } from "../src/index.js";
 import { pathToUri } from "../src/uri.js";
 
 // compiled to packages/lsp/dist/test/; temp projects sit inside that folder so that `@abfc/runtime` resolves from the repo's node_modules.
@@ -34,10 +34,10 @@ export interface Started {
 }
 
 /** A server over in-memory streams, initialised. */
-export async function startInMemory(initOptions: InitOptions = {}, capabilities: object = {}): Promise<Started> {
+export async function startInMemory(initOptions: InitOptions = {}, capabilities: object = {}, server: Partial<ServerOptions> = {}): Promise<Started> {
   const toServer = new PassThrough();
   const fromServer = new PassThrough();
-  void startServer({ input: toServer, output: fromServer, log: () => undefined });
+  void startServer({ input: toServer, output: fromServer, log: () => undefined, ...server });
   const client = new StdioLspClient(fromServer, toServer);
   const initializeResult = await client.request("initialize", {
     processId: null,

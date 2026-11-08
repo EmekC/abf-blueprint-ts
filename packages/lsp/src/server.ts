@@ -4,6 +4,8 @@ import { TextDocument } from "vscode-languageserver-textdocument";
 import { CodeActionKind, DidChangeWatchedFilesNotification, ProposedFeatures, TextDocumentSyncKind, TextDocuments, createConnection } from "vscode-languageserver/node.js";
 import { AbfcError, findProjectDir } from "@abfc/env";
 import { codeActionsFor } from "./actions.js";
+import { GENERATE_STUBS_COMMAND, runGenerateStubs } from "./generate.js";
+import type { CliLaunch, SpawnFn } from "./generate.js";
 import { completionItemsAt } from "./completion.js";
 import { compilerConfigOf } from "./environment.js";
 import { hoverAt } from "./hover.js";
@@ -30,6 +32,13 @@ export interface ServerOptions {
   output: NodeJS.WritableStream;
   /** Where log lines go (default: stderr). */
   log?: (line: string) => void;
+  /**
+   * How to start the abfc CLI. With it the server offers the "Generate stubs" quick fix and the `abfc.generateStubs` command
+   * (the only thing that ever runs the Mod Editor from the language server); without it no fix is offered.
+   */
+  cliLaunch?: CliLaunch;
+  /** Test hook: replaces `child_process.spawn` for the command. */
+  spawnFn?: SpawnFn;
 }
 
 const DEFAULT_DEBOUNCE_MS = 300;
@@ -174,6 +183,7 @@ export function startServer(o: ServerOptions): Promise<number> {
         hoverProvider: true,
         completionProvider: { resolveProvider: false },
         codeActionProvider: { codeActionKinds: [CodeActionKind.QuickFix] },
+        ...(o.cliLaunch !== undefined ? { executeCommandProvider: { commands: [GENERATE_STUBS_COMMAND] } } : {}),
       },
       serverInfo: { name: "abfc", version: "0.1.0" },
     };
@@ -247,11 +257,45 @@ export function startServer(o: ServerOptions): Promise<number> {
       flush(project);
       const snap = project.snapshot();
       if (snap === null || project.env === null) return [];
-      return codeActionsFor(project, snap, uri, path, params.range, compilerConfigOf(project.env.config));
+      return codeActionsFor(project, snap, uri, path, params.range, compilerConfigOf(project.env.config), {
+        canGenerate: o.cliLaunch !== undefined,
+        projectDir: project.dir,
+      });
     } catch (e) {
       logError("code action", e);
       return [];
     }
+  });
+
+  // The explicit "Generate stubs" command: the one place where the server starts the Mod Editor (through `abfc stubs --add`).
+  connection.onExecuteCommand(async (params) => {
+    if (params.command !== GENERATE_STUBS_COMMAND) return null;
+    const launch = o.cliLaunch;
+    const arg = params.arguments?.[0] as { projectDir?: unknown; add?: unknown } | undefined;
+    if (launch === undefined || arg === undefined || typeof arg.projectDir !== "string" || !Array.isArray(arg.add) || arg.add.length === 0 || !arg.add.every((a) => typeof a === "string" && a !== "")) {
+      void connection.window.showErrorMessage("abfc: the generate stubs command needs a project folder and the names to generate");
+      return { ok: false };
+    }
+    const projectDir = arg.projectDir;
+    const add = arg.add as string[];
+    const project = projects.get(pathKey(projectDir));
+    if (project === undefined) {
+      void connection.window.showErrorMessage(`abfc: ${projectDir} is not an open abfc project`);
+      return { ok: false };
+    }
+    void connection.window.showInformationMessage(`abfc: generating stubs for ${add.join(", ")} (this starts the Mod Editor backend)`);
+    let result: { ok: boolean; message: string };
+    try {
+      result = await runGenerateStubs(launch, project.dir, add, o.spawnFn);
+    } catch (e) {
+      result = { ok: false, message: `abfc: generating stubs failed: ${e instanceof Error ? e.message : String(e)}` };
+    }
+    if (result.ok) void connection.window.showInformationMessage(result.message);
+    else void connection.window.showErrorMessage(result.message.startsWith("abfc") ? result.message : `abfc: ${result.message}`);
+    // The stubs (and their lock) changed on disk: rebuild the program and publish again.
+    project.markDirty(true);
+    scheduleCheck(project);
+    return { ok: result.ok, message: result.message };
   });
 
   documents.onDidOpen((e) => touch(e.document.uri));

@@ -258,3 +258,69 @@ test("code actions see the current text: a pending check is flushed first", asyn
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+interface CommandAction {
+  title: string;
+  kind: string;
+  command?: { title: string; command: string; arguments: Array<{ projectDir: string; add: string[] }> };
+}
+
+const LAUNCH = { command: "node", args: ["abfc.js"] };
+
+/** phase4 plus a file whose imports ask for stubs that do not exist. */
+const withImports = (dir: string, text: string): void => {
+  writeFileSync(join(dir, "src", "Imp.ts"), text, "utf8");
+};
+
+const generateActions = (actions: Action[]): CommandAction[] => (actions as unknown as CommandAction[]).filter((a) => a.title.startsWith("Generate stubs"));
+
+test("code actions: an unresolved /Script import offers Generate stubs as a command, and none without the CLI launch", async () => {
+  const src = `import { Actor, Missing, Other as O } from "/Script/FakeEngine";\nexport const a = Actor;\nexport type T = Missing | O;\n`;
+  const dir = copyFixture("phase4", (d) => withImports(d, src));
+  const started = await startInMemory({}, {}, { cliLaunch: LAUNCH });
+  const plain = await startInMemory();
+  try {
+    assert.deepEqual(started.initializeResult.capabilities.executeCommandProvider, { commands: ["abfc.generateStubs"] });
+    assert.equal(plain.initializeResult.capabilities.executeCommandProvider, undefined, "no command without a CLI launch");
+    const file = join(dir, "src", "Imp.ts");
+    const uri = open(started.client, file);
+    await started.client.waitForDiagnostics(uri);
+    const gen = generateActions(await actionsAt(started, uri, rangeOf(src, "Missing")));
+    assert.equal(gen.length, 1, JSON.stringify(gen.map((a) => a.title)));
+    assert.equal(gen[0]?.title, "Generate stubs for Missing");
+    assert.equal(gen[0]?.kind, "quickfix");
+    assert.equal(gen[0]?.command?.command, "abfc.generateStubs");
+    assert.deepEqual(gen[0]?.command?.arguments[0]?.add, ["/Script/FakeEngine.Missing"]);
+    assert.equal(typeof gen[0]?.command?.arguments[0]?.projectDir, "string");
+    // an aliased import generates the exported name
+    const other = generateActions(await actionsAt(started, uri, rangeOf(src, "Other as O")));
+    assert.deepEqual(other[0]?.command?.arguments[0]?.add, ["/Script/FakeEngine.Other"]);
+    // a range away from the imports has none
+    assert.deepEqual(generateActions(await actionsAt(started, uri, rangeOf(src, "export const a"))), []);
+
+    const uri2 = open(plain.client, file);
+    await plain.client.waitForDiagnostics(uri2);
+    assert.deepEqual(generateActions(await actionsAt(plain, uri2, rangeOf(src, "Missing"))), [], "no fix without a CLI launch");
+    assert.deepEqual(started.client.protocolErrors, []);
+  } finally {
+    await started.dispose();
+    await plain.dispose();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("code actions: an unresolved /Game module offers Generate stubs for the module", async () => {
+  const src = `import { BP_Nope_C } from "/Game/Fake/BP_Nope";\nexport const a = BP_Nope_C;\n`;
+  const dir = copyFixture("phase4", (d) => withImports(d, src));
+  const started = await startInMemory({}, {}, { cliLaunch: LAUNCH });
+  try {
+    const uri = open(started.client, join(dir, "src", "Imp.ts"));
+    await started.client.waitForDiagnostics(uri);
+    const gen = generateActions(await actionsAt(started, uri, rangeOf(src, '"/Game/Fake/BP_Nope"')));
+    assert.equal(gen.length, 1);
+    assert.deepEqual(gen[0]?.command?.arguments[0]?.add, ["/Game/Fake/BP_Nope"]);
+  } finally {
+    await started.dispose();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

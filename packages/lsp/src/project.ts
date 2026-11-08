@@ -2,8 +2,8 @@
 import { readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import type { Diagnostic as LspDiagnostic } from "vscode-languageserver/node.js";
-import { SourceFileCache, buildLibraryIndex, checkProject, loadProgram } from "@abfc/compiler";
-import type { LibraryEntry, LoadedProgram, ProjectCheck, TsSourceFile } from "@abfc/compiler";
+import { SourceFileCache, buildCompletionIndex, checkProject, completionIndexOf, loadProgram } from "@abfc/compiler";
+import type { CompletionIndex, LoadedProgram, ProjectCheck, TsSourceFile } from "@abfc/compiler";
 import { AbfcError, PROJECT_CONFIG_FILE } from "@abfc/env";
 import type { Environment } from "@abfc/env";
 import type { Diagnostic } from "@abfc/ir";
@@ -187,11 +187,14 @@ export class ProjectState {
     return this.last;
   }
 
-  /** The static library functions of the project's stubs profile (memoised by the compiler while `stubs.lock.json` keeps its modification time); empty without a loaded config. */
-  libraryIndex(): LibraryEntry[] {
+  /**
+   * The completion index of the project's stubs profile: the generated library functions and the class, struct, enum and function names of
+   * the catalog (memoised by the compiler while `stubs.lock.json` and `_names.json` keep their modification times); empty without a loaded config.
+   */
+  completionIndex(): CompletionIndex {
     this.ensureConfig();
-    if (this.env === null) return [];
-    return buildLibraryIndex(join(this.dir, ".abfc", "stubs", this.env.profile.id));
+    if (this.env === null) return completionIndexOf([]);
+    return buildCompletionIndex(join(this.dir, ".abfc", "stubs", this.env.profile.id));
   }
 
   /** abfc's own diagnostics (the subset checker's, the lowering's, the moved-class check) located in `sf`, without TypeScript's. */

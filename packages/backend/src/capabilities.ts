@@ -68,6 +68,7 @@ export const BP_APPLY_P1_BASE: BackendCapabilities = {
   compileErrorNodeRefs: false,
   nodeNameMap: true,
   reflect: false,
+  catalog: false,
   gameTest: false,
   audit: false,
   publish: false,
@@ -159,6 +160,7 @@ export function capabilitiesFrom(
         ? null
         : { array: bool(rawContainers.array), set: bool(rawContainers.set), map: bool(rawContainers.map) },
     reflect: tools.includes("reflect"),
+    catalog: tools.includes("catalog"),
     gameTest: tools.includes("bp_game_test"),
     audit: tools.includes("mod_audit"),
     publish: tools.includes("bp_publish"),

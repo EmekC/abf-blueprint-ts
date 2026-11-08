@@ -276,6 +276,27 @@ test("reflect asks for gameplay tags only when requested and parses them", async
   });
 });
 
+test("catalog reads the result file (BOM tolerated) and passes mod and timeout", async () => {
+  await withBackend({}, async ({ backend, calls }) => {
+    const res = await backend.catalog("TestMod");
+    assert.equal(res.run, "C:\\fake\\runs\\catalog-1");
+    assert.equal(res.seconds, 12.5);
+    const data = res.data as { version: number; game: Array<{ path: string }>; scriptClasses: unknown[] };
+    assert.equal(data.version, 1);
+    assert.equal(data.game[0]?.path, "/Game/Fake/BP_Fake.BP_Fake_C");
+    assert.equal(data.scriptClasses.length, 1);
+    const call = calls().find((c) => c.tool === "catalog");
+    assert.deepEqual(call?.args, { mod: "TestMod", timeout_seconds: 300 });
+  });
+});
+
+test("catalog without a result file is ABFC4002", async () => {
+  await withBackend({}, async ({ backend }) => {
+    const e = await rejectsWith(backend.catalog("NoFile"), "ABFC4002");
+    assert.match(e.diagnostic.message, /"catalog" returned no result file/);
+  });
+});
+
 test("assetOps sends bp_asset_ops and maps the result; a refused op is a result, not an exception", async () => {
   await withBackend({}, async ({ backend, calls }) => {
     const ok = await backend.assetOps("TestMod", [{ op: "rename", from: "/TestMod/A", to: "/TestMod/B" }, { op: "recreate", asset: "/TestMod/C" }]);

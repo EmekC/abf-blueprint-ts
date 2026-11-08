@@ -8,6 +8,16 @@ abfc uses semantic versioning for its command-line surface: the commands, their 
 
 ## [Unreleased]
 
+### Added
+
+- Automatic stubs. `abfc stubs` generates a stub for every game class once per Mod Editor build (about 3-4 minutes, then cached so later runs take seconds); engine names your source imports (`/Script/...` classes, structs, enums) are generated on demand when `abfc build`, `test` or `publish` starts, and only when something is missing. New options `abfc stubs --add <path>` (an engine name, a game class or a game module) and `abfc stubs --refresh`. Needs the `catalog` tool of abf-mod-editor-mcp 2.6.0 (older backends keep the old behaviour with a warning). New files in the stub folder: `_catalog.json`, `_names.json`, `_cache.json.gz`, `_coverage.json`, `_library.json`; `stubs.lock.json` gained `auto`.
+- Editor: completion offers the classes, structs and enums of the game and the engine, with their import, also in type positions and after `extends`; a TypeScript error about an unresolved `/Script/...` or `/Game/...` import has the quick fix "Generate stubs for ..." (runs `abfc stubs --add`; the language server never starts the editor otherwise).
+- New diagnostics ABFC3020 (stubs could not be generated at build start), ABFC3021 (backend without `catalog`), ABFC3022 (`--add` name unknown), ABFC3023 (classes the backend could not reflect).
+
+### Changed
+
+- `abfc init` writes an empty `stubs.scriptClasses`; `stubs.classes` and `stubs.scriptClasses` are optional extras (the profile's default engine classes are always generated). The first build after updating generates the full game set (about 3-4 minutes). The fix of ABFC3011 and ABFC3004 now points to `abfc stubs --add <path>`.
+
 ### Fixed
 
 - Editor completion finds Blueprint library functions by the C++ name without its `K2_`/`BP_` prefix, by any word of the name (`timer`) and by the Blueprint node name (`settimerbyevent` offers `KismetSystemLibrary.K2_SetTimerDelegate` with its import). After a dot, stub members are also found by their node name. Works with existing stubs.

@@ -9,3 +9,5 @@ export * from "./paths.js";
 export * from "./tags.js";
 export * from "./write.js";
 export * from "./describe.js";
+export * from "./store.js";
+export * from "./catalog.js";

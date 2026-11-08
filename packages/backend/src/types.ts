@@ -121,6 +121,16 @@ export interface ReflectResult {
   filter: { contentVersion: string | null; rules: Array<["Allow" | "Block", string]> };
 }
 
+/** `<run>/catalog.json` of the `catalog` tool (backend 2.6.0, capability `catalog`): names only, no members. `data` is the parsed, unvalidated document. */
+export interface CatalogResult {
+  run: string;
+  seconds: number;
+  file: string;
+  data: unknown;
+  /** The catalog ran on the warm session. */
+  warm?: boolean;
+}
+
 export interface GameTestReport {
   ok: boolean;
   steps: Array<{ i: number; op: string; ok: boolean; value: unknown; error?: string }>;
@@ -210,6 +220,8 @@ export interface Backend {
   ): Promise<BpApplyResult>;
   compile(mod: string, assets: string[]): Promise<CompileReport>;
   reflect(r: ReflectRequest): Promise<ReflectResult>;
+  /** `catalog` (backend 2.6.0, capability `catalog`): names-only catalog of every game Blueprint class and engine class, struct, enum and function library. */
+  catalog(mod: string): Promise<CatalogResult>;
   gameTest(mod: string, steps: unknown[], o: { timeoutSeconds: number }): Promise<GameTestReport>;
   audit(mod: string): Promise<AuditReport>;
   /** `bp_publish` for exactly `mod`, only with a {@link PublishGrant} from `grantPublish` (sent only by `abfc publish`). */

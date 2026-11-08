@@ -246,6 +246,13 @@ test("structs, enums and opaque types", () => {
   assert.ok(index.members > 10);
 });
 
+test("opaqueEnums declares an unreferenced enum", () => {
+  const { files, index } = emitStubsWithIndex(input({ opaqueEnums: ["/Script/FakeEngine.EFake"] }));
+  const text = files.get("Script/FakeEngine.d.ts") ?? "";
+  assert.match(text, /export type EFake = byte & \{ readonly __bpEnum\?: "\/Script\/FakeEngine\.EFake" \};/);
+  assert.ok(index.opaque.includes("/Script/FakeEngine.EFake"));
+});
+
 test("enum, delegate and class parameters", () => {
   const TOOLS = "/Script/FakeEngine.Tools";
   const reflect = reflectData();

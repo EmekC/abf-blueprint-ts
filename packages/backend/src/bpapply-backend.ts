@@ -14,6 +14,7 @@ import type {
   AuditReport,
   Backend,
   BpApplyResult,
+  CatalogResult,
   CompileMessage,
   CompileReport,
   GameTestReport,
@@ -372,6 +373,22 @@ export class BpApplyBackend implements Backend {
       data,
       filter: { contentVersion: str(filter.content_version), rules },
     };
+  }
+
+  async catalog(mod: string): Promise<CatalogResult> {
+    await this.ensureWarm(mod);
+    const { json } = await this.call("catalog", { mod, timeout_seconds: 300 }, { timeoutMs: 360_000 });
+    this.lastWarm = json.warm === true;
+    const file = str(json.file);
+    if (file === null) {
+      throw new AbfcError({
+        severity: "error",
+        code: "ABFC4002",
+        message: `backend tool "catalog" returned no result file (run folder: ${str(json.run) ?? "unknown"}).`,
+      });
+    }
+    const data: unknown = JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, ""));
+    return { run: str(json.run) ?? "", seconds: num(json.seconds), file, data, warm: this.lastWarm };
   }
 
   async gameTest(mod: string, steps: unknown[], o: { timeoutSeconds: number }): Promise<GameTestReport> {

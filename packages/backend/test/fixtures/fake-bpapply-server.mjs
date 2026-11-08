@@ -34,6 +34,7 @@ const ALL = [
   "backend_info",
   "abfc_extensions",
   "reflect",
+  "catalog",
   "staging_sync",
   "staging_status",
   "bp_apply",
@@ -161,6 +162,23 @@ function callTool(name, args) {
         counts: { classes: 1, functions: 0, properties: 0, structs: 0, errors: 1 },
         filter: { content_version: "v1", rules: [["Allow", "Fake.Widget"], ["Block", "Fake.Widget.Secret"]] },
       });
+    }
+    case "catalog": {
+      mkdirSync(dir, { recursive: true });
+      const file = join(dir, "catalog.json");
+      const catalog = {
+        version: 1,
+        engineVersion: "5.4.4-fake",
+        game: [{ path: "/Game/Fake/BP_Fake.BP_Fake_C", kind: "Blueprint", parent: "/Script/Fake.Widget", interface: false }],
+        scriptClasses: [{ path: "/Script/Fake.Widget", parent: "/Script/CoreUObject.Object" }],
+        scriptStructs: [],
+        scriptEnums: [],
+        counts: { game: 1, scriptClasses: 1, scriptStructs: 0, scriptEnums: 0, libraries: 0, functions: 0 },
+        errors: [],
+      };
+      writeFileSync(file, "\uFEFF" + JSON.stringify(catalog), "utf8");
+      if (args.mod === "NoFile") return json({ ok: true, run: "C:\\fake\\runs\\catalog-9", seconds: 1 });
+      return json({ ok: true, run: "C:\\fake\\runs\\catalog-1", seconds: 12.5, file, counts: catalog.counts, warm: warmRunning });
     }
     case "bp_asset_ops": {
       const ops = args.ops ?? [];

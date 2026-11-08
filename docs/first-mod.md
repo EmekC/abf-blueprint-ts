@@ -48,6 +48,7 @@ What `abfc init` writes:
 - in the project folder: `abf.config.json` (the mod name and the stub settings, see [config.md](config.md)), `tsconfig.json`, `.gitignore`, `.vscode\tasks.json` and `.vscode\extensions.json` (only when absent), and the sample `src\Samples\BP_HelloAbfc.ts` with its test `src\Samples\BP_HelloAbfc.test.ts` (only when `src` holds no TypeScript file yet);
 - one per-machine file, the user config (`%APPDATA%\abfc\config.json`), with the Mod Editor folder and the mods folder;
 - then it generates the stubs (the `.d.ts` files that describe the engine and your mod's assets to TypeScript; add `--no-stubs` to skip) and prints the `abfc doctor` checklist.
+  The first run generates every game class once, which takes about 3-4 minutes (later runs reuse the cache); see [`abfc stubs`](cli.md#abfc-stubs).
 
 It never writes into the mods folder or the mod. Running it again changes nothing.
 

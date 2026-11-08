@@ -189,3 +189,31 @@ test("completion: nothing in a comment, an unknown document or a position past t
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("completion: a class from the catalog names file is offered with its import, in an expression and in a type position", async () => {
+  const dir = copyFixture("phase4", (d) => {
+    prepared(d);
+    const profile = join(d, ".abfc", "stubs", loadProjectEnvironment(d).profile.id);
+    const names = { version: 1, types: [{ name: "BP_Fake_C", module: "/Game/Fake/BP_Fake", path: "/Game/Fake/BP_Fake.BP_Fake_C", kind: "class" }], functions: [] };
+    writeFileSync(join(profile, "_names.json"), JSON.stringify(names), "utf8");
+  });
+  const started = await startInMemory();
+  try {
+    const inType = await complete(started, dir, `${HEAD}export function go(): void {\n  let v: BP_Fa|;\n}\n`);
+    const cls = inType.items.find((i) => i.label === "BP_Fake_C");
+    assert.ok(cls, inType.items.map((i) => i.label).join());
+    assert.equal(cls.kind, 7, "CompletionItemKind.Class");
+    assert.equal(cls.detail, "/Game/Fake/BP_Fake.BP_Fake_C");
+    assert.equal(cls.labelDetails?.description, "/Game/Fake/BP_Fake");
+    const accepted = accept(inType.text, cls);
+    assert.ok(accepted.includes(`import { BP_Fake_C } from "/Game/Fake/BP_Fake";`), accepted);
+    assert.ok(accepted.includes("let v: BP_Fake_C;"), accepted);
+
+    const inExpr = await complete(started, dir, `${HEAD}export function go(): void {\n  BP_Fa|\n}\n`);
+    assert.ok(inExpr.items.some((i) => i.label === "BP_Fake_C"), inExpr.items.map((i) => i.label).join());
+    assert.deepEqual(started.client.protocolErrors, []);
+  } finally {
+    await started.dispose();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

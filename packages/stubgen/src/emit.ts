@@ -26,6 +26,8 @@ export interface EmitInput {
   mod: string;
   /** Extra type paths to emit as opaque classes (referenced types that were not reflected are added automatically). */
   opaque: string[];
+  /** Enum paths to declare even when no member references them. */
+  opaqueEnums?: string[];
 }
 
 export interface StubIndex {
@@ -258,6 +260,7 @@ export function emitStubsWithIndex(input: EmitInput): { files: Map<string, strin
     if (!defined.has(r.path) && !opaqueKinds.has(r.path)) opaqueKinds.set(r.path, r.kind);
   }
   for (const p of input.opaque) if (!defined.has(p) && !opaqueKinds.has(p)) opaqueKinds.set(p, "class");
+  for (const p of input.opaqueEnums ?? []) if (!defined.has(p) && !opaqueKinds.has(p)) opaqueKinds.set(p, "enum");
 
   const counters: Counters = { members: 0, deprecated: [], overridden: [], missing: [] };
   const opaqueClassPaths = new Set([...opaqueKinds].filter(([, k]) => k === "class").map(([p]) => p));
