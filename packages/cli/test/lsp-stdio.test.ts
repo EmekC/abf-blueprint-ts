@@ -140,6 +140,7 @@ test("abfc lsp --stdio: completion offers the library function with its import e
   child.stderr.on("data", (d: Buffer) => (stderr += d.toString("utf8")));
   const exited = new Promise<number | null>((resolve) => child.on("exit", (code) => resolve(code)));
   const client = new StdioLspClient(child.stdout, child.stdin);
+  let incomplete: unknown;
   const complete = async (source: string): Promise<any[]> => {
     const at = source.indexOf("|");
     assert.ok(at >= 0, "marker");
@@ -155,6 +156,7 @@ test("abfc lsp --stdio: completion offers the library function with its import e
       120_000,
     );
     client.notify("textDocument/didClose", { textDocument: { uri } });
+    incomplete = Array.isArray(result) ? undefined : result?.isIncomplete;
     return Array.isArray(result) ? result : (result?.items ?? []);
   };
   try {
@@ -164,7 +166,7 @@ test("abfc lsp --stdio: completion offers the library function with its import e
       capabilities: {},
       initializationOptions: { debounceMs: 0 },
     });
-    assert.deepEqual(init.capabilities.completionProvider, { resolveProvider: false, triggerCharacters: ["@"] });
+    assert.deepEqual(init.capabilities.completionProvider, { resolveProvider: false });
     client.notify("initialized", {});
 
     const head = `import { blueprint, event } from "@abfc/runtime";\nimport { Actor } from "/Script/FakeEngine";\n\n@blueprint({ path: "/TestMod/Relay/BP_Comp" })\nexport class BP_Comp extends Actor {\n`;
@@ -172,6 +174,7 @@ test("abfc lsp --stdio: completion offers the library function with its import e
     const print = calls.find((i) => i.label === "PrintString");
     assert.ok(print, JSON.stringify(calls.map((i) => i.label)));
     assert.equal(print.textEdit.newText, "KismetSystemLibrary.PrintString");
+    assert.equal(incomplete, true, "the list is capped and prefix-filtered on the server: the client asks again as the word grows");
     assert.equal(print.additionalTextEdits.length, 1);
     assert.equal(print.additionalTextEdits[0].newText, ", KismetSystemLibrary", "inserted after the Actor binding of the existing import");
 

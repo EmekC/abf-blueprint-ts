@@ -75,7 +75,7 @@ function accept(text: string, item: any): string {
 test("completion: initialize reports the provider", async () => {
   const started = await startInMemory();
   try {
-    assert.deepEqual(started.initializeResult.capabilities.completionProvider, { resolveProvider: false, triggerCharacters: ["@"] });
+    assert.deepEqual(started.initializeResult.capabilities.completionProvider, { resolveProvider: false });
   } finally {
     await started.dispose();
   }
