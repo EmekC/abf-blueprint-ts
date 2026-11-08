@@ -39,6 +39,29 @@ export function matchOrphans(hir: HirProgram, manifests: readonly Manifest[], mo
     const found = byName.length > 0 ? byName : candidates.filter((m) => m.source !== undefined && m.source.file === c.span.file);
     if (found.length > 0) matches.push({ decl: c, isStruct, matches: found });
   }
+  // Class AND file renamed together leave no name and no file to go by. Then a pair that nothing else could be: in one folder with one
+  // parent, exactly one declaration with no earlier asset and exactly one earlier asset (created by abfc, so no hand-made content
+  // moves with it) that no declaration looks like. Two of either side in the group stay as they are (a delete and a create): abfc never guesses.
+  const matchedDecl = new Set<HirClass | HirStruct>(matches.map((m) => m.decl));
+  const matchedOrphan = new Set(matches.flatMap((m) => m.matches));
+  const folderOf = (asset: string): string => asset.slice(0, asset.lastIndexOf("/")).toLowerCase();
+  const groups = new Map<string, { decls: HirClass[]; olds: Manifest[] }>();
+  const group = (key: string): { decls: HirClass[]; olds: Manifest[] } => {
+    let g = groups.get(key);
+    if (g === undefined) groups.set(key, (g = { decls: [], olds: [] }));
+    return g;
+  };
+  for (const c of hir.classes) {
+    if ((!c.pathDerived && o.explicit !== true) || known.has(c.path.toLowerCase()) || matchedDecl.has(c)) continue;
+    group(`${folderOf(c.path)}|${c.parent.toLowerCase()}`).decls.push(c);
+  }
+  for (const m of orphans) {
+    if (matchedOrphan.has(m) || m.structFieldsHash !== undefined || m.created !== true || m.parent === undefined) continue;
+    group(`${folderOf(m.asset)}|${m.parent.toLowerCase()}`).olds.push(m);
+  }
+  for (const g of groups.values()) {
+    if (g.decls.length === 1 && g.olds.length === 1) matches.push({ decl: g.decls[0]!, isStruct: false, matches: [g.olds[0]!] });
+  }
   return { orphans, matches };
 }
 

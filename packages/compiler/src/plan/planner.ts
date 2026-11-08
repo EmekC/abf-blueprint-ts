@@ -240,6 +240,10 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
     for (const v of fieldVars) {
       const mv = manifest?.variables.find((m) => m.name === v.name);
       if (mv === undefined || mv.type === v.type) continue;
+      // The variable on the stage already has the TS type: the record is stale, not the field changed (a class this field points at was
+      // renamed on the stage, which fixed the variable up, and an earlier build stopped before the manifest followed).
+      const onStage = input.snapshotVariableTypes?.get(asset.path)?.get(v.name);
+      if (onStage !== undefined && onStage.toLowerCase() === v.type.toLowerCase()) continue;
       retyped = true;
       diagnostics.push({
         severity: "error",

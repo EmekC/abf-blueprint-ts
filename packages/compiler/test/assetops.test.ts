@@ -191,3 +191,35 @@ test("assetsNeedingRead reads an asset whose parent differs from the recorded on
   const old = new Map<string, Manifest | null>([["/TestMod/BP_C", manifest("/TestMod/BP_C")]]);
   assert.equal(assetsNeedingRead(irWith("/Script/Engine.ActorComponent"), { manifests: old, stage }).size, 0);
 });
+
+test("class and file renamed together: the only new class and the only earlier asset of its folder and parent are one rename", () => {
+  const hir = program([cls("BP_New", "/TestMod/Sub/BP_New", "src/Sub/New.ts")]);
+  const old = built("/TestMod/Sub/BP_Old", "src/Sub/Old.ts", "BP_Old", { created: true, parent: "/Script/Engine.Actor" });
+  const plan = planAssetOps(hir, [old], "TestMod", ALL);
+  assert.deepEqual(plan.diagnostics, []);
+  assert.deepEqual(plan.ops, [{ op: "rename", from: "/TestMod/Sub/BP_Old", to: "/TestMod/Sub/BP_New" }]);
+  assert.deepEqual(plan.deletes, []);
+});
+
+test("class and file renamed together is never guessed when another folder, another parent, two candidates or a hand-made asset are involved", () => {
+  const old = (name: string, o: Partial<Manifest> = {}): Manifest =>
+    built(`/TestMod/Sub/${name}`, `src/Sub/${name}.ts`, name, { created: true, parent: "/Script/Engine.Actor", ...o });
+  const none = (hir: HirProgram, ms: Manifest[]): void => {
+    const plan = planAssetOps(hir, ms, "TestMod", ALL);
+    assert.deepEqual(plan.renames, [], JSON.stringify(plan.renames));
+  };
+  none(program([cls("BP_New", "/TestMod/Other/BP_New", "src/Other/New.ts")]), [old("BP_Old")]); // another folder
+  none(program([cls("BP_New", "/TestMod/Sub/BP_New", "src/Sub/New.ts", { parent: "/Script/Engine.Pawn" })]), [old("BP_Old")]); // another parent
+  none(program([cls("BP_New", "/TestMod/Sub/BP_New", "src/Sub/New.ts")]), [old("BP_Old"), old("BP_Older")]); // two earlier assets
+  none(program([cls("BP_New", "/TestMod/Sub/BP_New", "src/Sub/New.ts"), cls("BP_New2", "/TestMod/Sub/BP_New2", "src/Sub/New2.ts")]), [old("BP_Old")]); // two new classes
+  none(program([cls("BP_New", "/TestMod/Sub/BP_New", "src/Sub/New.ts")]), [withoutKey(old("BP_Old"), "created")]); // not created by abfc
+  none(program([cls("BP_New", "/TestMod/Sub/BP_New", "src/Sub/New.ts")]), [withoutKey(old("BP_Old"), "parent")]); // parent unknown
+  // and the delete + create stays what it was
+  const plan = planAssetOps(program([cls("BP_New", "/TestMod/Sub/BP_New", "src/Sub/New.ts")]), [old("BP_Old"), old("BP_Older")], "TestMod", ALL);
+  assert.deepEqual(plan.deletes, ["/TestMod/Sub/BP_Old", "/TestMod/Sub/BP_Older"]);
+});
+
+function withoutKey(m: Manifest, key: "created" | "parent"): Manifest {
+  const { [key]: _gone, ...rest } = m;
+  return rest;
+}

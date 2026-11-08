@@ -908,6 +908,10 @@ export class FakeBackend implements Backend {
             touched.push(row);
           }
         }
+        // Unreal's rename fixes up every referencer: variable types that name the old class follow (a referencer is saved too)
+        for (const other of work.values()) {
+          for (const v of other.variables) v.type = v.type.split(`${op.from}.${oldName}_C`).join(`${op.to}.${newName}_C`);
+        }
         results.push({ op: "rename", ok: true });
       } else if (op.op === "delete") {
         const had = work.delete(op.asset);
