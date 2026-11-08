@@ -245,10 +245,15 @@ function killTree(pid: number | undefined): void {
 let handlersInstalled = false;
 
 /** Closes every live client on SIGINT/SIGTERM, then exits with 130. Safe to call more than once. */
-export function installSignalHandlers(): void {
+export function installSignalHandlers(o?: { onSignal?: () => void }): void {
   if (handlersInstalled) return;
   handlersInstalled = true;
   const onSignal = (): void => {
+    try {
+      o?.onSignal?.();
+    } catch {
+      // a failing hook must not keep the backend from closing
+    }
     void Promise.allSettled([...liveClients].map((c) => c.close())).then(() => process.exit(130));
   };
   process.on("SIGINT", onSignal);

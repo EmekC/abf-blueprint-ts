@@ -1,5 +1,8 @@
 import { exitCodeFor, formatDiagnostic } from "@abfc/env";
 import type { Diagnostic } from "@abfc/ir";
+import type { Progress } from "./progress.js";
+import { PLAIN, paintDiagnostic } from "./style.js";
+import type { Styler, Tone } from "./style.js";
 
 export interface OutputOptions {
   command: string;
@@ -9,6 +12,12 @@ export interface OutputOptions {
   stdout?: ((line: string) => void) | undefined;
   /** Diagnostics (default: process.stderr). */
   stderr?: ((line: string) => void) | undefined;
+  /** Routes writes through the progress renderer so a live spinner line is cleared and redrawn around them. */
+  progress?: Progress | undefined;
+  /** Colors for result lines on stdout (default: none). */
+  stdoutStyle?: Styler | undefined;
+  /** Colors for diagnostics on stderr (default: none). */
+  stderrStyle?: Styler | undefined;
 }
 
 /**
@@ -30,11 +39,29 @@ export class Output {
 
   diag(d: Diagnostic): void {
     this.diagnostics.push(d);
-    if (!this.o.json) this.err(formatDiagnostic(d, this.o.projectDir));
+    if (this.o.json) return;
+    let text = paintDiagnostic(formatDiagnostic(d, this.o.projectDir), d.severity, this.o.stderrStyle ?? PLAIN);
+    const progress = this.o.progress;
+    if (progress?.live === true && progress.activeStep !== null && d.span === undefined) {
+      text = text
+        .split("\n")
+        .map((l) => "  " + l)
+        .join("\n");
+    }
+    this.emit(() => this.err(text));
   }
 
-  info(line: string): void {
-    if (!this.o.json) this.out(line);
+  info(line: string, tone?: Tone): void {
+    if (this.o.json) return;
+    const style = this.o.stdoutStyle;
+    const text = tone !== undefined && style !== undefined ? style.paint(tone, line) : line;
+    this.emit(() => this.out(text));
+  }
+
+  private emit(fn: () => void): void {
+    const progress = this.o.progress;
+    if (progress !== undefined) progress.write(fn);
+    else fn();
   }
 
   /** Sets the machine-readable result that `--json` prints (ignored in text mode). */

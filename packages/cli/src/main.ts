@@ -12,11 +12,12 @@ import { runLsp } from "./commands/lsp.js";
 import { publish } from "./commands/publish.js";
 import { status } from "./commands/status.js";
 import { test } from "./commands/test.js";
-import { loadContext } from "./context.js";
+import { createUi, loadContext } from "./context.js";
 import type { CliContext, CliDeps } from "./context.js";
 import { acquireProjectLock, LOCKED_COMMANDS } from "./lock.js";
 import type { ProjectLock } from "./lock.js";
 import { Output } from "./output.js";
+import { lineTerminal, processTerminal, realClock } from "./progress.js";
 import { ABFC_VERSION } from "./version.js";
 
 export type CommandFn = (ctx: CliContext) => Promise<number>;
@@ -38,9 +39,10 @@ export const COMMAND_ALIASES: Readonly<Record<string, string>> = { stubs: "gener
 const USAGE = [
   "usage: abfc <command> [options]",
   "commands: init, lsp, version, " + Object.keys(COMMANDS).join(", "),
-  "options: --json --verbose --project <dir> --editor-root <dir> --mods-dir <dir> --mod-dir <dir>",
+  "options: --json --verbose --quiet --project <dir> --editor-root <dir> --mods-dir <dir> --mod-dir <dir>",
   "         --backend-dir <dir> --python <exe> --headless-dir <dir> --timings --resync --no-build --yes --dry-run --full --discard-editor-changes --cold --watch (check)",
   "         --drift (build) --keep-failed-stage (build, test, publish)",
+  "output:  results on stdout; diagnostics and progress on stderr (live on a terminal, one line per step otherwise); -q/--quiet hides progress, --json prints one JSON document and no progress",
   "generate: abfc generate [--add <path>]... [--refresh] [--resync]",
   "doctor:  abfc doctor [--deep] [--clean-runtimes]",
   "init:    abfc init [dir] [--mod <name>] [--yes] [--no-generate] [--mods-dir <dir>] [--editor-root <dir>] [--backend-dir <dir>] [--python <exe>]",
@@ -134,17 +136,31 @@ export async function main(argv: string[], deps: CliDeps = defaultDeps()): Promi
     return 2;
   }
 
+  const term = deps.term ?? (deps.stderr !== undefined ? lineTerminal(deps.stderr) : processTerminal(deps.stdout === undefined));
+  // `check --watch` loops and prints its own [abfc] lines: no header, steps or "done in" around it.
+  const watching = name === "check" && args.flags.watch;
+  const ui = createUi(watching ? { ...args.flags, quiet: true } : args.flags, term, deps.clock ?? realClock());
+
   let ctx: CliContext | null = null;
   let lock: ProjectLock | null = null;
   try {
-    ctx = loadContext(args, deps);
+    ctx = loadContext(args, deps, ui);
     if (LOCKED_COMMANDS.includes(name)) lock = acquireProjectLock(ctx.projectDir, name, deps.now());
+    if (name !== "doctor") ctx.progress.header(name, [`profile ${ctx.env.profile.id}`, `mod ${ctx.config.mod.name}`]);
     await run(ctx);
     return ctx.output.finish();
   } catch (e) {
     const output =
       ctx?.output ??
-      new Output({ command, json: args.flags.json, projectDir: args.flags.project, stdout: deps.stdout, stderr: deps.stderr });
+      new Output({
+        command,
+        json: args.flags.json,
+        projectDir: args.flags.project,
+        stdout: deps.stdout,
+        stderr: deps.stderr,
+        stdoutStyle: ui.stdoutStyle,
+        stderrStyle: ui.stderrStyle,
+      });
     if (e instanceof UsageError) {
       output.finish();
       err(`abfc: error: ${e.message}`);
@@ -165,5 +181,8 @@ export async function main(argv: string[], deps: CliDeps = defaultDeps()): Promi
     return 2;
   } finally {
     lock?.release();
+    // no project: nothing ran, so no header and no "done in"
+    if (ctx === null) ui.progress.dispose();
+    else ui.progress.finish();
   }
 }
