@@ -363,6 +363,8 @@ export class FakeBackend implements Backend {
   gameTestFailures: number[][] = [];
   gameTestCalls = 0;
   auditOk = true;
+  /** A rename or reparent edits the nodes of the asset it renames/reparents (a pin default changes), as Unreal's fixup does (default false). */
+  opsEditNodes = false;
   /** Extra staged files that `staging_status` lists as changed (files no unit of the project owns). */
   extraChanged: string[] = [];
   /** `staging_status` lists no changed files at all (nothing is staged to publish). */
@@ -486,6 +488,11 @@ export class FakeBackend implements Backend {
 
   tools(): string[] {
     return this.calls.map((c) => c.tool);
+  }
+
+  private editFirstPin(a: { nodes: FNode[] }): void {
+    const p = a.nodes.flatMap((n) => n.pins).find((x) => x.dir === "in" && x.name !== "execute");
+    if (p !== undefined) p.def = `${p.def ?? ""}7`;
   }
 
   /** Edits a pin default of a node in the stage, as a user would in the editor. */
@@ -912,6 +919,7 @@ export class FakeBackend implements Backend {
         for (const other of work.values()) {
           for (const v of other.variables) v.type = v.type.split(`${op.from}.${oldName}_C`).join(`${op.to}.${newName}_C`);
         }
+        if (this.opsEditNodes) this.editFirstPin(work.get(op.to)!);
         results.push({ op: "rename", ok: true });
       } else if (op.op === "delete") {
         const had = work.delete(op.asset);
@@ -925,6 +933,7 @@ export class FakeBackend implements Backend {
           return fail(`cannot reparent across families (${parentFamily(a.parent)} -> ${parentFamily(op.parent)})`);
         }
         a.parent = op.parent;
+        if (this.opsEditNodes) this.editFirstPin(a);
         results.push({ op: "reparent", ok: true });
       } else {
         // recreate: the stage loses the asset's files; a following apply `create` makes it again

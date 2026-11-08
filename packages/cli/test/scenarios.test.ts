@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readManifest, readSourceMap } from "@abfc/compiler";
-import { OPS, TA, tally, tallyOnly, withRig } from "./rig.js";
+import { OPS, TA, addParentStubs, tally, tallyOnly, withRig } from "./rig.js";
 
 const appliedSpecs = (r: { backend: { calls: Array<{ tool: string; specs?: Array<Record<string, any>> }> } }): Array<Record<string, any>> =>
   r.backend.calls.filter((c) => c.tool === "bp_apply").flatMap((c) => c.specs ?? []);
@@ -146,5 +146,28 @@ test("(S03) moving a class file keeps the source map's spans on the new file", a
     assert.equal(x.code, 0, x.out);
     assert.match(x.out, /up to date/);
     assert.deepEqual(files(), ["src/Moved.ts"]);
+  });
+});
+
+test("(S05) a rename or reparent that edits the asset's nodes is replaced without the ABFC5014 editor-edit warning", async () => {
+  await withRig(OPS, async (r) => {
+    addParentStubs(r.dir);
+    tallyOnly(r.dir, tally("BP_Zed"));
+    assert.equal((await r.run(["build"])).code, 0);
+    r.backend.opsEditNodes = true;
+    // renamed (class, same file): the fixup edits a node, the unit is re-applied, no warning blames the modder
+    writeFileSync(join(r.dir, "src", "Tally.ts"), tally("BP_Zed2"), "utf8");
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /renamed \/TestMod\/BP_Zed -> \/TestMod\/BP_Zed2/);
+    assert.doesNotMatch(x.out, /ABFC5014/);
+    const afterRename = r.backend.applyLabels().length;
+    // reparented
+    writeFileSync(join(r.dir, "src", "Tally.ts"), tally("BP_Zed2", "Pawn"), "utf8");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /reparented /);
+    assert.doesNotMatch(x.out, /ABFC5014/);
+    assert.ok(r.backend.applyLabels().length > afterRename, "the units were applied again");
   });
 });

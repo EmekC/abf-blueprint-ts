@@ -17,6 +17,8 @@ export interface AssetOpsOutcome {
   ok: boolean;
   renamed: Array<{ from: string; to: string }>;
   deleted: string[];
+  /** Assets the ops edited on the stage besides the ones renamed/deleted (referencers whose nodes the rename fixed up) and the renamed assets themselves. */
+  edited?: string[];
 }
 
 function describeOp(op: AssetOp): string {
@@ -131,6 +133,7 @@ export async function runAssetOps(
   }
   const moved = new Set([...renames, ...repeated].flatMap((r) => [lower(r.from), lower(r.to)]));
   const also = touched.filter((t) => !moved.has(lower(t)) && !o.owned.has(t) && !classPaths.has(lower(t)));
+  outcome.edited = [...new Set([...touched, ...renames.map((r) => r.to), ...repeated.map((r) => r.to)])];
 
   for (const r of renames) {
     const old = readManifest(projectDir, r.from);

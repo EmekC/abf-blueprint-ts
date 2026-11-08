@@ -29,6 +29,12 @@ export interface PlanInput {
   directorRows?: boolean;
   /** Assets (paths) of hybrid classes (the TS class merges with a `<X>_Manual` interface): hand-made members are kept there (design 13). */
   hybrid?: Set<string>;
+  /**
+   * Assets (paths, any case) abfc itself edited on the stage in this build before it read them (a rename fixed their nodes up, they were
+   * reparented): a unit that differs from its record there is replaced without the ABFC5014 "edited in the editor" warning, which would
+   * blame the modder for abfc's own change.
+   */
+  editedByAbfc?: Set<string>;
 }
 
 export interface PlanResult {
@@ -273,6 +279,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
 
     /** What this build replaces or removes from the asset beyond its own changes (TS wins): reported once as ABFC5014. */
     const report: string[] = [];
+    const abfcEdited = input.editedByAbfc !== undefined && [...input.editedByAbfc].some((p) => p.toLowerCase() === asset.path.toLowerCase());
     const picked: Array<{ unit: IrUnit; removeNodes: string[] }> = [];
     /** Names of events that this build adds (no custom event in the stage yet). */
     const newEvents = new Set<string>();
@@ -303,7 +310,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
       // TS wins: an edited, missing-node or changed-adoption unit is replaced, never refused. The report names what was found.
       const drift = driftDiagnostics(asset.path, [mu], snapshot, input.stage, spans, { severity: "warning" });
       if (drift.length > 0) {
-        for (const d of drift) report.push(`${d.code}: ${d.message}`);
+        if (!abfcEdited) for (const d of drift) report.push(`${d.code}: ${d.message}`);
         picked.push({ unit, removeNodes: [...mu.nodes.filter((n) => snapshot.has(n)), ...(mu.adopt?.nodes ?? []).filter((n) => snapshot.has(n)), ...tagsOf(snapshot, mu.id, mu.graph)] });
         continue;
       }
@@ -335,7 +342,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
         const drift = driftDiagnostics(asset.path, [mu], snapshot, input.stage, new Map<string, Span>(), { severity: "warning" });
         if (drift.length > 0) {
           // TS wins: the removed unit goes although it was edited or lost nodes; the nodes still on the stage are removed.
-          for (const d of drift) report.push(`${d.code}: ${d.message}`);
+          if (!abfcEdited) for (const d of drift) report.push(`${d.code}: ${d.message}`);
           removeUnits.push({ id: mu.id, graph: mu.graph, nodes: [...mu.nodes.filter((n) => snapshot.has(n)), ...tagsOf(snapshot, mu.id, mu.graph)] });
         } else forgetUnits.push(mu.id); // adopted hand-made nodes of a stale stage: nothing of abfc's to remove
       }

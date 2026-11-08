@@ -261,6 +261,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     snapshotVariables,
     snapshotVariableTypes,
     forceReplan,
+    editedByAbfc: new Set([...(assetOpsOutcome.edited ?? []), ...reparented]),
     selfEventCalls: caps.selfEventCalls,
     missing,
     createKinds: caps.createKinds,
