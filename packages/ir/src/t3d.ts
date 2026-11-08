@@ -80,7 +80,8 @@ export function parseAttrs(s: string): Record<string, string> {
   return map;
 }
 
-const unq = (v: string | undefined): string | undefined => (v === undefined ? undefined : v.replace(/^"|"$/g, ""));
+/** Strips the outer quotes of an attribute value and unescapes a backslash-escaped quote or backslash (the exporter escapes both inside a quoted value). */
+const unq = (v: string | undefined): string | undefined => (v === undefined ? undefined : v.replace(/^"|"$/g, "").replace(/\\(["\\])/g, "$1"));
 const unparen = (v: string | undefined): string => (v === undefined ? "" : v.replace(/^\(/, "").replace(/\)$/, ""));
 
 /** `Class'/Path.Name'` -> `/Path.Name`; `None`, empty or absent -> null; a bare path is returned as is. */

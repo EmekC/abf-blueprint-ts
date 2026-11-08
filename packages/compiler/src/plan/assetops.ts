@@ -4,7 +4,7 @@
 import type { Diagnostic } from "@abfc/ir";
 import type { HirClass, HirProgram, ParentFamily } from "../hir.js";
 import type { Manifest } from "../ownership/manifest.js";
-import { matchOrphans, movedDiagnostic } from "../ownership/moved.js";
+import { matchOrphans, movedDiagnostic, pairReason } from "../ownership/moved.js";
 
 /** One `bp_asset_ops` operation; structurally the same as the backend package's `AssetOp`. */
 export type PlannedAssetOp =
@@ -19,7 +19,7 @@ export interface AssetOpCaps { assetOps: readonly string[] }
 export interface AssetOpsPlan {
   /** In execution order: renames, then deletes of class-manager rows, then deletes of assets. */
   ops: PlannedAssetOp[];
-  renames: Array<{ from: string; to: string; class: string }>;
+  renames: Array<{ from: string; to: string; class: string; /** Why the pair was taken for a rename (only for a match by folder and parent). */ reason?: string }>;
   /** Blueprint assets abfc created whose class is gone from the TypeScript (each becomes a tombstone manifest). */
   deletes: string[];
   /** Class-manager rows abfc wrote for the deleted assets (deleted together with them). */
@@ -64,7 +64,7 @@ export function planAssetOps(hir: HirProgram, manifests: readonly Manifest[], mo
       });
       continue;
     }
-    plan.renames.push({ from, to: m.decl.path, class: m.decl.name });
+    plan.renames.push({ from, to: m.decl.path, class: m.decl.name, ...(m.pair !== undefined ? { reason: pairReason(m, mod) } : {}) });
     plan.ops.push({ op: "rename", from, to: m.decl.path });
   }
   if (canDelete) {

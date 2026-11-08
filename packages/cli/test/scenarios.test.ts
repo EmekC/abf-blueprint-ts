@@ -571,24 +571,56 @@ test("(S12b) published class defaults are not applied again after a re-sync; unp
     r.backend.markPublished();
     assert.equal(readManifest(r.dir, "/TestMod/Relay/BP_Relay")?.classDefaultsPublished, true);
 
-    // published: an explicit re-sync (no editor save behind it) brings them back from the mod, nothing is applied and nothing is left to publish
+    // published: an explicit re-sync does not say which assets the editor saved, so the TypeScript defaults are applied again (TypeScript wins)
     x = await r.run(["build", "--resync"]);
     assert.equal(x.code, 0, x.out);
-    assert.equal(defaultsPasses(r), 2, "published defaults are not applied again");
+    assert.equal(defaultsPasses(r), 3, "an explicit re-sync applies the class defaults again");
+    assert.equal(readManifest(r.dir, "/TestMod/Relay/BP_Relay")?.classDefaultsPublished, undefined);
+    x = await r.run(["build"]);
+    assert.match(x.out, /up to date/);
+    assert.equal(defaultsPasses(r), 3);
     x = await r.run(["publish"]);
     assert.equal(x.code, 0, x.out);
-    assert.match(x.out, /nothing to publish/);
+    r.backend.markPublished();
+    assert.equal(readManifest(r.dir, "/TestMod/Relay/BP_Relay")?.classDefaultsPublished, true);
 
     // a changed tag is a changed defaults state: the pass runs and the published flag is cleared until the next publish
     withDirector(r.dir, "EntityDirector_Test", "ClassManager.EntityDirector.Other");
     x = await r.run(["build"]);
     assert.equal(x.code, 0, x.out);
-    assert.equal(defaultsPasses(r), 3);
+    assert.equal(defaultsPasses(r), 4);
     assert.equal(readManifest(r.dir, "/TestMod/Relay/BP_Relay")?.classDefaultsPublished, undefined);
   });
 });
 
-const defaultsAssets = (r: { backend: { calls: Array<{ tool: string; label?: string; specs?: Array<Record<string, any>> }> } }): string[] =>
+test("(S12d) a failed Unreal compile does not keep the published flag of an asset whose defaults pass was planned", async () => {
+  await withRig({ handMadeEvent: false, classManagerRows: true }, async (r) => {
+    withDirector(r.dir, "EntityDirector_Test");
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    r.backend.markPublished();
+    assert.equal(readManifest(r.dir, "/TestMod/Relay/BP_Relay")?.classDefaultsPublished, true);
+    const before = defaultsPasses(r);
+
+    // the defaults pass is planned, the compile fails, the stage is re-synced from the mod (the editor may have saved other defaults there)
+    withDirector(r.dir, "EntityDirector_Test", "ClassManager.EntityDirector.Other");
+    r.backend.reportMessages = [{ severity: "error", asset: "/TestMod/Relay/BP_Relay", message: "boom" }];
+    x = await r.run(["build"]);
+    assert.equal(x.code, 1, x.out);
+    assert.equal(readManifest(r.dir, "/TestMod/Relay/BP_Relay")?.classDefaultsPublished, undefined, "the flag does not survive a planned pass that failed");
+
+    r.backend.reportMessages = [];
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.ok(defaultsPasses(r) > before + 1, "the next build applies the defaults again");
+    x = await r.run(["build"]);
+    assert.match(x.out, /up to date/);
+  });
+});
+
+const defaultsAssets = (r:{ backend: { calls: Array<{ tool: string; label?: string; specs?: Array<Record<string, any>> }> } }): string[] =>
   r.backend.calls.filter((c) => c.tool === "bp_apply" && c.label === "defaults").flatMap((c) => (c.specs ?? []).map((s) => String(s.asset)));
 
 test("(S12c) class defaults of an asset saved in the Mod Editor are applied again; other assets are not", async () => {

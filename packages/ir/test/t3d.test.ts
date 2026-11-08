@@ -72,6 +72,16 @@ function fakeExport(o: Opts = {}): string {
   return lines.join("\r\n");
 }
 
+test("a quoted variable default is unescaped (FText with quotes and a backslash)", () => {
+  const text = [
+    `Begin Object Class=/Script/UnrealEd.Foo Name="Foo_0" ExportPath=/Script/UnrealEd.Foo'/Temp/X.X:Foo_0'`,
+    `   NewVariables(0)=(VarName="Label",VarGuid=B9A5CF56484DE0E7DDD1D99A685F371C,VarType=(PinCategory="text"),FriendlyName="Label",PropertyFlags=65541,DefaultValue="NSLOCTEXT(\\"ns\\", \\"k\\", \\"a\\\\b\\")")`,
+    `End Object`,
+  ].join("\n");
+  const v = parseExport(text).variables.find((x) => x.name === "Label");
+  assert.equal(v?.default, `NSLOCTEXT("ns", "k", "a\\b")`);
+});
+
 test("parseAttrs respects quotes and parentheses", () => {
   const a = parseAttrs('A=1,B="x,y",C=(p=1,q="2)"),D=');
   assert.deepEqual(a, { A: "1", B: '"x,y"', C: '(p=1,q="2)")', D: "" });

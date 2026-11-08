@@ -15,6 +15,15 @@ export interface OrphanMatch {
   isStruct: boolean;
   /** At least one; several = ambiguous. */
   matches: Manifest[];
+  /** Set when the pair was found by folder and parent alone (class and file were renamed together): why abfc takes it for a rename. */
+  pair?: { folder: string; parent: string };
+}
+
+/** The reason a folder-and-parent pair is taken for a rename, with the way to keep both assets (empty for any other match). */
+export function pairReason(m: OrphanMatch, mod: string): string {
+  if (m.pair === undefined) return "";
+  const folder = toModRelative(mod, m.pair.folder) ?? m.pair.folder;
+  return `the only removed and only new class in ${folder} with parent ${m.pair.parent}; to keep both assets, restore the removed class`;
 }
 
 /**
@@ -60,7 +69,10 @@ export function matchOrphans(hir: HirProgram, manifests: readonly Manifest[], mo
     group(`${folderOf(m.asset)}|${m.parent.toLowerCase()}`).olds.push(m);
   }
   for (const g of groups.values()) {
-    if (g.decls.length === 1 && g.olds.length === 1) matches.push({ decl: g.decls[0]!, isStruct: false, matches: [g.olds[0]!] });
+    if (g.decls.length === 1 && g.olds.length === 1) {
+      const d = g.decls[0]!;
+      matches.push({ decl: d, isStruct: false, matches: [g.olds[0]!], pair: { folder: d.path.slice(0, d.path.lastIndexOf("/")), parent: d.parent } });
+    }
   }
   return { orphans, matches };
 }
@@ -81,7 +93,7 @@ export function movedDiagnostic(m: OrphanMatch, mod: string, singleMatch: "warni
       severity: rename ? "warning" : "error",
       code: "ABFC5012",
       message: rename
-        ? `${c.name} was built as ${orphan.asset}${from}; the next abfc build renames the asset to ${c.path} (backend 2.6.0).`
+        ? `${c.name} was built as ${orphan.asset}${from}; the next abfc build renames the asset to ${c.path} (backend 2.6.0)${m.pair !== undefined ? `: ${pairReason(m, mod)}` : ""}.`
         : `${c.name} was built as ${orphan.asset}${from} but its file now gives ${c.path}. ${tail}`,
       span: c.span,
       fix: `keep the asset where it is with path: "${rel}" (quick fix)`,

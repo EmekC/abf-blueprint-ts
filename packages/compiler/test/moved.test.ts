@@ -130,3 +130,13 @@ test("matchOrphans: tombstones are no orphans, struct manifests do not match cla
   assert.equal(matchOrphans(hir, [{ ...old, deleted: true }], "TestMod", { explicit: true }).matches.length, 0, "a tombstone is gone");
   assert.equal(matchOrphans(hir, [{ ...old, structFieldsHash: "h" }], "TestMod", { explicit: true }).matches.length, 0, "a struct manifest is no class");
 });
+
+test("a class and file renamed together are paired by folder and parent, and the message names that reason", () => {
+  const hir = program([cls("Fresh", "/TestMod/Zone/Fresh", "src/Zone/Fresh.ts")]);
+  const old: Manifest = { ...manifest("/TestMod/Zone/Stale", { file: "src/Zone/Stale.ts", class: "Stale", derived: true }), created: true, parent: "/Script/Engine.Actor" };
+  const { matches } = matchOrphans(hir, [old], "TestMod");
+  assert.equal(matches.length, 1);
+  assert.deepEqual(matches[0]!.pair, { folder: "/TestMod/Zone", parent: "/Script/Engine.Actor" });
+  const ds = movedClassDiagnostics(hir, [old], "TestMod");
+  assert.match(ds[0]!.message, /the only removed and only new class in Zone with parent \/Script\/Engine\.Actor; to keep both assets, restore the removed class\.$/);
+});

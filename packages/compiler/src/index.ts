@@ -28,7 +28,7 @@ export {
   writeRetired,
 } from "./ownership/manifest.js";
 export type { Manifest, ManifestUnit } from "./ownership/manifest.js";
-export { matchOrphans, movedClassDiagnostics, movedDiagnostic } from "./ownership/moved.js";
+export { matchOrphans, movedClassDiagnostics, movedDiagnostic, pairReason } from "./ownership/moved.js";
 export type { OrphanMatch } from "./ownership/moved.js";
 export { parentOps, planAssetOps, sameClassPath } from "./plan/assetops.js";
 export type { AssetOpCaps, AssetOpsPlan, ParentPlan, PlannedAssetOp } from "./plan/assetops.js";

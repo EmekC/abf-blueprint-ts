@@ -204,7 +204,8 @@ export async function runAssetOps(
     deleteSourceMap(projectDir, r.from);
     dropUnitCacheAsset(cacheFile, r.from);
     outcome.renamed.push({ from: r.from, to: r.to });
-    output.info(`renamed ${r.from} -> ${r.to}`);
+    const why = o.plan.renames.find((x) => lower(x.from) === lower(r.from))?.reason;
+    output.info(`renamed ${r.from} -> ${r.to}${why !== undefined ? ` (${why})` : ""}`);
   }
   for (const r of repeated) {
     const m = readManifest(projectDir, r.to);

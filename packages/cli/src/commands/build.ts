@@ -147,6 +147,10 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     const m = /^Content\/(.+)\.uasset$/i.exec(rel.replace(/\\/g, "/"));
     if (m !== null) editedInMod.add(`/${mod}/${m[1]!}`.toLowerCase());
   }
+  // A re-sync no conflict or stale file caused (`--resync`, a missing stage) says nothing about which assets the editor saved: every
+  // owned asset counts as saved, so its class defaults are applied again (TypeScript wins). Only the re-sync after changed files
+  // keeps the published assets that were not touched.
+  if (resynced && changedInMod.length === 0) for (const a of owned) editedInMod.add(a.path.toLowerCase());
   // A stage copied from the mod again holds no unpublished work: the manifests follow before anything is planned from them.
   if (resynced) await pruneManifestsToStage(ctx, backend, mod, { ir, owned });
   rec.record("build.stage", since(tStage));
@@ -541,7 +545,8 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
       variables,
       ...(classDefaultsHash !== undefined ? { classDefaultsHash } : {}),
       ...(classDefaultsStageSyncedAt !== undefined ? { classDefaultsStageSyncedAt } : {}),
-      ...(!defaultsDone && old?.classDefaultsPublished === true ? { classDefaultsPublished: true as const } : {}),
+      // Kept only when this build planned no defaults pass; a planned pass that did not succeed clears it (the next build must apply the defaults).
+      ...(a.defaults === undefined && old?.classDefaultsPublished === true ? { classDefaultsPublished: true as const } : {}),
       ...(directorRow !== undefined ? { directorRow } : {}),
       ...(retiredUnpublished.length > 0 ? { retiredUnpublished } : {}),
       ...(source !== undefined ? { source } : {}),
@@ -602,6 +607,15 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
         await backend.stage(env.modDir.value, { discardChanges: true });
         stageResynced = true;
         await pruneManifestsToStage(ctx, backend, mod, { base: manifests, appliedAssets, ir, owned });
+        // The re-synced stage may hold class defaults the editor saved: an asset whose defaults pass was planned here is not "published" any more.
+        for (const pa of planned.plan.assets) {
+          if (pa.defaults === undefined) continue;
+          const m = readManifest(projectDir, pa.asset);
+          if (m !== null && m.classDefaultsPublished === true) {
+            const { classDefaultsPublished: _p, ...rest } = m;
+            writeManifest(projectDir, rest);
+          }
+        }
         output.info("the stage was re-synced from the mod: all unpublished changes in the staged copy were discarded; the next build applies the units again (--keep-failed-stage keeps them for inspection)");
       } catch (e) {
         output.diag({

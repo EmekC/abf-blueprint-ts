@@ -1,4 +1,4 @@
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeSync } from "node:fs";
+import { closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
 import { win32 } from "node:path";
 import { AbfcError } from "@abfc/env";
 
@@ -121,10 +121,37 @@ export function acquireProjectLock(
         fix: "wait until that run has finished, then run the command again. If no abfc is running (for example after a crash of the whole machine), delete .abfc/lock.json.",
       });
     }
+    // Claim the stale file by renaming it away: of two runs that judged the same stale lock only one rename succeeds, so a lock the
+    // other run created meanwhile is never removed by this one.
+    const claimed = `${file}.${process.pid}.stale`;
     try {
-      rmSync(file, { force: true });
-    } catch {
+      renameSync(file, claimed);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") continue; // someone else took it: try again
       return null;
+    }
+    const got = readLock(claimed);
+    const same =
+      got !== null &&
+      (info === null ? got.info === null : got.info !== null && got.info.pid === info.pid && got.info.startedAt === info.startedAt);
+    if (same) {
+      try {
+        rmSync(claimed, { force: true });
+      } catch {
+        // best effort
+      }
+      continue;
+    }
+    // Not the lock judged stale (a fresh one was created in between): put it back when the lock path is free, else it is held.
+    try {
+      linkSync(claimed, file);
+    } catch {
+      // the path is taken (EEXIST) by yet another lock, or the restore is not possible: the next attempt reads whatever is there
+    }
+    try {
+      rmSync(claimed, { force: true });
+    } catch {
+      // best effort
     }
   }
   return null;
