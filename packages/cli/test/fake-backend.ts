@@ -513,6 +513,13 @@ export class FakeBackend implements Backend {
   }
 
   /** Adds a member variable by hand (as the Mod Editor would). */
+  /** Changes the type of an existing variable in the stage (the Mod Editor retyped it, for example after renaming the class it points at). */
+  setVariableType(asset: string, name: string, type: string): void {
+    const v = this.assets.get(asset)?.variables.find((x) => x.name === name);
+    if (v === undefined) throw new Error(`fake stage: no variable ${name} in ${asset}`);
+    v.type = type;
+  }
+
   addHandMadeVariable(asset: string, name: string, type: string): void {
     const a = this.assets.get(asset);
     if (a === undefined) throw new Error(`fake stage: no asset ${asset}`);

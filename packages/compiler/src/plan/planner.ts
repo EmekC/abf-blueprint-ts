@@ -275,7 +275,23 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
         message: `removed own field ${mv.name}: it is no longer declared in TypeScript, so the variable is removed from ${asset.path.slice(asset.path.lastIndexOf("/") + 1)}.`,
       });
     }
-    const newFields = fieldVars.filter((v) => !declared.has(v.name));
+    // TS wins: a field whose TS type is the one recorded but whose variable in the asset has another type (a class the field points at was
+    // renamed in the Mod Editor, which retyped the variable there) is recreated with the TS type.
+    const retypedInAsset = new Set<string>();
+    for (const v of fieldVars) {
+      const onStage = input.snapshotVariableTypes?.get(asset.path)?.get(v.name);
+      if (onStage === undefined || onStage.toLowerCase() === v.type.toLowerCase() || !declared.has(v.name)) continue;
+      if (manifest?.variables.find((m) => m.name === v.name)?.type !== v.type) continue;
+      retypedInAsset.add(v.name);
+      removeVariables.push(v.name);
+      diagnostics.push({
+        severity: "warning",
+        code: "ABFC5014",
+        asset: asset.path,
+        message: `TypeScript wins: the variable ${v.name} had the type ${onStage} in the asset (changed in the Mod Editor); it is recreated as ${v.type}.`,
+      });
+    }
+    const newFields = fieldVars.filter((v) => !declared.has(v.name) || retypedInAsset.has(v.name));
 
     /** What this build replaces or removes from the asset beyond its own changes (TS wins): reported once as ABFC5014. */
     const report: string[] = [];
@@ -561,7 +577,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
 
     const prefixes = picked.map((p) => `abfc_${p.unit.name}_`);
     const variables: IrVariable[] = asset.variables.filter(
-      (v) => (v.temp === true ? prefixes.some((pre) => v.name.startsWith(pre)) : true) && !declared.has(v.name),
+      (v) => (v.temp === true ? prefixes.some((pre) => v.name.startsWith(pre)) : true) && (!declared.has(v.name) || retypedInAsset.has(v.name)),
     );
     // Entry nodes of cross wire targets that stay as they are: their real names come from the manifest.
     const entryNames: Record<string, string> = {};

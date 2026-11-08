@@ -341,3 +341,27 @@ test("(S13) unsaved-changes refusal then conflict re-sync publishes", async () =
     assert.match(x.out, /nothing to publish/);
   });
 });
+
+test("(S14) a field whose variable the Mod Editor retyped (renamed class) is recreated with the TS type", async () => {
+  await withRig({ ...OPS }, async (r) => {
+    tallyOnly(r.dir, tally("BP_Tally"));
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    const before = appliedSpecs(r).length;
+    r.backend.setVariableType(TA, "Total", "float");
+    r.backend.stageConflicts = ["Content/BP_Tally.uasset"];
+    r.backend.keepAssetsOnSync = true;
+
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC2047/);
+    assert.match(x.out, /warning ABFC5014: TypeScript wins: the variable Total had the type float/);
+    const specs = appliedSpecs(r).slice(before).filter((s) => s.asset === TA);
+    assert.ok(specs.some((s) => (s.remove_variables ?? []).includes("Total")), JSON.stringify(specs));
+    assert.ok(specs.some((s) => (s.variables ?? []).some((v: any) => /Total/.test(JSON.stringify(v)))), JSON.stringify(specs));
+
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC5014/);
+  });
+});
