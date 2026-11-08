@@ -976,7 +976,7 @@ test("a counted for with a break lowers to ForLoopWithBreak", () => {
   const k = kit(u);
   const branch = branchesOf(u)[0]!;
   assert.ok(k.has(`${branch.id}.then`, `${loop.id}.Break`) || k.has(`${branch.id}.else`, `${loop.id}.Break`));
-  assert.equal(k.into(`${loop.id}.execute`).length, 1);
+  assert.equal(k.into(`${loop.id}.Execute`).length, 1);
   assert.deepEqual(k.into(`${k.sets("Armed")[0]!.id}.execute`), [`${loop.id}.Completed`]);
 });
 

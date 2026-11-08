@@ -67,9 +67,9 @@ const STD_MACROS_ASSET = "/Engine/EditorBlueprintResources/StandardMacros.Standa
 /** Pin names of the StandardMacros loop macros (their tunnel pins; ForEachLoop takes its exec input on `Exec`, ForLoop on `execute`, verified live). */
 const FOR_EACH = { exec: "Exec", array: "Array", body: "LoopBody", element: "Array Element", index: "Array Index", completed: "Completed" } as const;
 const FOR_LOOP = { exec: "execute", first: "FirstIndex", last: "LastIndex", body: "LoopBody", index: "Index", completed: "Completed" } as const;
-/** The ...WithBreak variants: the same pins plus the `Break` exec input (verify live: Exec/execute, Break, Array Index). */
+/** The ...WithBreak variants: the same pins plus the `Break` exec input (verified live: ForLoopWithBreak takes its exec input on `Execute`, capital E). */
 const FOR_EACH_BREAK = { ...FOR_EACH, brk: "Break" } as const;
-const FOR_LOOP_BREAK = { ...FOR_LOOP, brk: "Break" } as const;
+const FOR_LOOP_BREAK = { ...FOR_LOOP, exec: "Execute", brk: "Break" } as const;
 type StdLoop = "ForEachLoop" | "ForEachLoopWithBreak" | "ForLoop" | "ForLoopWithBreak";
 const STD_LOOP_EXEC: Record<StdLoop, string> = {
   ForEachLoop: FOR_EACH.exec,

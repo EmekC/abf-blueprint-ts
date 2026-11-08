@@ -33,7 +33,7 @@ const CLS = profile.nodeClasses;
 export const RELAY_ASSET = "/TestMod/Relay/BP_Relay";
 
 const EXT_FEATURES = ["reflect", "compile_node_refs", "bp_read_seconds"];
-const EXEC_PINS = new Set(["execute", "then", "else", "CastFailed", "NotValid", "Valid", "Completed", "LoopBody", "Exec", "Break"]);
+const EXEC_PINS = new Set(["execute", "then", "else", "CastFailed", "NotValid", "Valid", "Completed", "LoopBody", "Exec", "Execute", "Break"]);
 
 interface FPin {
   id: string;
