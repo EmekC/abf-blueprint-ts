@@ -126,18 +126,40 @@ export class BP_Beacon extends Actor {
 
 You do not have to remember the names: in VS Code, inside a class body, type `Rec` and pick `ReceiveBeginPlay` from the completion list; it writes the whole method and adds the missing imports. In the same way, typing `PrintS` inside a method offers `KismetSystemLibrary.PrintString` and adds its import. This needs the language server ([language-service.md](language-service.md)) and generated stubs.
 
+### Functions: undecorated methods
+
+A method without a decorator becomes a Blueprint function graph. Its parameters are the inputs and a non-void return type is the output `ReturnValue`; `private` and `protected` become the Blueprint access (the default is public). Call it as `this.name(...)` from events, overrides and other functions:
+
+```ts
+@override override ReceiveBeginPlay(): void {
+  const t = this.runTest(5);
+  this.Last = t;
+}
+
+private runTest(amount: int): int {
+  this.Count = this.Count + amount;
+  return this.Count;
+}
+```
+
+In the Mod Editor the class gets a function graph `runTest` with an entry node, the nodes of the body and a result node, and a call node in the event graph. The graph belongs to the TypeScript: any change to the method recreates the whole graph (and applies the callers in the same class again), a renamed method creates the new graph and removes the old one, and edits made by hand inside the graph are replaced on the next build ([ABFC5014](errors.md#abfc5014)). Functions are impure (they have exec pins). A function needs a backend with the `function_graphs` feature ([ABFC2044](errors.md#abfc2044)).
+
+Not supported: getters and setters, `static` methods, optional or default parameters ([ABFC2099](errors.md#abfc2099)), recursion ([ABFC2085](errors.md#abfc2085)), `await` or latent calls inside a function ([ABFC2086](errors.md#abfc2086)), and a method with the name of a parent member ([ABFC2087](errors.md#abfc2087)).
+
 ### Director with a gameplay tag
 
-A director is an actor the game starts for you when its gameplay tag is present in the class manager. Name the row and the tag:
+A director is a component (`ActorComponent`) that the game adds to its AI director when play begins, when its gameplay tag is present in the class manager. Name the row and the tag:
 
 ```ts
 import { blueprint, director } from "@abfc/runtime";
-import { Actor } from "/Script/Engine";
+import { ActorComponent } from "/Script/Engine";
 
 @director("MyDirector", ClassManager.EntityDirector.MyDirector)
 @blueprint()
-export class BP_MyDirector extends Actor {}
+export class BPC_MyDirector extends ActorComponent {}
 ```
+
+To see it run, use Play In Editor (Play or Simulate) in the Mod Editor on its default map: during play the World Outliner lists `Abiotic_AIDirector` with your class among its components (for example `BPC_MyDirector_C_0`), next to the game's own directors. Another parent than ActorComponent is [ABFC2089](errors.md#abfc2089).
 
 Typing `ClassManager.EntityDirector.` in your editor lists every tag the game and your mod know (they come from `abfc stubs`); a string such as `"ClassManager.EntityDirector.MyDirector"` works as well and autocompletes. A tag the mod does not have yet is created: the build adds it to the mod's tag list (`Config/Tags/ExampleModTags.ini`), `abfc publish` publishes the file, and an open Mod Editor is told about the new tag at publish (only when that fails, [ABFC7015](errors.md#abfc7015) asks you to restart it). Tags a build adds stay in the list even if you remove the director later, because the list is shared mod content. Without a tag the row starts nothing ([ABFC2079](errors.md#abfc2079)).
 

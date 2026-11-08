@@ -17,7 +17,7 @@ import {
   writeSourceMap,
 } from "@abfc/compiler";
 import type { Manifest, ManifestUnit, SourceMapFile } from "@abfc/compiler";
-import { parseExport, sha256, structFieldsHash } from "@abfc/ir";
+import { parseExport, sha256, structFieldsHash, t3dNodeKey } from "@abfc/ir";
 import type { AssetPlan, Diagnostic, IrAsset, IrModule, IrUnit, Span, T3dNode } from "@abfc/ir";
 import { readLock } from "@abfc/stubgen";
 import { win32 } from "node:path";
@@ -485,7 +485,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
         const real = outcome.nodeIds[nodeKey(p.unit, n.id)];
         if (real !== undefined) nodeIds[n.id] = real;
       }
-      const names = Object.values(nodeIds);
+      const names = Object.values(nodeIds).map((real) => t3dNodeKey(p.unit.graph, real));
       const fp = fingerprintUnit(nodes, names);
       const next: ManifestUnit = {
         id: p.unit.id,

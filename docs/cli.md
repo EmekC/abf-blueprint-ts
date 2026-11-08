@@ -205,7 +205,7 @@ The publish also carries the structural changes of the build:
 | `--dry-run` | Print the would-publish list and stop before the copy. |
 | `--full` | Run the release checks first, in this order, stopping at the first failure: 1 stubs lock, 2 check and Blueprint-filter hits, 3 build with `--drift` semantics (editor changes are replaced, TypeScript wins), 4 tests, 5 the mod audit of the staged copy ([ABFC7002](errors.md#abfc7002)), 6 upload file check, 7 the would-publish list, 8 the copy. There is no `abfc audit` command: `abfc publish --full --dry-run` runs gates 1 to 7 without copying. |
 
-`publish --json` result: with `--dry-run` `{changed, added, deleted, config, dryRun, full}`; after a copy `{published, deleted, backup, route, reloadedInPlace, dirtyAfter, reloadedReferencers, skippedDirty, dirtyPublished, compileErrorsAfter}`. `--timings` prints the time of each gate.
+`publish --json` result: with `--dry-run` `{changed, added, deleted, config, dryRun, full}`; after a copy `{published, deleted, config, backup, route, reloadedInPlace, dirtyAfter, reloadedReferencers, skippedDirty, dirtyPublished, compileErrorsAfter, tagsRegistered, tagsUnregistered, tagsStrategy, tagsError}`. `--timings` prints the time of each gate.
 
 ## abfc lsp
 

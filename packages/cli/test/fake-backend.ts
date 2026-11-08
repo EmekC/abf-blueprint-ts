@@ -23,7 +23,7 @@ import type {
 } from "@abfc/backend";
 import { loadProfile } from "@abfc/env";
 import { parseBpType, parseExport, pinObjectText, sha256 } from "@abfc/ir";
-import type { BackendInfo, T3dNode } from "@abfc/ir";
+import type { BackendInfo, IrParam, T3dNode } from "@abfc/ir";
 import { ALL_TOOLS, fixInfo } from "./helpers.js";
 
 const profile = loadProfile();
@@ -96,6 +96,7 @@ interface Spec {
   variable_defaults?: Record<string, string | null>;
   remove_variables?: string[];
   remove_functions?: string[];
+  functions?: Array<{ name: string; inputs?: IrParam[]; outputs?: IrParam[]; access?: string }>;
   struct_fields?: Array<{ name: string; friendly: string; guid: string; type: string }>;
   graphs?: SpecGraph[];
   raw?: Array<{ kind: "graph"; graph: string; text: string } | { kind: "python"; code: string }>;
@@ -154,6 +155,14 @@ export interface FakeBackendOptions {
   classManagerRowTag?: boolean;
   /** The backend has the bp_apply feature `variable_defaults` (`variableDefaults` capability; default false). */
   variableDefaults?: boolean;
+  /** The backend has the bp_apply feature `function_graphs` (`functionGraphs` capability; default true). */
+  functionGraphs?: boolean;
+  /**
+   * Name nodes like Unreal: unique only inside their graph (`<Class>_<n>` counted per asset, graph and class from 9001; a function
+   * graph's entry/result are `K2Node_FunctionEntry_0`/`K2Node_FunctionResult_0`), and write `final_<i>.t3d` with the graphs other than
+   * the EventGraph in reverse order (the real compile T3D lists graphs in another order than export.t3d). Default false.
+   */
+  perGraphNames?: boolean;
 }
 
 const ALL_ASSET_OPS = ["rename", "delete", "reparent", "recreate"];
@@ -251,10 +260,11 @@ function renderVarType(type: string): string {
 }
 
 /** The editor export (copy format) of an asset, laid out like the real one: class stubs block, then the body block per graph. */
-function renderAsset(a: FAsset): string {
+function renderAsset(a: FAsset, opts: { reverseGraphs?: boolean } = {}): string {
   const name = a.path.slice(a.path.lastIndexOf("/") + 1);
   const bp = `${a.path}.${name}`;
-  const graphs = [...new Set(["EventGraph", ...a.nodes.map((n) => n.graph)])];
+  const others = [...new Set(a.nodes.map((n) => n.graph))].filter((g) => g !== "EventGraph");
+  const graphs = ["EventGraph", ...(opts.reverseGraphs ? others.reverse() : others)];
   const out = [`Begin Object Class=/Script/Engine.Blueprint Name="${name}" ExportPath="/Script/Engine.Blueprint'${bp}'"`];
   a.variables.forEach((v, i) => {
     const def = v.default !== undefined ? `,DefaultValue="${v.default.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"` : "";
@@ -462,6 +472,8 @@ export class FakeBackend implements Backend {
     capabilities.reflectDefaults = o.reflectDefaults === true;
     capabilities.classManagerRowTag = o.classManagerRowTag === true && o.classManagerRows === true;
     capabilities.variableDefaults = o.variableDefaults === true;
+    capabilities.functionGraphs = o.functionGraphs !== false;
+    if (o.functionGraphs === false) capabilities.bpApplyFeatures = capabilities.bpApplyFeatures.filter((x) => x !== "function_graphs");
     if (o.structs === true) capabilities.createKinds = [...capabilities.createKinds, "UserDefinedStruct"];
     if (o.structs === true) capabilities.createKinds = [...capabilities.createKinds, "UserDefinedStruct"];
     this.infoValue = {
@@ -796,6 +808,19 @@ export class FakeBackend implements Backend {
         if (!a.nodes.some((n) => n.graph === name)) scripted.push({ asset: spec.asset, message: `cannot remove function ${name}: no such function graph` });
         a.nodes = a.nodes.filter((n) => n.graph !== name);
       }
+      // like the backend's step 5: the signature creates the graph with its entry (and result) node; the body comes in `graphs`
+      for (const fn of spec.functions ?? []) {
+        if (a.nodes.some((n) => n.graph === fn.name)) {
+          scripted.push({ asset: spec.asset, message: `function graph ${fn.name} already exists` });
+          continue;
+        }
+        const flags = fn.access === "private" ? 201588736 : fn.access === "protected" ? 201850880 : 201457664;
+        const perGraph = this.options.perGraphNames === true;
+        a.nodes.push({ name: perGraph ? "K2Node_FunctionEntry_0" : `K2Node_FunctionEntry_${++this.counter}`, cls: "/Script/BlueprintGraph.K2Node_FunctionEntry", graph: fn.name, head: ["NodePosX=0", "NodePosY=0", `ExtraFlags=${flags}`], pins: [] });
+        if ((fn.outputs ?? []).length > 0) {
+          a.nodes.push({ name: perGraph ? "K2Node_FunctionResult_0" : `K2Node_FunctionResult_${++this.counter}`, cls: "/Script/BlueprintGraph.K2Node_FunctionResult", graph: fn.name, head: ["NodePosX=900", "NodePosY=0"], pins: [] });
+        }
+      }
       const nodeIds: Record<string, Record<string, string>> = {};
       if (this.options.selfEventCalls === false && specError === null) specError = this.zeroPinSelfCall(a, spec);
       (spec.graphs ?? []).forEach((g, k) => {
@@ -827,7 +852,7 @@ export class FakeBackend implements Backend {
         }
       }
       assets.push({ asset: spec.asset, node_ids: nodeIds });
-      writeFileSync(join(run, `final_${i}.t3d`), renderAsset(a), "utf8");
+      writeFileSync(join(run, `final_${i}.t3d`), renderAsset(a, { reverseGraphs: this.options.perGraphNames === true }), "utf8");
     });
 
     // a spec error aborts the real apply before anything is compiled, so it comes with no compile messages
@@ -1063,7 +1088,18 @@ export class FakeBackend implements Backend {
     }
   }
 
-  private makeNode(s: SpecNode, graph: string, castTyped: boolean): FNode {
+  private graphCounters = new Map<string, number>();
+
+  /** A new node name: a global counter, or with `perGraphNames` a counter per asset, graph and class (from 9001), like Unreal. */
+  private nodeName(asset: string, graph: string, cls: string): string {
+    if (this.options.perGraphNames !== true) return `${shortOf(cls)}_${++this.counter}`;
+    const k = `${asset}|${graph}|${shortOf(cls)}`;
+    const n = (this.graphCounters.get(k) ?? 9000) + 1;
+    this.graphCounters.set(k, n);
+    return `${shortOf(cls)}_${n}`;
+  }
+
+  private makeNode(asset: string, s: SpecNode, graph: string, castTyped: boolean): FNode {
     const cls = this.nodeClass(s);
     const head = [`NodePosX=${Math.round(s.pos[0])}`, `NodePosY=${Math.round(s.pos[1])}`];
     if (s.k === "call") {
@@ -1082,7 +1118,7 @@ export class FakeBackend implements Backend {
     } else {
       head.push(...(s.props ?? []));
     }
-    const node: FNode = { name: `${shortOf(cls)}_${++this.counter}`, cls, graph, head, pins: [] };
+    const node: FNode = { name: this.nodeName(asset, graph, cls), cls, graph, head, pins: [] };
     for (const w of wildcardPins(cls)) wildcardPin(getPin(node, w.name, w.dir), w.container);
     if (s.k === "std_macro" && (s.name === "ForEachLoop" || s.name === "ForEachLoopWithBreak")) {
       wildcardPin(getPin(node, "Array", "in"), "Array");
@@ -1106,11 +1142,11 @@ export class FakeBackend implements Backend {
         continue;
       }
       a.nodes.splice(at, 1);
-      for (const n of a.nodes) for (const p of n.pins) p.links = p.links.filter((l) => l.node !== r);
+      for (const n of a.nodes) if (n.graph === g.graph) for (const p of n.pins) p.links = p.links.filter((l) => l.node !== r);
     }
     const ids: Record<string, string> = {};
     for (const s of g.add) {
-      const node = this.makeNode(s, g.graph, castTyped);
+      const node = this.makeNode(a.path, s, g.graph, castTyped);
       ids[s.id] = node.name;
       a.nodes.push(node);
       const ce = this.compileError;
@@ -1120,8 +1156,16 @@ export class FakeBackend implements Backend {
     }
     const find = (end: string): { node: FNode; pin: string } => {
       const dot = end.indexOf(".");
-      const name = ids[end.slice(0, dot)];
-      const node = a.nodes.find((n) => n.name === name);
+      const id = end.slice(0, dot);
+      // the reserved ends of a function graph: its own entry and result node
+      const reserved = id === "entry" ? "K2Node_FunctionEntry" : id === "result" ? "K2Node_FunctionResult" : null;
+      if (reserved !== null && ids[id] === undefined) {
+        const own = a.nodes.find((n) => n.graph === g.graph && n.cls.endsWith(reserved));
+        if (own === undefined) throw new Error(`fake stage: wire end ${end} names no ${reserved} in graph ${g.graph}`);
+        return { node: own, pin: end.slice(dot + 1) };
+      }
+      const name = ids[id];
+      const node = a.nodes.find((n) => n.name === name && n.graph === g.graph);
       if (node === undefined) throw new Error(`fake stage: wire end ${end} names no node of this spec`);
       return { node, pin: end.slice(dot + 1) };
     };

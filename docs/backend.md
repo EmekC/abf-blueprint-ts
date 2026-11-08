@@ -26,6 +26,7 @@ Server 2.4.0 and 2.5.0 therefore still work, with these differences from 2.6.0:
 - no `reflectDefaults`: engine parameters stay required in the stubs (only the curated zero defaults of the stub generator apply);
 - no `variable_defaults`: changing the initializer of an existing field leaves the default as it is ([ABFC2084](errors.md#abfc2084));
 - no `std_macro` node kind in `bpApply.nodeKinds` (or no `pinTypes`): array `for..of` and simple counted `for` loops are built as counter loops instead of For Each Loop / For Loop macro nodes ([ABFC2088](errors.md#abfc2088));
+- no `function_graphs`: an undecorated method (a Blueprint function) is refused with [ABFC2044](errors.md#abfc2044);
 - no `staging_status` `stale` list: an asset saved in the Mod Editor that the stage never touched is not noticed as a change; use `abfc build --resync`.
 
 `abfc doctor` prints [ABFC4018](errors.md#abfc4018) with the list of what an older server lacks.
@@ -110,8 +111,9 @@ Warnings and errors from the backend check use the codes below. `abfc doctor` ex
 | `capabilities.variableDefaults` (`bpApply.features` entry `variable_defaults`) | changing the default of an existing variable in place; first appears in backend 2.6.0. Without it: ABFC2084 |
 | `staging_status` `stale` | backend 2.6.0: lists stage files that the stage never touched but whose real file was saved or deleted in the Mod Editor since the sync; abfc treats them like conflicts and re-syncs the stage (ABFC4017) |
 | `capabilities.functionLocals` | always `false` today; abfc hoists temporaries into owned member variables instead |
-| `capabilities.userPureFunctions` | always `false` today; getters are impure functions |
-| `bpApply.features` | per-feature gates, for example `event_meta` (event tooltips, ABFC2071), `self_event_calls` (ABFC4013) and `variable_defaults` (changing the default of an existing variable in place, ABFC2084) |
+| `capabilities.userPureFunctions` | always `false` today; every function is impure (exec pins) |
+| `bpApply.features` | per-feature gates, for example `event_meta` (event tooltips, ABFC2071), `self_event_calls` (ABFC4013), `variable_defaults` (changing the default of an existing variable in place, ABFC2084) and `function_graphs` (own function graphs with access flags, replaced by name, ABFC2044) |
+| `capabilities.functionGraphs` (`bpApply.features` entry `function_graphs`) | backend 2.6.0: `functions` entries in a `bp_apply` spec create function graphs (signature, `access`); a name in both `remove_functions` and `functions` is replaced. Without it: ABFC2044 |
 | `class_manager_row` (`bp_apply` key, backend 2.5.0) | the row name from `@director`; the backend creates the row asset in the class-manager table of the mod if it is missing, with only the row name and the class reference set (no game-specific values), and updates the class reference otherwise |
 
 ## Diagnostics

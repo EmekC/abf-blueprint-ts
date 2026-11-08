@@ -1,4 +1,4 @@
-// HIR -> IR lowering (design 6): one asset per class, one unit per event.
+// HIR -> IR lowering (design 6): one asset per class, one unit per event, override or function.
 import type { IrAsset, IrModule, IrUnit, IrVariable, Profile } from "@abfc/ir";
 import type { HirProgram } from "../hir.js";
 import { UnitBuilder } from "./builder.js";

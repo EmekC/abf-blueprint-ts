@@ -209,3 +209,10 @@ test("stdMacros needs the std_macro node kind AND pinTypes", () => {
   assert.equal(capabilitiesFrom(ALL_TOOLS, null, null).stdMacros, false);
   assert.equal(BP_APPLY_P1_BASE.stdMacros, false);
 });
+
+test("functionGraphs follows the bp_apply feature function_graphs", () => {
+  const info = (features: string[]): RawBackendInfo => ({ protocol: 1, bpApply: { features } }) as RawBackendInfo;
+  assert.equal(capabilitiesFrom([], info(["function_graphs"]), null).functionGraphs, true);
+  assert.equal(capabilitiesFrom([], info(["class_manager_row"]), null).functionGraphs, false);
+  assert.equal(capabilitiesFrom([], null, null).functionGraphs, false);
+});

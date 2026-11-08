@@ -463,9 +463,9 @@ Severity: error · Exit: 1
 
 Meaning: the code uses a Map or Set type, or creates an asset of a kind, that the backend or abfc's current policy does not allow. It is reported before the stage is touched.
 
-Typical cause: an older backend without Map or Set support, or a kind of asset the backend cannot create.
+Typical cause: an older backend without Map or Set support, or a kind of asset the backend cannot create; also a function (an undecorated method) on a backend without the bp_apply feature `function_graphs` (`abfc doctor` shows `function graphs: no`).
 
-Fix: update the backend ([backend.md](backend.md)), or remove the Map, Set or asset kind.
+Fix: update the backend ([backend.md](backend.md)), or remove the Map, Set, asset kind or function.
 
 ### ABFC2046
 
@@ -777,6 +777,36 @@ Typical cause: an older abf-mod-editor-mcp backend.
 
 Fix: update the backend ([backend.md](backend.md)); `abfc doctor` shows `variable defaults: yes` once it can. Or set the default in the Mod Editor.
 
+### ABFC2085
+
+Severity: error · Exit: 1
+
+Meaning: a function (an undecorated method) calls itself, directly or through other functions or events of the same class. Recursion is not supported: abfc has no function local variables in bp_apply, so the temporaries of a function are member variables of the Blueprint, and a recursive call would overwrite them.
+
+Typical cause: `f(n: int): int { return this.f(n - 1); }`, or two functions that call each other.
+
+Fix: rewrite it as a loop (`for`/`while`), or break the cycle by moving one of the calls into an `@event`.
+
+### ABFC2086
+
+Severity: error · Exit: 1
+
+Meaning: a function (an undecorated method) uses `await`, is declared `async`, or calls a latent action (a library call such as `KismetSystemLibrary.Delay`). A Blueprint function finishes in one frame and cannot wait.
+
+Typical cause: moving a body with a `Delay` or another latent call into a helper method.
+
+Fix: keep the latent call in an `@event` or `@override` and call the function from there after the wait.
+
+### ABFC2087
+
+Severity: error · Exit: 1
+
+Meaning: an undecorated method has the name of a member of the parent class (for example an engine event or function), the TypeScript `override` modifier, or a reserved name (`UserConstructionScript`, `ExecuteUbergraph*`). A Blueprint function cannot reuse such a name.
+
+Typical cause: a helper named like an inherited function, or an attempt to implement a parent event without `@override`.
+
+Fix: rename the method, or use `@override` to implement a parent event.
+
 ### ABFC2088
 
 Severity: warning · Exit: 0
@@ -786,6 +816,16 @@ Meaning: the backend has no bp_apply node kind `std_macro`, so the loops of the 
 Typical cause: an older abf-mod-editor-mcp backend.
 
 Fix: update the backend ([backend.md](backend.md)); the loops are rebuilt as macro nodes by the next build.
+
+### ABFC2089
+
+Severity: warning · Exit: -
+
+Meaning: a `@director` class does not derive from ActorComponent. The game starts directors by adding each class-manager director as a component of its AI director actor when play begins, so an Actor (or other) class is never started, although its row and tag are correct.
+
+Typical cause: `extends Actor` copied from an actor example.
+
+Fix: `extends ActorComponent` (or a component class). The build creates the asset again when abfc made it and its family changes (Actor to ActorComponent); a hand-made asset needs the reparent ([ABFC2048](#abfc2048)).
 
 ### ABFC2090
 
@@ -803,7 +843,7 @@ Severity: error · Exit: 1
 
 Meaning: a construct is not supported (the general "outside the subset" error), with the construct named in the message; also raised when the checked IR is invalid.
 
-Typical cause: a statement, operator or class member that has no Blueprint equivalent yet; a template literal where neither a `text` nor a `string` is expected (for example a `name` field); a tagged template.
+Typical cause: a statement, operator or class member that has no Blueprint equivalent yet; on a method: a getter or setter, a `static` method, a `#private` name, an optional, default or rest parameter, a generic method, a method without a body; a value returned from an `@event` or `@override` (put the logic in an undecorated method) or from a void function; a template literal where neither a `text` nor a `string` is expected (for example a `name` field); a tagged template.
 
 Fix: rewrite the code with supported constructs, as the message says. If you think the construct should work, report it with the message and a small example. For a name, convert explicitly: ``KismetStringLibrary.Conv_StringToName(`...${x}`)`` (add `/Script/Engine.KismetStringLibrary` to `stubs.scriptClasses` and run `abfc stubs` if it is missing).
 

@@ -231,6 +231,48 @@ test("manifest and source map files", () => {
   }
 });
 
+test("fingerprintUnit resolves links inside the graph of the linking node (graph-scoped keys)", () => {
+  const pin = (id: string, name: string, dir: "in" | "out", links: Array<{ node: string; pinId: string }> = []): T3dNode["pins"][number] => ({
+    id, name, dir, category: "int", subCategory: "", subCategoryObject: null, container: "None", valueType: null, hidden: false, defaultValue: null, defaultObject: null, links, raw: "",
+  });
+  const mk = (graph: string, name: string, cls: string, pins: T3dNode["pins"]): T3dNode => ({ name, cls, graph, head: [], pins });
+  const ENTRY = "/Script/BlueprintGraph.K2Node_FunctionEntry";
+  const snapshot = new Map<string, T3dNode>();
+  for (const [g, p, pid] of [["FnA", "a", id(1)], ["FnB", "b", id(2)]] as const) {
+    snapshot.set(`${g}/K2Node_FunctionEntry_0`, mk(g, "K2Node_FunctionEntry_0", ENTRY, [pin(pid, p, "out", [{ node: "K2Node_CallFunction_9001", pinId: id(10) }])]));
+    snapshot.set(`${g}/K2Node_CallFunction_9001`, mk(g, "K2Node_CallFunction_9001", CALL, [pin(id(10), "execute", "in", [{ node: "K2Node_FunctionEntry_0", pinId: pid }])]));
+  }
+  snapshot.set("K2Node_CallFunction_9001", mk("EventGraph", "K2Node_CallFunction_9001", CALL, [pin(id(10), "execute", "in")]));
+  const fp = fingerprintUnit(snapshot, ["FnA/K2Node_FunctionEntry_0", "FnA/K2Node_CallFunction_9001"]);
+  assert.deepEqual(fp.links, ["FnA/K2Node_FunctionEntry_0.a > FnA/K2Node_CallFunction_9001.execute"]); // no foreign link: both ends are owned
+  assert.deepEqual(Object.keys(fp.nodeHashes), ["FnA/K2Node_CallFunction_9001", "FnA/K2Node_FunctionEntry_0"]);
+  const onlyCall = fingerprintUnit(snapshot, ["FnA/K2Node_CallFunction_9001"]);
+  assert.deepEqual(onlyCall.links, ["FnA/K2Node_FunctionEntry_0.a > FnA/K2Node_CallFunction_9001.execute"]); // the entry is foreign here
+});
+
+test("compile messages are mapped by graph: the same node name in a function and the event graph", () => {
+  const span = (line: number): Span => ({ file: "src/H.ts", line, col: 3, endLine: line, endCol: 9 });
+  const real = "K2Node_CallFunction_9001";
+  const sm: SourceMapFile = {
+    asset,
+    units: {
+      "event:Go": { span: span(1), nodes: { call0: { span: span(5), real } } },
+      "function:runTest": { span: span(10), nodes: { call0: { span: span(12), real } } },
+    },
+  };
+  const at = (graph?: string) => mapCompileMessages(asset, [{ asset, message: "bad", node: real, ...(graph !== undefined ? { graph } : {}) }], sm, {})[0]!;
+  assert.equal(at("runTest").span?.line, 12);
+  assert.equal(at("EventGraph").span?.line, 5);
+  assert.equal(at().span?.line, 5); // no graph: the EventGraph node
+  assert.equal(at("Elsewhere").code, "ABFC6002");
+  // no graph and no EventGraph node of that name: the only owned node of that name
+  const fnOnly: SourceMapFile = { asset, units: { "function:runTest": sm.units["function:runTest"]! } };
+  assert.equal(mapCompileMessages(asset, [{ asset, message: "bad", node: real }], fnOnly, {})[0]!.span?.line, 12);
+  // nodeIds (real name -> unit/ir id) are keyed by the unit's graph as well
+  const viaIds = mapCompileMessages(asset, [{ asset, message: "bad", node: "N_1", graph: "runTest" }], { asset, units: { "function:runTest": { span: span(10), nodes: { x: { span: span(13), real: null } } } } }, { N_1: "function:runTest/x" });
+  assert.equal(viaIds[0]!.span?.line, 13);
+});
+
 test("compile messages map to owned nodes, hand-made nodes and units", () => {
   const span = (line: number): Span => ({ file: "src/H.ts", line, col: 3, endLine: line, endCol: 9 });
   const sm: SourceMapFile = {

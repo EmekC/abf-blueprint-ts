@@ -27,7 +27,10 @@ export function assignPositions(unit: IrUnit, executePin = "execute"): void {
     else adj.set(a, [b]);
   }
 
-  const entry = (unit.nodes.find((n) => n.sem?.k === "event" || n.sem?.k === "override") ?? unit.nodes[0])?.id;
+  // a function has no entry node in the IR: its wires start at the reserved id `entry`
+  const entry =
+    unit.nodes.find((n) => n.sem?.k === "event" || n.sem?.k === "override")?.id ??
+    (unit.wires.some(([from]) => idOf(from) === "entry") ? "entry" : unit.nodes[0]?.id);
   const col = new Map<string, number>();
   if (entry !== undefined) {
     const color = new Map<string, 1 | 2>();

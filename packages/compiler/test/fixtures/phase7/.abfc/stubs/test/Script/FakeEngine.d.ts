@@ -31,6 +31,18 @@ export declare class Actor extends UObject {
 export declare class FakeController extends Actor {}
 
 /**
+ * @bpPath /Script/FakeEngine.ActorComponent
+ * @bpMeta /Script/CoreUObject.Class
+ * @bpCastPin AsActorComponent
+ */
+export declare class ActorComponent extends UObject {
+  /**
+   * @bpPath /Script/FakeEngine.ActorComponent:ReceiveBeginPlay
+   */
+  ReceiveBeginPlay(): void;
+}
+
+/**
  * @bpPath /Script/FakeEngine.FakeWidget
  * @bpMeta /Script/CoreUObject.Class
  * @bpCastPin AsFakeWidget

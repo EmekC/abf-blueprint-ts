@@ -18,43 +18,49 @@ const dts = (spec: string): string => req.resolve(spec).replace(/\.js$/, ".d.ts"
 const SOURCE = [
   'import { blueprint, director, event } from "@abfc/runtime";',
   'import type { GameplayTag } from "@abfc/runtime";',
-  'import { Actor } from "/Script/FakeEngine";',
+  'import { Actor, ActorComponent } from "/Script/FakeEngine";',
   "",
   'const NOT_LITERAL = "ClassManager.EntityDirector.Var";',
   "",
   '@director("RowLiteral", "ClassManager.EntityDirector.Literal")',
   "@blueprint()",
-  "export class BPC_Literal extends Actor {",
+  "export class BPC_Literal extends ActorComponent {",
   "  @event Ping(): void {}",
   "}",
   "",
   '@director("RowConst", ClassManager.EntityDirector.Known)',
   "@blueprint()",
-  "export class BPC_Const extends Actor {",
+  "export class BPC_Const extends ActorComponent {",
   "  @event Ping(): void {}",
   "}",
   "",
   '@director("RowBad", "Bad Tag")',
   "@blueprint()",
-  "export class BPC_Bad extends Actor {",
+  "export class BPC_Bad extends ActorComponent {",
   "  @event Ping(): void {}",
   "}",
   "",
   '@director("RowVar", NOT_LITERAL)',
   "@blueprint()",
-  "export class BPC_Var extends Actor {",
+  "export class BPC_Var extends ActorComponent {",
   "  @event Ping(): void {}",
   "}",
   "",
   '@director("RowPrefix", "Other.Tag.Name")',
   "@blueprint()",
-  "export class BPC_Prefix extends Actor {",
+  "export class BPC_Prefix extends ActorComponent {",
   "  @event Ping(): void {}",
   "}",
   "",
   '@director("RowMissing")',
   "@blueprint()",
-  "export class BPC_Missing extends Actor {",
+  "export class BPC_Missing extends ActorComponent {",
+  "  @event Ping(): void {}",
+  "}",
+  "",
+  '@director("RowActor", "ClassManager.EntityDirector.ActorDir")',
+  "@blueprint()",
+  "export class BPC_ActorDir extends Actor {",
   "  @event Ping(): void {}",
   "}",
   "",
@@ -134,5 +140,16 @@ test("ABFC2079: no tag is a warning with the suggested tag in data", () => {
     assert.equal(w.length, 1);
     assert.deepEqual(w[0]!.data, { tag: "ClassManager.EntityDirector.RowMissing" });
     assert.equal(hir.classes.find((c) => c.name === "BPC_Missing")!.director!.tag, undefined);
+  });
+});
+
+test("ABFC2089: a director that does not derive from ActorComponent is a warning", () => {
+  withProject((dir) => {
+    const hir = buildHir(loadProgram(dir), { mod: "TestMod" }, profile);
+    const w = inTags(hir.diagnostics).filter((d) => d.code === "ABFC2089");
+    assert.equal(w.length, 1);
+    assert.equal(w[0]!.severity, "warning");
+    assert.match(w[0]!.message, /BPC_ActorDir/);
+    assert.equal(hir.classes.find((c) => c.name === "BPC_ActorDir")!.director!.row, "RowActor");
   });
 });

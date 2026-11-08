@@ -378,6 +378,10 @@ async function copyToMod(ctx: CliContext, rec: Recorder, backend: Backend, list:
     skippedDirty: r.skippedDirty,
     dirtyPublished: r.dirtyPublished,
     compileErrorsAfter: r.compileErrorsAfter,
+    tagsRegistered: r.tagsRegistered,
+    tagsUnregistered: r.tagsUnregistered,
+    tagsStrategy: r.tagsStrategy,
+    tagsError: r.tagsError,
   });
   return output.exitCode();
 }

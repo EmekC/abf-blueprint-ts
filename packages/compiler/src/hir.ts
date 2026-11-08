@@ -5,6 +5,9 @@ import type { Diagnostic, Span } from "@abfc/ir";
 /** bp_apply type grammar, e.g. "int", "object:/Script/Engine.Actor", "array:name". */
 export type BpType = string;
 
+/** Name of the output pin that carries the return value of a Blueprint function (and the result pin of a call of one). */
+export const FUNCTION_RETURN_PIN = "ReturnValue";
+
 /** `actor`: derives from Actor; `component`: from ActorComponent; `widget`: from UserWidget; `object`: anything else. */
 export type ParentFamily = "actor" | "component" | "widget" | "object";
 
@@ -43,13 +46,17 @@ export interface HirClass {
 
 export interface HirEvent {
   name: string;
-  /** `event`: custom event (`@event`); `override`: override of an event/function of a parent class (`@override`). */
-  kind: "event" | "override";
+  /** `event`: custom event (`@event`); `override`: override of an event/function of a parent class (`@override`); `function`: undecorated method = Blueprint function graph. */
+  kind: "event" | "override" | "function";
   /** Class path of the engine class that declares the overridden event (from the stub's `@bpPath`); only for `override`. */
   overrideOf?: string;
   /** Text of the method's JSDoc comment. */
   doc?: string;
   params: Array<{ name: string; type: BpType }>;
+  /** Functions: the Blueprint type of the return value; absent = void. */
+  returnType?: BpType;
+  /** Functions: the access specifier. */
+  access?: "public" | "protected" | "private";
   body: HirStmt[];
   span: Span;
 }
@@ -61,7 +68,7 @@ export type HirStmt =
   | { k: "setSelf"; name: string; type: BpType; value: HirExpr; span: Span }
   | { k: "const"; local: LocalId; name: string; init: HirExpr; uses: number; span: Span }
   | { k: "if"; cond: HirExpr; then: HirStmt[]; else: HirStmt[]; span: Span }
-  | { k: "return"; span: Span }
+  | { k: "return"; value?: HirExpr; span: Span }
   /** `index`: `arr.forEach((x, i) => ...)`: local of the index parameter (the loop index, int). */
   | { k: "forOf"; local: LocalId; name: string; array: HirExpr; elem: BpType; index?: LocalId; body: HirStmt[]; span: Span }
   /** `this.X = c ? a : b`: Branch plus one set per side. */

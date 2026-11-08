@@ -1,6 +1,7 @@
 // Per-unit IR builder: lowers the statements and expressions of one HIR event into nodes and wires.
 import { pinObjectText, unitHash } from "@abfc/ir";
 import type { IrNode, IrUnit, IrVariable, IrWire, Profile, SemanticTag, Span } from "@abfc/ir";
+import { FUNCTION_RETURN_PIN } from "../hir.js";
 import type { HirEvent, HirExpr, HirStmt, LocalId } from "../hir.js";
 import { eventMetaOf } from "./eventmeta.js";
 import { assignPositions } from "./layout.js";
@@ -113,6 +114,17 @@ function exits(list: HirStmt[]): boolean {
   return list.some((s) => s.k === "return" || s.k === "break" || s.k === "continue" || (s.k === "if" && exits(s.then) && exits(s.else)));
 }
 
+/** Number of `return <value>` statements anywhere in a body. */
+function valueReturns(list: HirStmt[]): number {
+  let n = 0;
+  for (const s of list) {
+    if (s.k === "return") n += s.value !== undefined ? 1 : 0;
+    else if (s.k === "if") n += valueReturns(s.then) + valueReturns(s.else);
+    else if (s.k === "forOf" || s.k === "forCount") n += valueReturns(s.body);
+  }
+  return n;
+}
+
 const idOf = (pin: string): string => pin.slice(0, pin.indexOf("."));
 const wire = (a: string, b: string): IrWire => [a as `${string}.${string}`, b as `${string}.${string}`];
 const shortName = (path: string): string => path.slice(path.lastIndexOf(".") + 1);
@@ -137,6 +149,10 @@ export class UnitBuilder {
   private entryId = "";
   private tempCount = 0;
   private loopCount = 0;
+  /** Functions: the only value `return` is the last top-level statement, so its value can feed the result node directly. */
+  private directReturn = false;
+  /** Functions: the return temp `abfc_<name>_r` exists and is read by the result node. */
+  private returnTemp = false;
   private readonly cross: NonNullable<IrUnit["crossWires"]> = [];
 
   constructor(
@@ -148,7 +164,12 @@ export class UnitBuilder {
   build(): IrUnit {
     const P = this.profile.pins;
     const ev = this.event;
-    if (ev.kind === "override") {
+    if (ev.kind === "function") {
+      // no entry node is emitted: the backend's function entry and result nodes are addressed by the reserved ids `entry` and `result`
+      this.entryId = "entry";
+      const last = ev.body[ev.body.length - 1];
+      this.directReturn = valueReturns(ev.body) === 1 && last !== undefined && last.k === "return" && last.value !== undefined;
+    } else if (ev.kind === "override") {
       if (ev.overrideOf === undefined) throw new Error(`ABFC2060: override ${ev.name} has no declaring class`);
       const sem: SemanticTag = { k: "override", class: ev.overrideOf, function: ev.name };
       const ref = `EventReference=(MemberParent="${pinObjectText("class", ev.overrideOf, this.classMeta)}",MemberName="${ev.name}")`;
@@ -167,8 +188,12 @@ export class UnitBuilder {
       id: `${ev.kind}:${ev.name}`,
       kind: ev.kind,
       name: ev.name,
-      graph: "EventGraph",
-      signature: { inputs: ev.params.map((p) => ({ name: p.name, type: p.type })), outputs: [] },
+      graph: ev.kind === "function" ? ev.name : "EventGraph",
+      signature: {
+        inputs: ev.params.map((p) => ({ name: p.name, type: p.type })),
+        outputs: ev.kind === "function" && ev.returnType !== undefined ? [{ name: FUNCTION_RETURN_PIN, type: ev.returnType }] : [],
+        ...(ev.kind === "function" ? { access: ev.access ?? "public" } : {}),
+      },
       locals: [],
       nodes: this.nodes,
       wires: this.wires,
@@ -724,9 +749,34 @@ export class UnitBuilder {
         }
         return;
       }
-      case "return":
+      case "return": {
+        if (s.value === undefined) {
+          this.cur = [];
+          return;
+        }
+        const type = this.event.returnType!;
+        const o = this.operand(s.value, type);
+        if (o.nulls.length > 0) this.unsupported("an optional chain (?.) in a return value; check isValid first", s.span);
+        if (this.directReturn && o.pin !== undefined) {
+          this.link(o.pin, `result.${FUNCTION_RETURN_PIN}`);
+        } else {
+          const temp = `abfc_${this.event.name}_r`;
+          if (!this.returnTemp) this.vars.push({ name: temp, type, flags: ["transient"], origin: s.span, temp: true });
+          const defaults: Record<string, string> = {};
+          const objects: Record<string, string> = {};
+          const set = this.setVar(temp, s.span);
+          this.execInto(set);
+          this.feed(o, set, temp, defaults, objects);
+          this.settle(set, defaults, objects);
+          if (!this.returnTemp) {
+            this.returnTemp = true;
+            this.link(this.getVar(temp, s.span), `result.${FUNCTION_RETURN_PIN}`);
+          }
+        }
+        for (const x of this.cur) this.link(x, `result.${P.execute}`);
         this.cur = [];
         return;
+      }
       case "setSelfCond":
         // c ? a : b assigned to a variable is an if/else with one set per side
         this.stmt({
