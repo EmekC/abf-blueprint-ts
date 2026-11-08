@@ -859,12 +859,14 @@ class HirBuilder {
       const els = node.elseStatement ? this.block(node.elseStatement) : [];
       return { k: "if", cond, then, else: els, span: this.sp(node) };
     }
+    if (ts.isReturnStatement(node) && this.jumps.callback) return this.callbackReturn(node);
     if (ts.isReturnStatement(node)) {
       if (node.expression) f.fail("ABFC2099", "returning a value is not supported", node);
       return { k: "return", span: this.sp(node) };
     }
     if (ts.isForOfStatement(node)) return this.forOf(node);
     if (ts.isForStatement(node)) return this.forCount(node);
+    if (ts.isBreakStatement(node) || ts.isContinueStatement(node)) return this.jump(node);
     if (ts.isTryStatement(node) || ts.isThrowStatement(node)) f.fail("ABFC2020", "try/catch/throw are not supported", node);
     if (ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) f.fail("ABFC2020", "local functions and classes are not supported", node);
     return f.fail("ABFC2099", `statement of kind ${ts.SyntaxKind[node.kind]} is not supported`, node);
@@ -920,6 +922,9 @@ class HirBuilder {
     }
     if (ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression) && ARRAY_MUTATORS.has(e.expression.name.text) && this.isArrayNode(e.expression.expression)) {
       return this.arrayMutation(e, e.expression, this.sp(node));
+    }
+    if (ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression) && e.expression.name.text === "forEach" && this.isArrayNode(e.expression.expression)) {
+      return this.forEachCall(e, e.expression, this.sp(node));
     }
     const h = this.expr(e);
     if (h.k !== "call" && h.k !== "optional" && h.k !== "callOwn") f.fail("ABFC2099", "this expression statement has no effect", e);
@@ -1053,6 +1058,9 @@ class HirBuilder {
     return { k: "arrayOp", op: "removeAt", array: self, index, span };
   }
 
+  /** Loops around the statement being built, counted from the nearest event body or forEach callback (`callback`). */
+  private jumps: { loops: number; callback: boolean } = { loops: 0, callback: false };
+
   private forOf(node: ts.ForOfStatement): HirStmt {
     const f: DiagSink = this.sink;
     if (node.awaitModifier) f.fail("ABFC2099", "for await is not supported", node);
@@ -1068,7 +1076,13 @@ class HirBuilder {
     const sym = this.checker.getSymbolAtLocation(d.name);
     const id = this.nextLocal++;
     if (sym) this.locals.set(sym, { id, name: d.name.text, type: elem, poison: false });
-    const body = this.block(node.statement);
+    this.jumps.loops++;
+    let body: HirStmt[];
+    try {
+      body = this.block(node.statement);
+    } finally {
+      this.jumps.loops--;
+    }
     return { k: "forOf", local: id, name: d.name.text, array, elem, body, span: this.sp(node) };
   }
 
@@ -1093,7 +1107,13 @@ class HirBuilder {
     try {
       const cond = this.expr(node.condition, "bool", true);
       if (cond.type !== "bool") return f.fail("ABFC2012", `the condition of a for loop must be a boolean, not ${cond.type}`, node.condition);
-      const body = this.block(node.statement);
+      this.jumps.loops++;
+      let body: HirStmt[];
+      try {
+        body = this.block(node.statement);
+      } finally {
+        this.jumps.loops--;
+      }
       return { k: "forCount", counter: id, name: d.name.text, init: initE, cond, step, body, span: this.sp(node) };
     } finally {
       if (sym) this.locals.delete(sym); // the counter is not visible after the loop
@@ -1119,6 +1139,67 @@ class HirBuilder {
       }
     }
     return undefined;
+  }
+
+  private jump(node: ts.BreakStatement | ts.ContinueStatement): HirStmt {
+    const f: DiagSink = this.sink;
+    if (node.label) return f.fail("ABFC2099", "labeled break/continue is not supported", node);
+    if (this.jumps.loops === 0) {
+      if (this.jumps.callback) return f.fail("ABFC2090", "break and continue cannot leave a forEach callback; use for..of, or return; to skip to the next element", node);
+      return f.fail("ABFC2099", "break/continue outside a loop", node);
+    }
+    return { k: ts.isBreakStatement(node) ? "break" : "continue", span: this.sp(node) };
+  }
+
+  /** `return` inside a forEach callback: `return;` directly in the callback skips to the next element. */
+  private callbackReturn(node: ts.ReturnStatement): HirStmt {
+    const f: DiagSink = this.sink;
+    if (node.expression) return f.fail("ABFC2090", "a forEach callback cannot return a value", node);
+    if (this.jumps.loops > 0) return f.fail("ABFC2090", "return inside a loop of a forEach callback is not supported; use for..of with break or continue", node);
+    return { k: "continue", span: this.sp(node) };
+  }
+
+  /** `<array>.forEach((x, i) => { ... })` as a statement: the same loop as `for (const x of <array>)`, with an optional index. */
+  private forEachCall(call: ts.CallExpression, callee: ts.PropertyAccessExpression, span: Span): HirStmt {
+    const f: DiagSink = this.sink;
+    if (callee.questionDotToken || call.questionDotToken) f.fail("ABFC2090", "?.forEach is not supported", call);
+    const arg = call.arguments[0];
+    if (call.arguments.length !== 1 || !arg) return f.fail("ABFC2090", "forEach takes exactly one inline callback (no thisArg)", call);
+    const cb = stripParens(arg);
+    if (!ts.isArrowFunction(cb)) return f.fail("ABFC2090", "the forEach callback must be an inline arrow function: (x, i) => { ... }", arg);
+    if (ts.getCombinedModifierFlags(cb) & ts.ModifierFlags.Async) f.fail("ABFC2090", "an async forEach callback is not supported", cb);
+    const third = cb.parameters[2];
+    if (third) f.fail("ABFC2090", "the forEach callback takes (element) or (element, index); the array parameter is not supported", third);
+    for (const p of cb.parameters) {
+      if (!ts.isIdentifier(p.name) || p.initializer || p.dotDotDotToken) f.fail("ABFC2090", "forEach callback parameters must be plain names", p);
+    }
+    if (!ts.isBlock(cb.body)) return f.fail("ABFC2090", "the forEach callback needs a block body: (x) => { ... }", cb.body);
+    const array = this.expr(callee.expression);
+    if (!array.type.startsWith("array:")) return f.fail("ABFC2090", "forEach is only supported over Blueprint arrays", callee.expression);
+    const elem = array.type.slice("array:".length);
+    const elemParam = cb.parameters[0];
+    const id = this.nextLocal++;
+    const name = elemParam && ts.isIdentifier(elemParam.name) ? elemParam.name.text : "item";
+    if (elemParam) {
+      const sym = this.checker.getSymbolAtLocation(elemParam.name);
+      if (sym) this.locals.set(sym, { id, name, type: elem, poison: false });
+    }
+    let index: LocalId | undefined;
+    const indexParam = cb.parameters[1];
+    if (indexParam && ts.isIdentifier(indexParam.name)) {
+      index = this.nextLocal++;
+      const sym = this.checker.getSymbolAtLocation(indexParam.name);
+      if (sym) this.locals.set(sym, { id: index, name: indexParam.name.text, type: "int", poison: false });
+    }
+    const outer = this.jumps;
+    this.jumps = { loops: 0, callback: true };
+    let body: HirStmt[];
+    try {
+      body = this.block(cb.body);
+    } finally {
+      this.jumps = outer;
+    }
+    return { k: "forOf", local: id, name, array, elem, body, span, ...(index !== undefined ? { index } : {}) };
   }
 
   // ---- expressions ----

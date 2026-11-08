@@ -33,7 +33,7 @@ const CLS = profile.nodeClasses;
 export const RELAY_ASSET = "/TestMod/Relay/BP_Relay";
 
 const EXT_FEATURES = ["reflect", "compile_node_refs", "bp_read_seconds"];
-const EXEC_PINS = new Set(["execute", "then", "else", "CastFailed", "NotValid", "Valid", "Completed", "LoopBody", "Exec"]);
+const EXEC_PINS = new Set(["execute", "then", "else", "CastFailed", "NotValid", "Valid", "Completed", "LoopBody", "Exec", "Break"]);
 
 interface FPin {
   id: string;
@@ -646,6 +646,12 @@ export class FakeBackend implements Backend {
     return this.assets.get(asset)?.nodes.find((x) => x.name === node)?.head ?? [];
   }
 
+  /** Number of links of the pins with the given name on a node of the stage (in and out). */
+  pinLinkCount(asset: string, node: string, pin: string): number {
+    const n = this.assets.get(asset)?.nodes.find((x) => x.name === node);
+    return (n?.pins ?? []).filter((p) => p.name === pin).reduce((sum, p) => sum + p.links.length, 0);
+  }
+
   /** Real names of the nodes of an asset, in the stage. */
   nodeNames(asset: string): string[] {
     return (this.assets.get(asset)?.nodes ?? []).map((n) => n.name);
@@ -1078,7 +1084,7 @@ export class FakeBackend implements Backend {
     }
     const node: FNode = { name: `${shortOf(cls)}_${++this.counter}`, cls, graph, head, pins: [] };
     for (const w of wildcardPins(cls)) wildcardPin(getPin(node, w.name, w.dir), w.container);
-    if (s.k === "std_macro" && s.name === "ForEachLoop") {
+    if (s.k === "std_macro" && (s.name === "ForEachLoop" || s.name === "ForEachLoopWithBreak")) {
       wildcardPin(getPin(node, "Array", "in"), "Array");
       wildcardPin(getPin(node, "Array Element", "out"), "None");
     }

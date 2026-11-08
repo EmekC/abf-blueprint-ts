@@ -787,6 +787,16 @@ Typical cause: an older abf-mod-editor-mcp backend.
 
 Fix: update the backend ([backend.md](backend.md)); the loops are rebuilt as macro nodes by the next build.
 
+### ABFC2090
+
+Severity: error · Exit: 1
+
+Meaning: a `forEach` call that abfc cannot turn into a For Each Loop. Only the statement form `arr.forEach((x, i) => { ... })` over a Blueprint array is supported: an inline arrow function with a block body, no `async`, at most the two parameters (element, index) as plain names. Rejected: `?.forEach`, a `thisArg` or a missing callback, a `function` expression or a callback passed by name, `async`, a third (array) parameter, destructured, default or rest parameters, an expression body, `return <value>` in the callback, a `return` inside a loop nested in the callback, `break` or `continue` directly in the callback, and `forEach` over anything that is not a Blueprint array.
+
+Typical cause: a callback passed by name (`arr.forEach(this.Handle)`), an expression body (`(x) => this.Total = x`), a thisArg, `return value`, or a `return` inside a nested loop of the callback.
+
+Fix: write `arr.forEach((x, i) => { ... })` with a block body, or use `for (const x of arr)` with `break`/`continue`. Inside the callback, `return;` skips to the next element.
+
 ### ABFC2099
 
 Severity: error · Exit: 1

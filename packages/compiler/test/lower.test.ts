@@ -910,3 +910,149 @@ test("a counted loop whose start value has null exits: every exit runs into the 
   assert.equal(k.into(`${loop.id}.FirstIndex`).length, 1);
   assert.equal(u.wires.filter((w) => w[0] === `${loop.id}.Completed`).length, 1);
 });
+
+// ---- break / continue / forEach ----
+
+const branchesOf = (u: IrUnit): IrNode[] => u.nodes.filter((n) => n.sem?.k === "branch");
+const outOf = (u: IrUnit, from: string): string[] => u.wires.filter((w) => w[0] === from).map((w) => w[1]);
+
+test("for..of with a break lowers to ForEachLoopWithBreak: the break exit runs into Break, the code after the loop from Completed", () => {
+  const mod = lowerSweep("    for (const pot of this.Pots) {\n      if (!isValid(pot)) break;\n      this.Count = this.Count + 1;\n    }\n    this.Armed = true;");
+  const u = sweepUnit(mod);
+  assert.deepEqual(tempNames(mod), []);
+  assert.equal(macroNodes(u).length, 1);
+  const loop = macroNodes(u, "ForEachLoopWithBreak")[0]!;
+  assert.ok(loop);
+  assert.ok(loop.t3d.props.some((p) => p.includes("StandardMacros:ForEachLoopWithBreak'")));
+  assert.deepEqual(Object.keys(loop.pinTypes ?? {}).sort(), ["Array", "Array Element"]);
+  const k = kit(u);
+  const branch = branchesOf(u)[0]!;
+  const count = k.sets("Count")[0]!;
+  const targets = [...outOf(u, `${branch.id}.then`), ...outOf(u, `${branch.id}.else`)].sort();
+  assert.deepEqual(targets, [`${count.id}.execute`, `${loop.id}.Break`].sort());
+  // the body is wired from LoopBody; the statement after the loop runs from Completed, and nothing else runs into it
+  assert.equal(outOf(u, `${loop.id}.LoopBody`).length, 1);
+  const after = k.sets("Armed")[0]!;
+  assert.deepEqual(k.into(`${after.id}.execute`), [`${loop.id}.Completed`]);
+});
+
+test("for..of with only a continue stays a ForEachLoop: the continuing exit ends the body chain", () => {
+  const mod = lowerSweep("    for (const pot of this.Pots) {\n      if (!isValid(pot)) continue;\n      this.Count = this.Count + 1;\n    }\n    this.Armed = true;");
+  const u = sweepUnit(mod);
+  assert.equal(macroNodes(u, "ForEachLoopWithBreak").length, 0);
+  const loop = macroNodes(u, "ForEachLoop")[0]!;
+  assert.ok(loop);
+  assert.deepEqual(tempNames(mod), []);
+  const k = kit(u);
+  const branch = branchesOf(u)[0]!;
+  const count = k.sets("Count")[0]!;
+  const outs = [outOf(u, `${branch.id}.then`), outOf(u, `${branch.id}.else`)].sort((a, b) => a.length - b.length);
+  assert.deepEqual(outs[0], [], "the continue exit has no outgoing wire");
+  assert.deepEqual(outs[1], [`${count.id}.execute`]);
+  assert.deepEqual(k.into(`${k.sets("Armed")[0]!.id}.execute`), [`${loop.id}.Completed`]);
+});
+
+test("a break only inside an inner loop makes the inner loop a WithBreak macro", () => {
+  const mod = lowerSweep("    for (const pot of this.Pots) {\n      for (const n of this.Names) {\n        if (this.Armed) break;\n        this.Count = this.Count + 1;\n      }\n    }");
+  const u = sweepUnit(mod);
+  assert.equal(macroNodes(u).length, 2);
+  assert.equal(macroNodes(u, "ForEachLoop").length, 1);
+  const inner = macroNodes(u, "ForEachLoopWithBreak");
+  assert.equal(inner.length, 1);
+  const k = kit(u);
+  const branch = branchesOf(u)[0]!;
+  assert.ok(k.has(`${branch.id}.then`, `${inner[0]!.id}.Break`) || k.has(`${branch.id}.else`, `${inner[0]!.id}.Break`));
+});
+
+test("a counted for with a break lowers to ForLoopWithBreak", () => {
+  const mod = lowerSweep("    for (let j = 0; j < 3; j++) {\n      if (j === this.Count) break;\n      this.Count = j;\n    }\n    this.Armed = true;");
+  const u = sweepUnit(mod);
+  assert.deepEqual(tempNames(mod), []);
+  assert.equal(macroNodes(u).length, 1);
+  const loop = macroNodes(u, "ForLoopWithBreak")[0]!;
+  assert.ok(loop);
+  assert.ok(loop.t3d.props.some((p) => p.includes("StandardMacros:ForLoopWithBreak'")));
+  assert.deepEqual(loop.pinDefaults, { FirstIndex: "0", LastIndex: "2" });
+  const k = kit(u);
+  const branch = branchesOf(u)[0]!;
+  assert.ok(k.has(`${branch.id}.then`, `${loop.id}.Break`) || k.has(`${branch.id}.else`, `${loop.id}.Break`));
+  assert.equal(k.into(`${loop.id}.execute`).length, 1);
+  assert.deepEqual(k.into(`${k.sets("Armed")[0]!.id}.execute`), [`${loop.id}.Completed`]);
+});
+
+test("manual loops: break joins the loop exit, continue runs into the increment", () => {
+  const body = [
+    "    for (const pot of this.Pots) {",
+    "      if (this.Count === 7) continue;",
+    "      if (this.Count === 8) break;",
+    "      if (this.Armed) return;",
+    "      this.Count = this.Count + 1;",
+    "    }",
+    "    this.Armed = true;",
+  ].join("\n");
+  const mod = lowerSweep(body);
+  const u = sweepUnit(mod);
+  assert.equal(macroNodes(u).length, 0);
+  assert.deepEqual(tempNames(mod), ["abfc_Sweep_i0"]);
+  const k = kit(u);
+  const after = k.sets("Armed")[0]!;
+  // the loop head's else exit and the break exit both run the code after the loop
+  assert.equal(k.into(`${after.id}.execute`).length, 2);
+  // the increment (the second Set of the counter) is entered by the end of the body and by the continue exit
+  const inc = k.sets("abfc_Sweep_i0")[1]!;
+  assert.equal(k.into(`${inc.id}.execute`).length, 2);
+
+  // loopMacros: false gives the same manual shape for a body without return
+  const plain = "    for (const pot of this.Pots) {\n      if (this.Count === 7) continue;\n      if (this.Count === 8) break;\n      this.Count = this.Count + 1;\n    }\n    this.Armed = true;";
+  const off = lowerSweep(plain, { loopMacros: false });
+  const ou = sweepUnit(off);
+  assert.equal(macroNodes(ou).length, 0);
+  const ok = kit(ou);
+  assert.equal(ok.into(`${ok.sets("Armed")[0]!.id}.execute`).length, 2);
+  assert.equal(ok.into(`${ok.sets("abfc_Sweep_i0")[1]!.id}.execute`).length, 2);
+
+  // a decrementing counted loop is manual: continue runs into the step Set, break joins the exit
+  const dec = lowerSweep("    for (let i = this.Pots.length - 1; i >= 0; i--) {\n      if (i === 3) continue;\n      if (i === 1) break;\n      this.Count = i;\n    }\n    this.Armed = true;");
+  const du = sweepUnit(dec);
+  assert.equal(macroNodes(du).length, 0);
+  const dk = kit(du);
+  const step = dk.sets("abfc_Sweep_i0")[1]!;
+  assert.equal(dk.into(`${step.id}.execute`).length, 2);
+  assert.equal(dk.into(`${dk.sets("Armed")[0]!.id}.execute`).length, 2);
+});
+
+test("forEach lowers like for..of with the index from Array Index (or the counter temp in a manual loop)", () => {
+  const body = "    this.Pots.forEach((p, i) => {\n      if (i === 0) return;\n      this.Count = i;\n    });";
+  const mod = lowerSweep(body);
+  const u = sweepUnit(mod);
+  assert.deepEqual(tempNames(mod), []);
+  assert.equal(macroNodes(u).length, 1);
+  const loop = macroNodes(u, "ForEachLoop")[0]!;
+  assert.ok(loop);
+  const k = kit(u);
+  const count = k.sets("Count")[0]!;
+  assert.ok(k.has(`${loop.id}.Array Index`, `${count.id}.Count`));
+  const branch = branchesOf(u)[0]!;
+  const outs = [outOf(u, `${branch.id}.then`), outOf(u, `${branch.id}.else`)].sort((a, b) => a.length - b.length);
+  assert.deepEqual(outs[0], [], "return; is a continue: its exit ends the chain");
+  assert.deepEqual(outs[1], [`${count.id}.execute`]);
+
+  const off = lowerSweep(body, { loopMacros: false });
+  const ou = sweepUnit(off);
+  assert.equal(macroNodes(ou).length, 0);
+  assert.deepEqual(tempNames(off), ["abfc_Sweep_i0"]);
+  const ok = kit(ou);
+  const src = ok.into(`${ok.sets("Count")[0]!.id}.Count`);
+  assert.equal(src.length, 1);
+  assert.ok(ou.nodes.some((n) => n.sem?.k === "get" && n.sem.name === "abfc_Sweep_i0" && src[0] === `${n.id}.abfc_Sweep_i0`));
+
+  const nested = lowerSweep("    this.Pots.forEach((p) => {\n      for (const n of this.Names) {\n        if (this.Armed) break;\n      }\n    });");
+  const nu = sweepUnit(nested);
+  assert.equal(macroNodes(nu, "ForEachLoop").length, 1);
+  assert.equal(macroNodes(nu, "ForEachLoopWithBreak").length, 1);
+});
+
+test("cast guard: a continue counts as an exit like a return", () => {
+  const u = lowerBody("    for (const w of this.Widgets) {\n      const pot = cast(this.OwnerPC?.GetPawnThing(), BP_FakePot_C);\n      if (!pot) continue;\n      pot?.Ready;\n    }");
+  assert.equal(isValidCount(u), 1);
+});

@@ -62,7 +62,8 @@ export type HirStmt =
   | { k: "const"; local: LocalId; name: string; init: HirExpr; uses: number; span: Span }
   | { k: "if"; cond: HirExpr; then: HirStmt[]; else: HirStmt[]; span: Span }
   | { k: "return"; span: Span }
-  | { k: "forOf"; local: LocalId; name: string; array: HirExpr; elem: BpType; body: HirStmt[]; span: Span }
+  /** `index`: `arr.forEach((x, i) => ...)`: local of the index parameter (the loop index, int). */
+  | { k: "forOf"; local: LocalId; name: string; array: HirExpr; elem: BpType; index?: LocalId; body: HirStmt[]; span: Span }
   /** `this.X = c ? a : b`: Branch plus one set per side. */
   | { k: "setSelfCond"; name: string; type: BpType; cond: HirExpr; a: HirExpr; b: HirExpr; span: Span }
   /** `for (let i = A; cond; i++ | i--)` with an int counter; the counter is only visible in `cond` and `body`. */
@@ -70,7 +71,10 @@ export type HirStmt =
   /** Mutation of an own array variable: `push(x)`, `splice(i, 1)` (removeAt), `length = 0` (clear). `array.type` is the array type, e.g. "array:name". */
   | { k: "arrayOp"; op: "push" | "removeAt" | "clear"; array: { self: string; type: BpType }; value?: HirExpr; index?: HirExpr; span: Span }
   /** Mutation of an own map/set variable: Map `set`/`delete`/`clear`, Set `add`/`delete`/`clear`. `target.type` is e.g. "map:name:int" or "set:name". */
-  | { k: "containerOp"; container: "map" | "set"; op: "add" | "remove" | "clear"; target: { self: string; type: BpType }; key?: HirExpr; value?: HirExpr; span: Span };
+  | { k: "containerOp"; container: "map" | "set"; op: "add" | "remove" | "clear"; target: { self: string; type: BpType }; key?: HirExpr; value?: HirExpr; span: Span }
+  /** `break`/`continue` of the innermost enclosing loop (a `return;` directly in a forEach callback is a `continue`). */
+  | { k: "break"; span: Span }
+  | { k: "continue"; span: Span };
 
 export type HirExpr = (
   | { k: "self" }

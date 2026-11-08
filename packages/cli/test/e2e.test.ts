@@ -1719,6 +1719,75 @@ test("a class whose asset is not in the stage is created once, then built like a
   });
 });
 
+// ---- break / continue / forEach ----
+
+const LOOPS = `import { blueprint, event } from "@abfc/runtime";
+import type { int } from "@abfc/runtime";
+import { Actor } from "/Script/FakeEngine";
+
+@blueprint({ path: "/TestMod/Relay/BP_Loops" })
+export class BP_Loops extends Actor {
+  Items!: int[];
+  Total!: int;
+
+  @event
+  Scan(limit: int): void {
+    for (const x of this.Items) {
+      if (x > limit) break;
+      if (x === 0) continue;
+      this.Total = x;
+    }
+    this.Items.forEach((x, i) => {
+      if (i === 0) return;
+      this.Total = x + i;
+    });
+    for (let i = 0; i < 3; i++) {
+      if (i === limit) break;
+      this.Total = i;
+    }
+  }
+}
+`;
+const LOOPS_ASSET = "/TestMod/Relay/BP_Loops";
+
+test("(h5) a backend with std_macro: break uses the WithBreak macros wired into Break, forEach reads Array Index; a rebuild is up to date", async () => {
+  await withRig({ backendInfo: true, handMadeEvent: false }, async (r) => {
+    writeFileSync(join(r.dir, "src", "Loops.ts"), LOOPS, "utf8");
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC2088/);
+    const macros = r.backend.nodeNames(LOOPS_ASSET).filter((n) => n.startsWith("K2Node_MacroInstance"));
+    assert.equal(macros.length, 3);
+    const withHead = (marker: string): string[] => macros.filter((n) => r.backend.nodeHead(LOOPS_ASSET, n).some((l) => l.includes(marker)));
+    const forEachBreak = withHead(":ForEachLoopWithBreak'");
+    const forBreak = withHead(":ForLoopWithBreak'");
+    const forEach = withHead(":ForEachLoop'");
+    assert.equal(forEachBreak.length, 1);
+    assert.equal(forBreak.length, 1);
+    assert.equal(forEach.length, 1);
+    assert.ok(r.backend.pinLinkCount(LOOPS_ASSET, forEachBreak[0]!, "Break") >= 1);
+    assert.ok(r.backend.pinLinkCount(LOOPS_ASSET, forBreak[0]!, "Break") >= 1);
+    assert.ok(r.backend.pinLinkCount(LOOPS_ASSET, forEach[0]!, "Array Index") >= 1);
+    assert.equal(r.backend.variableNames(LOOPS_ASSET).filter((v) => /^abfc_Scan_i\d+$/.test(v)).length, 0);
+    const applies = r.backend.applyLabels().length;
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /up to date/);
+    assert.equal(r.backend.applyLabels().length, applies, "a second build applies nothing");
+  });
+});
+
+test("(h6) a backend without std_macro: break, continue and forEach are built as counter loops; ABFC2088 once", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    writeFileSync(join(r.dir, "src", "Loops.ts"), LOOPS, "utf8");
+    const x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(countOf(x.out, "ABFC2088"), 1);
+    assert.equal(r.backend.nodeNames(LOOPS_ASSET).filter((n) => n.startsWith("K2Node_MacroInstance")).length, 0);
+    assert.ok(r.backend.variableNames(LOOPS_ASSET).some((v) => /^abfc_Scan_i\d+$/.test(v)));
+  });
+});
+
 // ---- TS wins (A8): sweep of a non-hybrid class, hybrid class keeps hand-made members, automatic re-sync on a conflict ----
 
 const syncCount = (backend: FakeBackend): number => backend.calls.filter((c) => c.tool === "staging_sync").length;
