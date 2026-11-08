@@ -2401,6 +2401,33 @@ test("(A10-10) a manifest without a recorded parent learns it when its asset is 
   });
 });
 
+test("(R2) a reparent lost by a re-sync before the publish is done again by the next build (the manifest follows the stage's parent), also across families", async () => {
+  await withRig(OPS, async (r) => {
+    addParentStubs(r.dir);
+    tallyOnly(r.dir, tally("BP_Tally"));
+    assert.equal((await r.run(["build"])).code, 0);
+    r.backend.markPublished();
+    writeFileSync(join(r.dir, "src", "Tally.ts"), tally("BP_Tally", "Pawn"), "utf8");
+    assert.equal((await r.run(["build"])).code, 0);
+    assert.equal(r.backend.parentOf(TA), "/Script/FakeEngine.Pawn");
+    // the re-sync gives the published Actor asset back
+    let x = await r.run(["build", "--resync"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(r.backend.parentOf(TA), "/Script/FakeEngine.Pawn", "the build reparented it again");
+    assert.deepEqual(r.backend.assetOpsCalls.map((c) => c[0]!.op), ["reparent", "reparent"]);
+    assert.equal(readManifest(r.dir, TA)!.parent, "/Script/FakeEngine.Pawn");
+    // across families: recreate, re-sync, recreate again
+    writeFileSync(join(r.dir, "src", "Tally.ts"), tally("BP_Tally", "ActorComponent"), "utf8");
+    assert.equal((await r.run(["build"])).code, 0);
+    assert.equal(r.backend.parentOf(TA), "/Script/Engine.ActorComponent");
+    x = await r.run(["build", "--resync"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC6001/);
+    assert.equal(r.backend.parentOf(TA), "/Script/Engine.ActorComponent", "the build recreated it again");
+    assert.equal(readManifest(r.dir, TA)!.parent, "/Script/Engine.ActorComponent");
+  });
+});
+
 // ---- Publish: deletions, renames, tag list, re-sync after a failed publish (A11) ----
 
 test("(A11-1) publish after a rename lists the old files as deleted and removes them; the dry run only lists", async () => {

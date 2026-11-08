@@ -2,7 +2,7 @@
 import { win32 } from "node:path";
 import { nodeKey } from "@abfc/backend";
 import type { Backend } from "@abfc/backend";
-import { buildHir, listManifests, loadProgram, lowerChecked, readManifest, readSourceMap, writeManifest, writeSourceMap } from "@abfc/compiler";
+import { buildHir, listManifests, loadProgram, lowerChecked, readManifest, readSourceMap, sameClassPath, writeManifest, writeSourceMap } from "@abfc/compiler";
 import type { CompilerProjectConfig, HirProgram, LoadedProgram, Manifest, SourceMapFile } from "@abfc/compiler";
 import { AbfcError } from "@abfc/env";
 import type { ProjectConfig } from "@abfc/env";
@@ -228,15 +228,27 @@ export async function pruneManifestsToStage(
       const base = o.base?.get(asset) ?? current;
       if (base === null || base.structFieldsHash !== undefined) continue;
       let units = base.units;
+      let stageParent: string | null = null; // the parent the stage holds now (a reparent or recreate of an unpublished stage is gone with the re-sync)
+      if (units.length === 0 && base.parent !== undefined) {
+        try {
+          stageParent = (await readAsset(ctx, backend, asset)).parsed.parentClass;
+        } catch {
+          // unreadable: the recorded parent stays
+        }
+      }
       if (units.length > 0) {
         let held: Set<string>;
         try {
-          held = new Set((await readAsset(ctx, backend, asset)).parsed.nodes.keys());
+          const parsed = (await readAsset(ctx, backend, asset)).parsed;
+          held = new Set(parsed.nodes.keys());
+          stageParent = parsed.parentClass;
         } catch {
           // A stage-only rename is gone after a re-sync: the published nodes are still in the asset under its old path.
           try {
             if (base.renamedFrom === undefined) throw new Error("no earlier path");
-            held = new Set((await readAsset(ctx, backend, base.renamedFrom)).parsed.nodes.keys());
+            const parsed = (await readAsset(ctx, backend, base.renamedFrom)).parsed;
+            held = new Set(parsed.nodes.keys());
+            stageParent = parsed.parentClass;
           } catch {
             // unreadable stage: do not treat it as empty (that would drop published units), keep this manifest as it is
             continue;
@@ -244,8 +256,11 @@ export async function pruneManifestsToStage(
         }
         units = base.units.filter((u) => u.adopt !== null || u.nodes.every((n) => held.has(n)));
       }
-      if (!applied.has(asset) && units.length === base.units.length) continue;
-      const restored: Manifest = { ...base, units };
+      const parentChanged = base.parent !== undefined && stageParent !== null && !sameClassPath(base.parent, stageParent);
+      if (!applied.has(asset) && units.length === base.units.length && !parentChanged) continue;
+      // The family recorded with the old parent no longer says anything about the parent the stage holds: dropped (the next build asks the backend).
+      const { parentFamily: _family, ...rest } = base;
+      const restored: Manifest = parentChanged ? { ...rest, units, parent: stageParent! } : { ...base, units };
       writeManifest(projectDir, restored);
       const irAsset = o.owned?.find((a) => a.path === asset) ?? o.ir?.assets.find((a) => a.path === asset);
       if (irAsset !== undefined) {
