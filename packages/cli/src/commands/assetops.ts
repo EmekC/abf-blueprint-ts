@@ -80,6 +80,7 @@ export async function runAssetOps(
     ...o.plan.renames.flatMap((r) => [r.from, r.to]),
     ...o.plan.deletes,
     ...o.plan.rowDeletes.map((r) => r.row),
+    ...o.manifests.flatMap((m) => m.retiredRows ?? []),
     ...o.manifests.flatMap((m) => (m.renamedFrom !== undefined ? [m.renamedFrom, m.asset] : m.deleted === true ? [m.asset, ...(m.directorRow !== undefined ? [m.directorRow] : [])] : [])),
   ];
   const gone = missingInStage(ctx, o.stagingPath, probe);
@@ -99,11 +100,18 @@ export async function runAssetOps(
   // A tombstone whose asset is back on the stage (re-sync before the publish that deletes it): deleted again.
   const repeatedDeletes = o.manifests.filter((m) => m.deleted === true && can("delete") && !classPaths.has(lower(m.asset)) && exists(m.asset));
   const repeatedRows = repeatedDeletes.flatMap((m) => (m.directorRow !== undefined && exists(m.directorRow) ? [m.directorRow] : []));
+  // A row retired by a changed @director that is back on the stage (re-sync before the publish that deletes it): deleted again, unless a
+  // class uses it (as its current row) or it is already deleted in this call.
+  const inUse = new Set(o.manifests.filter((m) => m.deleted !== true && m.directorRow !== undefined).map((m) => lower(m.directorRow!)));
+  const already = new Set([...rowDeletes.map((r) => r.row), ...repeatedRows].map(lower));
+  const retiredAgain = [
+    ...new Set(o.manifests.flatMap((m) => (can("delete") && m.deleted !== true ? (m.retiredRows ?? []).filter((row) => exists(row) && !inUse.has(lower(row)) && !already.has(lower(row))) : []))),
+  ];
 
   const ops: AssetOp[] = [
     ...renames.map((r): AssetOp => ({ op: "rename", from: r.from, to: r.to })),
     ...repeated.map((r): AssetOp => ({ op: "rename", from: r.from, to: r.to })),
-    ...[...rowDeletes.map((r) => r.row), ...repeatedRows].map((row): AssetOp => ({ op: "delete", asset: row })),
+    ...[...rowDeletes.map((r) => r.row), ...repeatedRows, ...retiredAgain].map((row): AssetOp => ({ op: "delete", asset: row })),
     ...[...deletes, ...repeatedDeletes.map((m) => m.asset)].map((asset): AssetOp => ({ op: "delete", asset })),
   ];
   const outcome: AssetOpsOutcome = { ok: true, renamed: [], deleted: [] };
@@ -175,6 +183,7 @@ export async function runAssetOps(
     outcome.deleted.push(m.asset);
     output.info(`deleted ${m.asset} (again: the stage was re-synced before the delete was published)`);
   }
+  for (const row of retiredAgain) output.info(`deleted ${row} (again: the stage was re-synced before the delete was published)`);
   for (const asset of lostDeletes) {
     deleteManifest(projectDir, asset);
     deleteSourceMap(projectDir, asset);

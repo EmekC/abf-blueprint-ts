@@ -422,6 +422,8 @@ export class FakeBackend implements Backend {
   private changed = new Set<string>();
   /** The mod as published (set by `markPublished`): a resync restores this instead of the initial assets. */
   private published: Map<string, FAsset> | null = null;
+  /** The class-manager rows of the published mod (set by `markPublished`), restored by a resync like the assets. */
+  private publishedRows: Map<string, string> | null = null;
 
   constructor(o: FakeBackendOptions = {}) {
     const withInfo = o.backendInfo === true;
@@ -463,6 +465,7 @@ export class FakeBackend implements Backend {
   /** Publishes the stage as it is now: the mod holds these assets from now on, and a resync restores them (published nodes survive it). */
   markPublished(): void {
     this.published = structuredClone(this.assets);
+    this.publishedRows = new Map(this.rowClasses);
     this.changed.clear();
   }
 
@@ -600,6 +603,7 @@ export class FakeBackend implements Backend {
             ]);
       this.changed.clear();
       this.rowClasses.clear();
+      for (const [k, v] of this.publishedRows ?? []) this.rowClasses.set(k, v);
       this.removedFiles.clear();
     }
     this.staged = true;

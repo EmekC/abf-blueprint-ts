@@ -2558,6 +2558,30 @@ test("(A11-5) a changed @director row deletes the old row on the stage and the n
   });
 });
 
+test("(R3) a changed @director, then --resync before the publish: the old row is back on the stage and the next build deletes it again", async () => {
+  await withRig({ ...OPS, handMadeEvent: false, classManagerRows: true, publishDeletes: true }, async (r) => {
+    addDirector(r.dir, "EntityDirector_Test");
+    assert.equal((await r.run(["build"])).code, 0);
+    r.backend.markPublished();
+    addDirector(r.dir, "EntityDirector_Other");
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.deepEqual(readManifest(r.dir, RELAY_ASSET)!.retiredRows, [DIRECTOR_ROW]);
+    const callsBefore = r.backend.assetOpsCalls.length;
+    x = await r.run(["build", "--resync"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /deleted \/TestMod\/DataTables\/DT_ClassManager\/EntityDirector_Test \(again/);
+    assert.deepEqual(r.backend.assetOpsCalls.slice(callsBefore), [[{ op: "delete", asset: DIRECTOR_ROW }]]);
+    assert.deepEqual(readManifest(r.dir, RELAY_ASSET)!.retiredRows, [DIRECTOR_ROW]);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.directorRow, "/TestMod/DataTables/DT_ClassManager/EntityDirector_Other");
+
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /deleted Content\/DataTables\/DT_ClassManager\/EntityDirector_Test\.uasset/);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.retiredRows, undefined);
+  });
+});
+
 test("(A11-6) without assetOps a changed @director row stays ABFC5013 and nothing is deleted", async () => {
   await withRig({ handMadeEvent: false, classManagerRows: true }, async (r) => {
     addDirector(r.dir, "EntityDirector_Test");
