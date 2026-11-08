@@ -19,7 +19,7 @@ export type TSubclassOf<T> = { readonly __bpClassOf?: T };
 export type TSoftObjectPtr<T> = { readonly __bpSoftObjectOf?: T };
 export type TSoftClassPtr<T> = { readonly __bpSoftClassOf?: T };
 
-/** A gameplay tag constant, e.g. `ClassManager.EntityDirector.MyDirector` (generated into `.abfc/tags.d.ts` by `abfc stubs`). */
+/** A gameplay tag constant, e.g. `ClassManager.EntityDirector.MyDirector` (generated into `.abfc/tags.d.ts` by `abfc generate`). */
 export interface GameplayTag<N extends string = string> {
   readonly __gameplayTag: N;
 }
@@ -76,7 +76,7 @@ export interface StructOptions {
  * verifies it. The row name is a string literal made of A-Z, a-z, 0-9 and _.
  *
  * The optional second argument is the gameplay tag the row holds (`ClassManager.EntityDirector.<Row>`): a generated tag constant
- * (`ClassManager.EntityDirector.MyDirector`, declared in `.abfc/tags.d.ts` by `abfc stubs`) or a string literal. A tag that is not
+ * (`ClassManager.EntityDirector.MyDirector`, declared in `.abfc/tags.d.ts` by `abfc generate`) or a string literal. A tag that is not
  * in the mod's tag list yet is added to `Config/Tags/<mod>Tags.ini` by the build. Without a tag a new row has none and the director
  * never starts (ABFC2079).
  */

@@ -3,7 +3,7 @@ import { win32 } from "node:path";
 import { AbfcError } from "@abfc/env";
 
 /** Commands that change or read the stage or the manifests and therefore run one at a time per project (ABFC4019). */
-export const LOCKED_COMMANDS: readonly string[] = ["build", "test", "publish", "status", "stubs", "adopt"];
+export const LOCKED_COMMANDS: readonly string[] = ["build", "test", "publish", "status", "generate", "adopt"];
 
 /** A lock older than this is replaced even when its process id is alive (the id may have been reused after a crash). */
 export const LOCK_MAX_AGE_MS = 12 * 60 * 60 * 1000;

@@ -978,7 +978,7 @@ test("(S29) a second run while the lock is held is ABFC4019; a stale lock is rep
     // Held by a live process (this one): the run stops before the backend starts and leaves the lock alone.
     const startedBefore = r.started.count;
     writeLockFile(r.dir, process.pid);
-    for (const cmd of ["build", "status", "publish", "stubs", "adopt", "test"]) {
+    for (const cmd of ["build", "status", "publish", "generate", "stubs", "adopt", "test"]) {
       x = await r.run([cmd]);
       assert.equal(x.code, 2, `${cmd}: ${x.out}`);
       assert.ok(

@@ -59,9 +59,9 @@ Both keys are optional. `abfc doctor` prints which source each setting came from
 | --- | --- | --- |
 | `ABF_ABFC_TOOLS=1` | always | registers the opt-in tools `reflect`, `abfc_extensions` and `warm_session`, and makes `backend_info` report `reflect: true` |
 | `ABF_WARM_SESSION=1` | unless `--cold` | keeps one hidden editor alive between operations (a build with several steps starts the editor once). `--cold` removes an inherited value, so the server stays cold even when your shell exports it |
-| `ABF_REFLECT_META` | never | optional, set it yourself. `0` makes `abfc stubs` skip the function tooltip and display-name read in `reflect` (the stubs then carry no hover descriptions). The `reflect` tool argument `meta` wins over the variable. abfc passes no argument, so the variable it inherits decides |
+| `ABF_REFLECT_META` | never | optional, set it yourself. `0` makes `abfc generate` skip the function tooltip and display-name read in `reflect` (the stubs then carry no hover descriptions). The `reflect` tool argument `meta` wins over the variable. abfc passes no argument, so the variable it inherits decides |
 
-Use `ABF_REFLECT_META=0` if the hidden editor crashes during the function-template chunk of `abfc stubs`; the stubs are complete apart from the descriptions.
+Use `ABF_REFLECT_META=0` if the hidden editor crashes during the function-template chunk of `abfc generate`; the stubs are complete apart from the descriptions.
 
 ## abfc doctor
 
@@ -95,7 +95,7 @@ Warnings and errors from the backend check use the codes below. `abfc doctor` ex
 | `capabilities.containerTypes` | `Map` and `Set` types; gate ABFC2044 |
 | `capabilities.warmSession` | warm hidden editor between steps |
 | `capabilities.stageAudit` | `mod_audit` audits the staged copy (`abfc publish --full`) |
-| `capabilities.reflect` | `abfc stubs` (abfc also checks the tool list) |
+| `capabilities.reflect` | `abfc generate` (abfc also checks the tool list) |
 | `capabilities.compileErrorNodeRefs` | compile errors name the node and graph, mapped back to the TypeScript line |
 | `capabilities.createKinds` | asset kinds that `bp_apply` can create (`Blueprint`, `WidgetBlueprint`, `BlueprintInterface`, `UserDefinedStruct`); gate ABFC2044 |
 | `capabilities.gameTest` | `abfc test`, `abfc publish --full` |
@@ -106,7 +106,7 @@ Warnings and errors from the backend check use the codes below. `abfc doctor` ex
 | `capabilities.publishDeletes` | backend 2.6.0: `bp_publish` with `delete_removed` removes files that are gone from the stage (with backup and a conflict check); `abfc publish` lists them as `deleted`. Without it: ABFC7014 |
 | `capabilities.gameplayTags` | backend 2.6.0: `reflect` can list the gameplay tags of the game and the mod (completion of `@director` tags), and the backend adds a missing tag to the stage's `Config/Tags/<mod>Tags.ini` before the editor starts. Without it: ABFC2082, ABFC3012 |
 | `capabilities.liveTags` | backend 2.6.0: `bp_publish` with an open Mod Editor registers the gameplay tags of the real mod's `Config/Tags/<Mod>Tags.ini` that the editor does not know before it reloads the published rows (result keys `tags_registered`, `tags_unregistered`, `tags_strategy`, `tags_error`). Without it: ABFC7015 when the tag list is published while the editor is open |
-| `capabilities.reflectDefaults` | backend 2.6.0: `reflect` returns `meta.defaults` for function parameters, read in Unreal's own order (the metadata key equal to the parameter name, then `CPP_Default_<Param>`); `abfc stubs` makes the trailing defaulted inputs optional. Without it: parameters stay required |
+| `capabilities.reflectDefaults` | backend 2.6.0: `reflect` returns `meta.defaults` for function parameters, read in Unreal's own order (the metadata key equal to the parameter name, then `CPP_Default_<Param>`); `abfc generate` makes the trailing defaulted inputs optional. Without it: parameters stay required |
 | `capabilities.classManagerRowTag` (`bpApply.features` entry `class_manager_row_tag`) | backend 2.6.0: `class_manager_row` accepts `gameplay_tag`, and the row's tag is verified after the write |
 | `capabilities.variableDefaults` (`bpApply.features` entry `variable_defaults`) | changing the default of an existing variable in place; first appears in backend 2.6.0. Without it: ABFC2084 |
 | `staging_status` `stale` | backend 2.6.0: lists stage files that the stage never touched but whose real file was saved or deleted in the Mod Editor since the sync; abfc treats them like conflicts and re-syncs the stage (ABFC4017) |

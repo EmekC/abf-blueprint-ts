@@ -5,7 +5,9 @@ export * from "./runs.js";
 export * from "./main.js";
 export * from "./version.js";
 export { doctor } from "./commands/doctor.js";
-export { stubs } from "./commands/stubs.js";
+export { generate } from "./commands/generate.js";
+/** @deprecated renamed to `generate` (the `abfc generate` command); kept for existing imports. */
+export { generate as stubs } from "./commands/generate.js";
 export { ensureStage } from "./commands/stage.js";
 export { adopt } from "./commands/adopt.js";
 export { build, runBuild } from "./commands/build.js";

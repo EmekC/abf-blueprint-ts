@@ -48,7 +48,7 @@ Error codes link to [errors.md](errors.md). For step-by-step help see [troublesh
 
 - **What users hit:** `KismetSystemLibrary.PrintString("hi")` failed to type-check because the stub demanded all parameters.
 - **What changed:** parameters with an engine default are optional in the generated stubs (`InString?: string`, marked `@bpDefault`). An omitted argument sets no pin, so the node keeps the default Unreal itself fills in, exactly as when you place the node in the editor. A short curated list covers common functions whose engine default is not readable (for example `GetPlayerCharacter()`, and the sweep, teleport and teleport-physics booleans of the actor move and rotate functions). A default found by the backend always wins over the curated one.
-- **How to use it now:** run `abfc stubs` once with backend 2.6.0, then leave out arguments you do not need (`PrintString("hi")`, `Delay()`, `GetPlayerCharacter()`).
+- **How to use it now:** run `abfc generate` once with backend 2.6.0, then leave out arguments you do not need (`PrintString("hi")`, `Delay()`, `GetPlayerCharacter()`).
 
 #### P7. No completion in the editor
 
@@ -94,8 +94,8 @@ These were found by running abfc against a real mod through the Mod Editor, with
 - **Intermediate stub graphs** created by Unreal are never swept as hand-made.
 - **A rename to many classes at once** (a folder moved with 21 classes) works: operations are sent in chunks of 20.
 - **A source root change** (`sourceRoot`) that keeps the folder structure changes no asset path; a deeper root renames every class in one build.
-- **`abfc init`** on an existing project changes nothing that exists (everything is `kept`), and a project copied without `.abfc` is repaired by `abfc stubs`.
-- **A project without its generated folders** (a clone with `.abfc/cache`, stubs and `tags.d.ts` missing) now says `abfc stubs` is needed (ABFC3003).
+- **`abfc init`** on an existing project changes nothing that exists (everything is `kept`), and a project copied without `.abfc` is repaired by `abfc generate`.
+- **A project without its generated folders** (a clone with `.abfc/cache`, stubs and `tags.d.ts` missing) now says `abfc generate` is needed (ABFC3003).
 - **`abfc test` and renames** work together: a renamed class and its test file build and pass, the harness is never published.
 
 ## Limitations
@@ -108,7 +108,7 @@ These are known and documented; work around them as described.
 - **New gameplay tags need an editor restart only when registration fails** (ABFC7015, which names the tags). Do not save the director row there before restarting. Tags that abfc registered live can drop out of the open editor again after a tag-settings refresh in the editor itself (Project Settings > GameplayTags changes); the next `abfc publish` registers them again, and a restart always loads them.
 - **Play In Editor.** `abfc build` works while Play In Editor runs, but `abfc publish` is refused (ABFC7005) until you stop it. abfc never stops it or clicks in the editor.
 - **Publish with unsaved changes** in the open Mod Editor is refused (ABFC7005) and names the assets. Save or revert them, then publish again; the next build re-syncs and applies the TypeScript on top.
-- **"Staged file still in use" (WinError 32).** A virus scanner, the search indexer, a leftover hidden editor or a second tool using the same mod can hold a staged file for a moment. The backend waits up to 60 seconds and names the holder in the message ("nothing was changed; wait a moment and run the command again"). If it still fails, run the same command again. It was seen right after `abfc stubs` and when two abfc runs overlapped (now ABFC4019).
+- **"Staged file still in use" (WinError 32).** A virus scanner, the search indexer, a leftover hidden editor or a second tool using the same mod can hold a staged file for a moment. The backend waits up to 60 seconds and names the holder in the message ("nothing was changed; wait a moment and run the command again"). If it still fails, run the same command again. It was seen right after `abfc generate` and when two abfc runs overlapped (now ABFC4019).
 
 ### Deleting and renaming
 
@@ -136,7 +136,7 @@ These are known and documented; work around them as described.
 - **A real editor edit in the same build as a rename or reparent of that asset** is replaced without the ABFC5014 line, because abfc cannot tell its own reference fix from your edit. The TypeScript still wins.
 - **Hand-made variables and a non-empty widget tree** could not be created through the editor's Python in the live checks, so those sweeps are covered by fake-backend tests only. In use they behave as described under P4.
 - **Class defaults edited by hand** in the Mod Editor (and saved) are applied from the TypeScript again at the next build; keep defaults in `@blueprint` options.
-- **`_Manual` hand-made member lists** in the stubs are not refreshed by a build after the sweep removed a member. Run `abfc stubs` to refresh them.
+- **`_Manual` hand-made member lists** in the stubs are not refreshed by a build after the sweep removed a member. Run `abfc generate` to refresh them.
 - **Takeover after a lost manifest** (`.abfc/manifest` deleted or from another machine): the next build re-applies every unit, republishes all assets once, and prints ABFC5014 for the hand-made events it replaced. An override's old event node counts as hand-made until you run `abfc build --drift` once. The message `created struct` can appear for a struct that already existed.
 - **`--resync` re-applies class defaults** of every owned asset (one extra publish of those assets), because a re-synced stage holds the editor's version.
 - **A touch-save in the Mod Editor** of a class with class defaults makes the next publish include that asset once.

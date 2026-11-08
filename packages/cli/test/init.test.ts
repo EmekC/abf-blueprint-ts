@@ -38,7 +38,7 @@ const read = (s: Setup, ...parts: string[]): string => s.fake.files[win32.join(T
 
 test("init --mod moda --yes writes the project files, the sample and the user config", async () => {
   const s = setup();
-  const code = await main(["init", TARGET, "--mod", "moda", "--yes", "--no-stubs"], s.cap.deps);
+  const code = await main(["init", TARGET, "--mod", "moda", "--yes", "--no-generate"], s.cap.deps);
   assert.equal(code, 0, s.cap.text());
   const inTarget = s.cap.writes.filter((p) => p !== USER_CONFIG).map(rel).sort();
   assert.deepEqual(inTarget, [
@@ -84,11 +84,11 @@ test("init --mod moda --yes writes the project files, the sample and the user co
 
 test("init twice with the same answers changes nothing", async () => {
   const s = setup();
-  assert.equal(await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs"], s.cap.deps), 0, s.cap.text());
+  assert.equal(await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-generate"], s.cap.deps), 0, s.cap.text());
   const before = JSON.stringify(s.fake.files);
   s.cap.writes.length = 0;
   s.cap.lines.length = 0;
-  const code = await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs"], s.cap.deps);
+  const code = await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-generate"], s.cap.deps);
   assert.equal(code, 0, s.cap.text());
   assert.deepEqual(s.cap.writes, []);
   assert.equal(JSON.stringify(s.fake.files), before);
@@ -99,25 +99,25 @@ test("init twice with the same answers changes nothing", async () => {
 
 test("init without --mod on a linked project keeps the project's mod", async () => {
   const s = setup();
-  assert.equal(await main(["init", TARGET, "--mod", "ModB", "--yes", "--no-stubs"], s.cap.deps), 0, s.cap.text());
+  assert.equal(await main(["init", TARGET, "--mod", "ModB", "--yes", "--no-generate"], s.cap.deps), 0, s.cap.text());
   s.cap.writes.length = 0;
-  assert.equal(await main(["init", TARGET, "--yes", "--no-stubs"], s.cap.deps), 0, s.cap.text());
+  assert.equal(await main(["init", TARGET, "--yes", "--no-generate"], s.cap.deps), 0, s.cap.text());
   assert.deepEqual(s.cap.writes, []);
   assert.equal((JSON.parse(read(s, "abf.config.json")) as { mod: { name: string } }).mod.name, "ModB");
 });
 
 test("init --mod other --yes switches the mod of a schema-2 project (updated)", async () => {
   const s = setup();
-  assert.equal(await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs"], s.cap.deps), 0, s.cap.text());
+  assert.equal(await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-generate"], s.cap.deps), 0, s.cap.text());
   s.cap.lines.length = 0;
-  assert.equal(await main(["init", TARGET, "--mod", "modb", "--yes", "--no-stubs"], s.cap.deps), 0, s.cap.text());
+  assert.equal(await main(["init", TARGET, "--mod", "modb", "--yes", "--no-generate"], s.cap.deps), 0, s.cap.text());
   assert.equal((JSON.parse(read(s, "abf.config.json")) as { mod: { name: string } }).mod.name, "ModB");
   assert.match(s.cap.text(), /updated\s+abf\.config\.json/);
 });
 
 test("an unknown mod gives ABFC1042 with the mods found and writes nothing", async () => {
   const s = setup();
-  const code = await main(["init", TARGET, "--mod", "Nope", "--yes", "--no-stubs"], s.cap.deps);
+  const code = await main(["init", TARGET, "--mod", "Nope", "--yes", "--no-generate"], s.cap.deps);
   const out = s.cap.text();
   assert.equal(code, 1, out);
   assert.match(out, /error ABFC1042/);
@@ -129,14 +129,14 @@ test("an unknown mod gives ABFC1042 with the mods found and writes nothing", asy
 
 test("an empty mods folder gives ABFC1044", async () => {
   const s = setup({}, /\\(ModA|ModB)\\/);
-  const code = await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs"], s.cap.deps);
+  const code = await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-generate"], s.cap.deps);
   assert.equal(code, 1, s.cap.text());
   assert.match(s.cap.text(), /error ABFC1044/);
 });
 
 test("a target inside a mod folder gives ABFC1020 (exit 3) and writes nothing", async () => {
   const s = setup();
-  const code = await main(["init", win32.join(s.modsDir, "ModA", "ts"), "--mod", "ModA", "--yes", "--no-stubs"], s.cap.deps);
+  const code = await main(["init", win32.join(s.modsDir, "ModA", "ts"), "--mod", "ModA", "--yes", "--no-generate"], s.cap.deps);
   assert.equal(code, 3, s.cap.text());
   assert.match(s.cap.text(), /error ABFC1020/);
   assert.deepEqual(s.cap.writes, []);
@@ -144,7 +144,7 @@ test("a target inside a mod folder gives ABFC1020 (exit 3) and writes nothing", 
 
 test("a target inside another project gives ABFC1040", async () => {
   const s = setup({ "C:\\Work\\outer\\abf.config.json": '{"mod":{"name":"ModA"}}' });
-  const code = await main(["init", "C:\\Work\\outer\\inner", "--mod", "ModA", "--yes", "--no-stubs"], s.cap.deps);
+  const code = await main(["init", "C:\\Work\\outer\\inner", "--mod", "ModA", "--yes", "--no-generate"], s.cap.deps);
   assert.equal(code, 1, s.cap.text());
   assert.match(s.cap.text(), /error ABFC1040/);
   assert.deepEqual(s.cap.writes, []);
@@ -152,12 +152,12 @@ test("a target inside another project gives ABFC1040", async () => {
 
 test("without a terminal and without --yes it is ABFC1041; --yes without --mod on a new folder too", async () => {
   const s = setup();
-  const code = await main(["init", TARGET, "--mod", "ModA", "--no-stubs"], s.cap.deps);
+  const code = await main(["init", TARGET, "--mod", "ModA", "--no-generate"], s.cap.deps);
   assert.equal(code, 1, s.cap.text());
   assert.match(s.cap.text(), /error ABFC1041/);
   assert.match(s.cap.text(), /--mod <name> --yes/);
   s.cap.lines.length = 0;
-  assert.equal(await main(["init", TARGET, "--yes", "--no-stubs"], s.cap.deps), 1);
+  assert.equal(await main(["init", TARGET, "--yes", "--no-generate"], s.cap.deps), 1);
   assert.match(s.cap.text(), /error ABFC1041/);
   assert.deepEqual(s.cap.writes, []);
 });
@@ -172,7 +172,7 @@ test("a schema-1 project is upgraded with a .v1.bak and its machine keys move to
   const s = setup({ [win32.join(TARGET, "abf.config.json")]: v1, [win32.join(TARGET, "src", "A.ts")]: "export {};\n" });
   // The old project config named the mods folder; make it exist so doctor can still find the mod.
   s.fake.files[win32.join("D:\\OtherMods", "ModA", "ModA.uplugin")] = "{}";
-  const code = await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs"], s.cap.deps);
+  const code = await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-generate"], s.cap.deps);
   assert.equal(code, 0, s.cap.text());
   assert.equal(read(s, "abf.config.json.v1.bak"), v1);
   const cfg = JSON.parse(read(s, "abf.config.json")) as { schemaVersion: number; stubs: { modAssets: string[] }; modsDir?: string };
@@ -195,7 +195,7 @@ test("a schema-1 upgrade keeps mod.dir and headlessDir in the project config (in
   });
   const s = setup({ [win32.join(TARGET, "abf.config.json")]: v1, [win32.join(TARGET, "src", "A.ts")]: "export {};\n" });
   s.fake.files[win32.join("D:\\OtherMods", "ModA", "ModA.uplugin")] = "{}";
-  const code = await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs"], s.cap.deps);
+  const code = await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-generate"], s.cap.deps);
   assert.equal(code, 0, s.cap.text());
   const cfg = JSON.parse(read(s, "abf.config.json")) as { schemaVersion: number; mod: { name: string; dir?: string }; headlessDir?: string; modsDir?: string };
   assert.equal(cfg.schemaVersion, 2);
@@ -219,7 +219,7 @@ test("a schema-1 upgrade without any user config file removes no machine key fro
   s.fake.files[win32.join("D:\\OtherMods", "ModA", "ModA.uplugin")] = "{}";
   delete s.fake.env.ABFC_USER_CONFIG;
   delete s.fake.env.APPDATA;
-  await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs"], s.cap.deps);
+  await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-generate"], s.cap.deps);
   const cfg = JSON.parse(read(s, "abf.config.json")) as { schemaVersion: number; modsDir?: string };
   assert.equal(cfg.schemaVersion, 2);
   assert.equal(cfg.modsDir, "D:\\OtherMods");
@@ -243,7 +243,7 @@ test("--yes on a schema-1 project finds the Mod Editor and mods folder from its 
     },
     new RegExp(`ModEdit_X1\\\\.*\\.exe$|^${modsRoot}\\\\`, "i"),
   );
-  const code = await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs"], s.cap.deps);
+  const code = await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-generate"], s.cap.deps);
   assert.doesNotMatch(s.cap.text(), /ABFC1001|ABFC1003/);
   assert.equal(code, 0, s.cap.text());
   const user = JSON.parse(s.fake.files[USER_CONFIG] as string) as { editor: { root: string }; modsDir: string };
@@ -253,7 +253,7 @@ test("--yes on a schema-1 project finds the Mod Editor and mods folder from its 
 
 test("an existing user config is merged: other keys stay and a .bak is written", async () => {
   const s = setup({ [USER_CONFIG]: JSON.stringify({ custom: 1, headlessDir: "C:\\abfc-headless" }) });
-  const code = await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs"], s.cap.deps);
+  const code = await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-generate"], s.cap.deps);
   assert.equal(code, 0, s.cap.text());
   const user = JSON.parse(s.fake.files[USER_CONFIG] as string) as Record<string, unknown>;
   assert.equal(user.custom, 1);
@@ -265,7 +265,7 @@ test("an existing user config is merged: other keys stay and a .bak is written",
 test("an existing tsconfig with the ts-plugin and no extends is left alone with ABFC1043 warnings", async () => {
   const tsconfig = '{ "compilerOptions": { "plugins": [{ "name": "@abfc/ts-plugin" }] } }\n';
   const s = setup({ [win32.join(TARGET, "tsconfig.json")]: tsconfig });
-  const code = await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs"], s.cap.deps);
+  const code = await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-generate"], s.cap.deps);
   assert.equal(code, 0, s.cap.text());
   assert.equal(read(s, "tsconfig.json"), tsconfig);
   assert.ok(!s.cap.writes.some((p) => p.endsWith("tsconfig.json")));
@@ -275,20 +275,20 @@ test("an existing tsconfig with the ts-plugin and no extends is left alone with 
   assert.match(out, /kept\s+tsconfig\.json/);
 });
 
-test("init --no-stubs writes .abfc/tags.d.ts with the mod's ini tags; an existing file is kept", async () => {
+test("init --no-generate writes .abfc/tags.d.ts with the mod's ini tags; an existing file is kept", async () => {
   const modsDir = win32.dirname(setup().fake.modDir);
   const ini = '[/Script/GameplayTags.GameplayTagsSettings]\r\n+GameplayTagList=(Tag="Mod.Own.Tag",DevComment="")\r\n';
   const s = setup({ [win32.join(modsDir, "ModA", "Config", "Tags", "ExampleTags.ini")]: ini });
-  assert.equal(await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs"], s.cap.deps), 0, s.cap.text());
+  assert.equal(await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-generate"], s.cap.deps), 0, s.cap.text());
   assert.match(read(s, ".abfc", "tags.d.ts"), /"Mod\.Own\.Tag": true/);
   assert.match(read(s, ".abfc", "tags.d.ts"), /declare const Mod\b/);
   assert.match(s.cap.text(), /written\s+\.abfc\/tags\.d\.ts/);
-  // a second run keeps what `abfc stubs` / `abfc build` may have extended
+  // a second run keeps what `abfc generate` / `abfc build` may have extended
   const again = setup({
     [win32.join(modsDir, "ModA", "Config", "Tags", "ExampleTags.ini")]: ini,
     [win32.join(TARGET, ".abfc", "tags.d.ts")]: "// game tags too\n",
   });
-  assert.equal(await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs"], again.cap.deps), 0, again.cap.text());
+  assert.equal(await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-generate"], again.cap.deps), 0, again.cap.text());
   assert.equal(read(again, ".abfc", "tags.d.ts"), "// game tags too\n");
   assert.match(again.cap.text(), /kept\s+\.abfc\/tags\.d\.ts/);
 });
@@ -297,16 +297,16 @@ test("init warns ABFC1043 when the kept tsconfig.json has its own files (it repl
   const s = setup({
     [win32.join(TARGET, "tsconfig.json")]: JSON.stringify({ extends: "./.abfc/tsconfig.paths.json", files: ["src/main.ts"] }),
   });
-  assert.equal(await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs"], s.cap.deps), 0, s.cap.text());
+  assert.equal(await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-generate"], s.cap.deps), 0, s.cap.text());
   assert.match(s.cap.text(), /warning ABFC1043: tsconfig\.json has its own "files"/);
   const plain = setup({ [win32.join(TARGET, "tsconfig.json")]: JSON.stringify({ extends: "./.abfc/tsconfig.paths.json" }) });
-  assert.equal(await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs"], plain.cap.deps), 0, plain.cap.text());
+  assert.equal(await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-generate"], plain.cap.deps), 0, plain.cap.text());
   assert.doesNotMatch(plain.cap.text(), /has its own "files"/);
 });
 
 test("an existing .gitignore only gets the missing lines appended", async () => {
   const s = setup({ [win32.join(TARGET, ".gitignore")]: "dist/\n.abfc/stubs/" });
-  assert.equal(await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs"], s.cap.deps), 0, s.cap.text());
+  assert.equal(await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-generate"], s.cap.deps), 0, s.cap.text());
   const lines = read(s, ".gitignore").split("\n");
   assert.deepEqual(lines.slice(0, 2), ["dist/", ".abfc/stubs/"]);
   assert.equal(lines.filter((l) => l === ".abfc/stubs/").length, 1);
@@ -315,9 +315,29 @@ test("an existing .gitignore only gets the missing lines appended", async () => 
   assert.match(s.cap.text(), /updated\s+\.gitignore/);
 });
 
+test("--no-stubs (deprecated) still skips generate and warns on stderr", async () => {
+  const s = setup();
+  const outLines: string[] = [];
+  const errLines: string[] = [];
+  s.cap.deps.stdout = (l) => outLines.push(l);
+  s.cap.deps.stderr = (l) => errLines.push(l);
+  const code = await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs", "--json"], s.cap.deps);
+  assert.equal(code, 0, outLines.join("\n") + errLines.join("\n"));
+  const doc = JSON.parse(outLines.join("\n")) as { result: { stubs: number | null } };
+  assert.equal(doc.result.stubs, null);
+  assert.deepEqual(errLines.filter((l) => /deprecated/.test(l)), ["abfc: warning: --no-stubs is deprecated; use --no-generate"]);
+
+  const fresh = setup();
+  const freshErr: string[] = [];
+  fresh.cap.deps.stdout = () => {};
+  fresh.cap.deps.stderr = (l) => freshErr.push(l);
+  assert.equal(await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-generate", "--json"], fresh.cap.deps), 0);
+  assert.deepEqual(freshErr.filter((l) => /deprecated/.test(l)), []);
+});
+
 test("--json prints one document with the result shape", async () => {
   const s = setup();
-  const code = await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs", "--json"], s.cap.deps);
+  const code = await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-generate", "--json"], s.cap.deps);
   assert.equal(code, 0, s.cap.text());
   const doc = JSON.parse(s.cap.text()) as {
     command: string;
@@ -374,7 +394,7 @@ const modOf = (s: Setup): string => (JSON.parse(read(s, "abf.config.json")) as {
 test("interactive: the mod is picked by number, the screen lists the mods, then y writes", async () => {
   const s = setup();
   const asked = interactive(s, ["2", "y"]);
-  const code = await main(["init", TARGET, "--no-stubs"], s.cap.deps);
+  const code = await main(["init", TARGET, "--no-generate"], s.cap.deps);
   assert.equal(code, 0, s.cap.text());
   const out = s.cap.text();
   assert.match(out, /Mod Editor: C:\\Epic\\ModEdit_X1\s+\(Epic manifest\)/);
@@ -393,7 +413,7 @@ test("interactive: the mod is picked by number, the screen lists the mods, then 
 test("interactive: garbage is re-asked, 'yes' also confirms", async () => {
   const s = setup();
   const asked = interactive(s, ["", "7", "x", "0", "1", "yes"]);
-  const code = await main(["init", TARGET, "--no-stubs"], s.cap.deps);
+  const code = await main(["init", TARGET, "--no-generate"], s.cap.deps);
   assert.equal(code, 0, s.cap.text());
   assert.equal(asked.questions.filter((q) => q.startsWith("Link which mod?")).length, 5);
   assert.match(s.cap.text(), /please answer 1-2, c or q/);
@@ -404,7 +424,7 @@ test("interactive: c asks for another mods folder (re-asked until it exists), re
   const other = "D:\\MoreMods";
   const s = setup({ [win32.join(other, "ModC", "ModC.uplugin")]: JSON.stringify({ FriendlyName: "Mod C" }) });
   const asked = interactive(s, ["c", "D:\\Missing", `"${other}"`, "1", "y"]);
-  const code = await main(["init", TARGET, "--no-stubs"], s.cap.deps);
+  const code = await main(["init", TARGET, "--no-generate"], s.cap.deps);
   assert.equal(code, 0, s.cap.text());
   const out = s.cap.text();
   assert.match(out, /D:\\Missing does not exist/);
@@ -424,7 +444,7 @@ test("interactive: c asks for another mods folder (re-asked until it exists), re
 test("interactive: q writes nothing and exits 0", async () => {
   const s = setup();
   const asked = interactive(s, ["q"]);
-  const code = await main(["init", TARGET, "--no-stubs"], s.cap.deps);
+  const code = await main(["init", TARGET, "--no-generate"], s.cap.deps);
   assert.equal(code, 0, s.cap.text());
   assert.deepEqual(s.cap.writes, []);
   assert.match(s.cap.text(), /Nothing written\./);
@@ -435,7 +455,7 @@ test("interactive: anything but y or yes to the final question writes nothing", 
   for (const answer of ["n", "", "maybe"]) {
     const s = setup();
     interactive(s, ["1", answer]);
-    const code = await main(["init", TARGET, "--no-stubs"], s.cap.deps);
+    const code = await main(["init", TARGET, "--no-generate"], s.cap.deps);
     assert.equal(code, 0, s.cap.text());
     assert.deepEqual(s.cap.writes, [], `answer "${answer}"`);
     assert.match(s.cap.text(), /Nothing written\./);
@@ -446,7 +466,7 @@ test("interactive: anything but y or yes to the final question writes nothing", 
 test("interactive: --mod X preselects the mod and asks only the final question", async () => {
   const s = setup();
   const asked = interactive(s, ["y"]);
-  const code = await main(["init", TARGET, "--mod", "modb", "--no-stubs"], s.cap.deps);
+  const code = await main(["init", TARGET, "--mod", "modb", "--no-generate"], s.cap.deps);
   assert.equal(code, 0, s.cap.text());
   assert.deepEqual(asked.questions, ["Write these files? [y/N]: "]);
   assert.equal(modOf(s), "ModB");
@@ -455,7 +475,7 @@ test("interactive: --mod X preselects the mod and asks only the final question",
 test("interactive: --mod with an unknown mod is ABFC1042 before any question", async () => {
   const s = setup();
   const asked = interactive(s, []);
-  const code = await main(["init", TARGET, "--mod", "Nope", "--no-stubs"], s.cap.deps);
+  const code = await main(["init", TARGET, "--mod", "Nope", "--no-generate"], s.cap.deps);
   assert.equal(code, 1, s.cap.text());
   assert.match(s.cap.text(), /error ABFC1042/);
   assert.equal(asked.questions.length, 0);
@@ -465,7 +485,7 @@ test("interactive: --mod with an unknown mod is ABFC1042 before any question", a
 test("interactive: an empty mods folder prints ABFC1044 and offers only c and q", async () => {
   const s = setup({}, /\\(ModA|ModB)\\/);
   const asked = interactive(s, ["1", "q"]);
-  const code = await main(["init", TARGET, "--no-stubs"], s.cap.deps);
+  const code = await main(["init", TARGET, "--no-generate"], s.cap.deps);
   assert.equal(code, 0, s.cap.text());
   assert.match(s.cap.text(), /ABFC1044: no mods found in/);
   assert.deepEqual(asked.questions, ["Link which mod? [c, q]: ", "Link which mod? [c, q]: "]);
@@ -476,7 +496,7 @@ test("interactive: a missing Mod Editor is asked for, validated, re-asked and go
   const exeRel = loadProfile().exeRelPath;
   const s = setup({ [win32.join("C:\\Epic\\OtherEdit", exeRel)]: "exe" }, /ModEdit_X1\\.*\.exe$/i);
   const asked = interactive(s, ["C:\\Epic\\Nowhere", "C:\\Epic\\OtherEdit", "1", "y"]);
-  await main(["init", TARGET, "--no-stubs"], s.cap.deps);
+  await main(["init", TARGET, "--no-generate"], s.cap.deps);
   const out = s.cap.text();
   assert.match(out, /ABFC1001/);
   assert.match(out, /\.exe in C:\\Epic\\Nowhere/);
@@ -492,7 +512,7 @@ test("interactive: a missing mods folder is asked for (ABFC1003 is not fatal)", 
   const modsRoot = win32.dirname(setup().fake.modDir).replace(/[\\.]/g, "\\$&");
   const s = setup({ "D:\\MoreMods\\ModC\\ModC.uplugin": "{}" }, new RegExp(`^${modsRoot}\\\\`, "i"));
   const asked = interactive(s, ["D:\\Nope", "D:\\MoreMods", "1", "y"]);
-  await main(["init", TARGET, "--no-stubs"], s.cap.deps);
+  await main(["init", TARGET, "--no-generate"], s.cap.deps);
   const out = s.cap.text();
   assert.match(out, /ABFC1003/);
   assert.match(out, /D:\\Nope does not exist/);
@@ -503,10 +523,10 @@ test("interactive: a missing mods folder is asked for (ABFC1003 is not fatal)", 
 
 test("interactive: a re-run with nothing to change says so and asks no final question", async () => {
   const s = setup();
-  assert.equal(await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs"], s.cap.deps), 0, s.cap.text());
+  assert.equal(await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-generate"], s.cap.deps), 0, s.cap.text());
   s.cap.writes.length = 0;
   const asked = interactive(s, []);
-  const code = await main(["init", TARGET, "--mod", "ModA", "--no-stubs"], s.cap.deps);
+  const code = await main(["init", TARGET, "--mod", "ModA", "--no-generate"], s.cap.deps);
   assert.equal(code, 0, s.cap.text());
   assert.match(s.cap.text(), /Nothing to write\./);
   assert.deepEqual(asked.questions, []);

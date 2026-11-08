@@ -72,7 +72,7 @@ async function reflectAndRead(ctx: CliContext, backend: Backend): Promise<number
     throw new AbfcError({
       severity: "error",
       code: "ABFC4011",
-      message: `the backend at ${env.backendDir.value ?? "?"} has no "reflect" tool; abfc stubs needs the abfc-p1-backend branch of abf-mod-editor-mcp.`,
+      message: `the backend at ${env.backendDir.value ?? "?"} has no "reflect" tool; abfc generate needs the abfc-p1-backend branch of abf-mod-editor-mcp.`,
       fix: "point ABFC_BACKEND_DIR at a checkout that provides reflect (see docs/backend.md).",
     });
   }
@@ -129,7 +129,7 @@ async function reflectAndRead(ctx: CliContext, backend: Backend): Promise<number
       severity: "warning",
       code: "ABFC3012",
       message: "the backend cannot list the game's gameplay tags; .abfc/tags.d.ts holds only the mod's own tags.",
-      fix: "update abf-mod-editor-mcp to 2.6.0 or newer, then run abfc stubs again.",
+      fix: "update abf-mod-editor-mcp to 2.6.0 or newer, then run abfc generate again.",
     });
   }
   const data: ReflectData = { engineVersion: null, classes: {}, structs: {}, errors: [] };
@@ -165,7 +165,7 @@ async function reflectAndRead(ctx: CliContext, backend: Backend): Promise<number
           severity: "warning",
           code: "ABFC3011",
           message: `stubs.widgetMembers: ${cls} ${member} is a ${widget}, which is not in the stubs; it is typed UObject.`,
-          fix: `add "${widget}" to stubs.scriptClasses and run "abfc stubs".`,
+          fix: `add "${widget}" to stubs.scriptClasses and run "abfc generate".`,
         });
       }
     }
@@ -223,8 +223,8 @@ async function reflectAndRead(ctx: CliContext, backend: Backend): Promise<number
   return 0;
 }
 
-/** `abfc stubs`: reflects the configured classes and mod assets through the backend and writes `.abfc/stubs/<profile>/`. */
-export async function stubs(ctx: CliContext): Promise<number> {
+/** `abfc generate`: reflects the configured classes and mod assets through the backend and writes `.abfc/stubs/<profile>/`. */
+export async function generate(ctx: CliContext): Promise<number> {
   const backend = await ctx.deps.startBackend(ctx.env);
   try {
     return await reflectAndRead(ctx, backend);

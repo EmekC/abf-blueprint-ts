@@ -131,7 +131,7 @@ The VS Code extension sends `tsDiagnostics: false` and `tsHover: false`.
     added after the last import. An existing import (also under an alias) is reused, and an item is left out when the
     container name is bound to something else in scope. Deprecated functions are not listed; at most 100 items are
     returned. The list comes from the stubs of the project's profile (`.abfc/stubs/<profile>`) and is rebuilt when
-    `stubs.lock.json` changes (run `abfc stubs` to refresh it).
+    `stubs.lock.json` changes (run `abfc generate` to refresh it).
   - *Overridable events.* In a class body at the start of a member (`Rec` matches `ReceiveBeginPlay`, `ReceiveTick`, ...;
     an empty prefix lists them all), the events of the parent class that can be overridden are offered as snippets:
     `@override override ReceiveTick(DeltaSeconds: double): void { ... }`, with the cursor inside the body. The

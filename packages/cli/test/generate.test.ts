@@ -125,15 +125,15 @@ function setup(tmp: string, modAssets: "all" | string[]) {
   return fake;
 }
 
-test("abfc stubs: reflect closure, mod assets, files, lock, paths and timings", async () => {
-  const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-stubs-"));
+test("abfc generate: reflect closure, mod assets, files, lock, paths and timings", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-generate-"));
   try {
     const fake = setup(tmp, "all");
     const calls: ReflectRequest[] = [];
     const reads: string[] = [];
     const cap = captureDeps(fake, () => fakeBackend(true, calls, reads));
     cap.deps.cwd = tmp;
-    const code = await main(["stubs"], cap.deps);
+    const code = await main(["generate"], cap.deps);
     const out = cap.text();
     assert.equal(code, 0, out);
 
@@ -174,7 +174,7 @@ test("abfc stubs: reflect closure, mod assets, files, lock, paths and timings", 
     const again = captureDeps(fake, () => fakeBackend(true, [], []));
     again.deps.cwd = tmp;
     again.deps.now = () => new Date(2027, 5, 6, 7, 8, 9);
-    assert.equal(await main(["stubs"], again.deps), 0, again.text());
+    assert.equal(await main(["generate"], again.deps), 0, again.text());
     const lock2 = JSON.parse(readFileSync(join(dir, "stubs.lock.json"), "utf8")) as { createdAt: string };
     assert.notEqual(lock2.createdAt, (lock as { createdAt: string }).createdAt);
   } finally {
@@ -182,14 +182,14 @@ test("abfc stubs: reflect closure, mod assets, files, lock, paths and timings", 
   }
 });
 
-test("abfc stubs: a backend without gameplayTags warns ABFC3012 and writes a tags file with the mod's ini tags only; with it the game list is requested, stored and written", async () => {
-  const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-stubs-"));
+test("abfc generate: a backend without gameplayTags warns ABFC3012 and writes a tags file with the mod's ini tags only; with it the game list is requested, stored and written", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-generate-"));
   try {
     const fake = setup(tmp, []);
     fake.files[`${fake.modDir}\\Config\\Tags\\ExampleTags.ini`] = '[/Script/GameplayTags.GameplayTagsSettings]\r\n+GameplayTagList=(Tag="Mod.Own.Tag",DevComment="")\r\n';
     const cap = captureDeps(fake, () => fakeBackend(true, [], []));
     cap.deps.cwd = tmp;
-    assert.equal(await main(["stubs"], cap.deps), 0, cap.text());
+    assert.equal(await main(["generate"], cap.deps), 0, cap.text());
     assert.match(cap.text(), /warning ABFC3012: the backend cannot list the game's gameplay tags/);
     const file = join(tmp, ".abfc", "tags.d.ts");
     assert.match(readFileSync(file, "utf8"), /"Mod.Own.Tag": true/);
@@ -199,7 +199,7 @@ test("abfc stubs: a backend without gameplayTags warns ABFC3012 and writes a tag
     const calls: ReflectRequest[] = [];
     const withTags = captureDeps(fake, () => fakeBackend(true, calls, [], ["Game.Tag.One"]));
     withTags.deps.cwd = tmp;
-    assert.equal(await main(["stubs"], withTags.deps), 0, withTags.text());
+    assert.equal(await main(["generate"], withTags.deps), 0, withTags.text());
     assert.doesNotMatch(withTags.text(), /ABFC3012/);
     assert.equal(calls[0]?.gameplayTags, true);
     assert.deepEqual(JSON.parse(readFileSync(join(tmp, ".abfc", "stubs", "ue5.4.4-1050002", "gameplay-tags.json"), "utf8")), ["Game.Tag.One"]);
@@ -211,29 +211,29 @@ test("abfc stubs: a backend without gameplayTags warns ABFC3012 and writes a tag
   }
 });
 
-test("abfc stubs: a stage-only tag comes from the stage's Config/Tags ini and leaves tags.d.ts once the stage no longer has it", async () => {
-  const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-stubs-"));
+test("abfc generate: a stage-only tag comes from the stage's Config/Tags ini and leaves tags.d.ts once the stage no longer has it", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-generate-"));
   try {
     const fake = setup(tmp, []);
     const stageIni = "C:\\Stage\\Config\\Tags\\StageTags.ini";
     fake.files[stageIni] = '[/Script/GameplayTags.GameplayTagsSettings]\r\n+GameplayTagList=(Tag="Stage.Only.Tag",DevComment="")\r\n';
     const first = captureDeps(fake, () => fakeBackend(true, [], []));
     first.deps.cwd = tmp;
-    assert.equal(await main(["stubs"], first.deps), 0, first.text());
+    assert.equal(await main(["generate"], first.deps), 0, first.text());
     const file = join(tmp, ".abfc", "tags.d.ts");
     assert.match(readFileSync(file, "utf8"), /"Stage.Only.Tag": true/);
     delete fake.files[stageIni];
     const second = captureDeps(fake, () => fakeBackend(true, [], []));
     second.deps.cwd = tmp;
-    assert.equal(await main(["stubs"], second.deps), 0, second.text());
+    assert.equal(await main(["generate"], second.deps), 0, second.text());
     assert.doesNotMatch(readFileSync(file, "utf8"), /Stage.Only.Tag/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
 });
 
-test("abfc stubs: an explicit mod asset list reads only those assets; scriptModules warns ABFC3010", async () => {
-  const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-stubs-"));
+test("abfc generate: an explicit mod asset list reads only those assets; scriptModules warns ABFC3010", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-generate-"));
   try {
     const fake = setup(tmp, ["/TestMod/Items/BP_Hand"]);
     fake.files[join(tmp, "abf.config.json")] = JSON.stringify({
@@ -244,7 +244,7 @@ test("abfc stubs: an explicit mod asset list reads only those assets; scriptModu
     const reads: string[] = [];
     const cap = captureDeps(fake, () => fakeBackend(true, [], reads));
     cap.deps.cwd = tmp;
-    const code = await main(["stubs"], cap.deps);
+    const code = await main(["generate"], cap.deps);
     assert.equal(code, 0, cap.text());
     assert.deepEqual(reads, ["/TestMod/Items/BP_Hand"]);
     assert.match(cap.text(), /warning ABFC3010/);
@@ -253,13 +253,13 @@ test("abfc stubs: an explicit mod asset list reads only those assets; scriptModu
   }
 });
 
-test("abfc stubs: a backend without reflect is ABFC4011, exit 2, nothing written", async () => {
-  const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-stubs-"));
+test("abfc generate: a backend without reflect is ABFC4011, exit 2, nothing written", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-generate-"));
   try {
     const fake = setup(tmp, []);
     const cap = captureDeps(fake, () => fakeBackend(false, [], []));
     cap.deps.cwd = tmp;
-    const code = await main(["stubs"], cap.deps);
+    const code = await main(["generate"], cap.deps);
     assert.equal(code, 2, cap.text());
     assert.match(cap.text(), /error ABFC4011/);
     assert.equal(existsSync(join(tmp, ".abfc", "stubs")), false);
@@ -268,8 +268,8 @@ test("abfc stubs: a backend without reflect is ABFC4011, exit 2, nothing written
   }
 });
 
-test("abfc stubs: stubs.widgetMembers are emitted on the class stub, recorded in the lock, and an unreflected widget class warns ABFC3011", async () => {
-  const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-stubs-"));
+test("abfc generate: stubs.widgetMembers are emitted on the class stub, recorded in the lock, and an unreflected widget class warns ABFC3011", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-generate-"));
   try {
     const fake = setup(tmp, []);
     const widgetMembers = { [THING]: { TitleText: "/Script/UMG.TextBlock" } };
@@ -280,7 +280,7 @@ test("abfc stubs: stubs.widgetMembers are emitted on the class stub, recorded in
     });
     const cap = captureDeps(fake, () => fakeBackend(true, [], []));
     cap.deps.cwd = tmp;
-    const code = await main(["stubs"], cap.deps);
+    const code = await main(["generate"], cap.deps);
     const out = cap.text();
     assert.equal(code, 0, out);
     assert.match(out, /warning ABFC3011: stubs\.widgetMembers: \/Script\/FakeEngine\.Thing TitleText is a \/Script\/UMG\.TextBlock, which is not in the stubs/);
@@ -294,6 +294,62 @@ test("abfc stubs: stubs.widgetMembers are emitted on the class stub, recorded in
     assert.match(script, /readonly TitleText: UObject;/);
     const lock = JSON.parse(readFileSync(join(dir, "stubs.lock.json"), "utf8")) as { widgetMembers: unknown };
     assert.deepEqual(lock.widgetMembers, widgetMembers);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+/** One `--json` run with stdout and stderr kept apart; the project lives in a fresh temp folder. */
+async function runSeparately(command: "generate" | "stubs"): Promise<{ code: number; outLines: string[]; errLines: string[]; tmp: string }> {
+  const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-generate-"));
+  const fake = setup(tmp, "all");
+  const cap = captureDeps(fake, () => fakeBackend(true, [], []));
+  cap.deps.cwd = tmp;
+  const outLines: string[] = [];
+  const errLines: string[] = [];
+  cap.deps.stdout = (l) => outLines.push(l);
+  cap.deps.stderr = (l) => errLines.push(l);
+  const code = await main([command, "--json"], cap.deps);
+  return { code, outLines, errLines, tmp };
+}
+
+test("abfc stubs (deprecated alias) behaves like generate and warns once on stderr", async () => {
+  const alias = await runSeparately("stubs");
+  let generated: { code: number; outLines: string[]; errLines: string[]; tmp: string } | null = null;
+  try {
+    assert.equal(alias.code, 0, alias.outLines.join("\n") + alias.errLines.join("\n"));
+    assert.deepEqual(alias.errLines.filter((l) => /deprecated/.test(l)), ['abfc: warning: "abfc stubs" is deprecated; use "abfc generate"']);
+    const aliasDoc = JSON.parse(alias.outLines.join("\n")) as { command: string; ok: boolean; result: unknown };
+    assert.equal(aliasDoc.command, "stubs");
+    assert.equal(aliasDoc.ok, true);
+    assert.ok(existsSync(join(alias.tmp, ".abfc", "stubs", "ue5.4.4-1050002", "stubs.lock.json")));
+    assert.ok(existsSync(join(alias.tmp, ".abfc", "tsconfig.paths.json")));
+
+    generated = await runSeparately("generate");
+    assert.equal(generated.code, 0, generated.outLines.join("\n") + generated.errLines.join("\n"));
+    assert.deepEqual(generated.errLines.filter((l) => /deprecated/.test(l)), []);
+    const doc = JSON.parse(generated.outLines.join("\n")) as { command: string; ok: boolean; result: unknown };
+    assert.equal(doc.command, "generate");
+    // The result names the temp project folder, which differs per run; everything else must be equal.
+    const rel = (d: { result: unknown }, tmp: string): unknown => ({ ...(d.result as { dir: string }), dir: (d.result as { dir: string }).dir.slice(tmp.length) });
+    assert.deepEqual(rel(doc, generated.tmp), rel(aliasDoc, alias.tmp));
+  } finally {
+    rmSync(alias.tmp, { recursive: true, force: true });
+    if (generated !== null) rmSync(generated.tmp, { recursive: true, force: true });
+  }
+});
+
+test("usage lists generate and not stubs", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-generate-"));
+  try {
+    const cap = captureDeps(setup(tmp, "all"), () => fakeBackend(true, [], []));
+    const outLines: string[] = [];
+    cap.deps.stdout = (l) => outLines.push(l);
+    assert.equal(await main([], cap.deps), 0);
+    const text = outLines.join("\n");
+    assert.match(text, /commands: .*\bgenerate\b/);
+    assert.doesNotMatch(text, /\bstubs\b/);
+    assert.match(text, /--no-generate/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

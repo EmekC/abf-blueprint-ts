@@ -149,7 +149,7 @@ const RETIRED_FILE = "retired.json";
 
 /**
  * Units abfc removed from an asset after the stubs were generated, per asset: `<stubs>/<profile>/retired.json`. The stubs still list
- * them as hand-made members; they are hidden like owned ones until `abfc stubs` rewrites the folder (which deletes this file) from the stage.
+ * them as hand-made members; they are hidden like owned ones until `abfc generate` rewrites the folder (which deletes this file) from the stage.
  */
 export function readRetired(dir: string, profileId?: string, onCorrupt?: (file: string, why: string) => void): Record<string, string[]> {
   const root = join(dir, ".abfc", "stubs");

@@ -10,9 +10,9 @@ Run `abfc` without a command to print the usage text (exit 0).
 
 | Command | Needs a project | Starts the backend | What it does |
 | --- | --- | --- | --- |
-| [`abfc init`](#abfc-init) | no | only for `abfc stubs` and `abfc doctor` at the end | Creates or updates a project and links it to a mod. |
+| [`abfc init`](#abfc-init) | no | only for `abfc generate` and `abfc doctor` at the end | Creates or updates a project and links it to a mod. |
 | [`abfc doctor`](#abfc-doctor) | yes (except `--clean-runtimes`) | yes, when the settings are complete | Shows every discovered setting and its source, then the backend and its capabilities. |
-| [`abfc stubs`](#abfc-stubs) | yes | yes | Reflects classes and mod assets through the backend and writes `.abfc/stubs/<profile>/`. |
+| [`abfc generate`](#abfc-generate) | yes | yes | Reflects classes and mod assets through the backend and writes `.abfc/stubs/<profile>/`. |
 | [`abfc check`](#abfc-check) | yes | no | Type-checks the project and lowers it, without touching the mod. |
 | [`abfc build`](#abfc-build) | yes | yes | Applies the Blueprints to a private staging copy of the mod and compiles them in Unreal. |
 | [`abfc test`](#abfc-test) | yes | yes | Builds, then runs the tests through the backend. |
@@ -52,19 +52,19 @@ These options override what abfc discovers. They apply to every command that nee
 ## abfc init
 
 ```
-abfc init [dir] [--mod <name>] [--yes] [--no-stubs] [--mods-dir <dir>] [--editor-root <dir>] [--backend-dir <dir>] [--python <exe>]
+abfc init [dir] [--mod <name>] [--yes] [--no-generate] [--mods-dir <dir>] [--editor-root <dir>] [--backend-dir <dir>] [--python <exe>]
 ```
 
-Creates (or updates) the project in `dir` (default: `--project`, else the working folder), links it to a mod of your mods folder, writes the sample class and its test, then runs `abfc stubs` and `abfc doctor`. Running it again on an existing project is safe: every file it finds is `kept` (or `updated` when it only adds a missing line, such as new `.gitignore` entries), your `src` and `abf.config.json` are never rewritten, and the sample is written only when `src` holds no TypeScript file. It also writes `.abfc/tags.d.ts` (the gameplay tag constants, see [`abfc stubs`](#abfc-stubs)) together with `.abfc/tsconfig.paths.json`, also with `--no-stubs`. It works outside a project. Without `--yes` it asks questions and shows the files before writing them. A schema-1 `abf.config.json` is upgraded and the old file is kept as `.v1.bak` ([ABFC1031](errors.md#abfc1031)). The steps are in [first-mod.md](first-mod.md) and [config.md](config.md).
+Creates (or updates) the project in `dir` (default: `--project`, else the working folder), links it to a mod of your mods folder, writes the sample class and its test, then runs `abfc generate` and `abfc doctor`. Running it again on an existing project is safe: every file it finds is `kept` (or `updated` when it only adds a missing line, such as new `.gitignore` entries), your `src` and `abf.config.json` are never rewritten, and the sample is written only when `src` holds no TypeScript file. It also writes `.abfc/tags.d.ts` (the gameplay tag constants, see [`abfc generate`](#abfc-generate)) together with `.abfc/tsconfig.paths.json`, also with `--no-generate`. It works outside a project. Without `--yes` it asks questions and shows the files before writing them. A schema-1 `abf.config.json` is upgraded and the old file is kept as `.v1.bak` ([ABFC1031](errors.md#abfc1031)). The steps are in [first-mod.md](first-mod.md) and [config.md](config.md).
 
 | Option | Meaning |
 | --- | --- |
 | `[dir]` | The project folder, as the first positional. |
 | `--mod <name>` | The mod to link to (matched case-insensitively against the mods folder). |
 | `--yes` | No questions and no confirmation. Needs `--mod` when the folder has no project yet ([ABFC1040](errors.md#abfc1040) to [ABFC1044](errors.md#abfc1044) are the "cannot ask" and "mod not found" errors). |
-| `--no-stubs` | Do not run `abfc stubs` after writing the files. |
+| `--no-generate` | Do not run `abfc generate` after writing the files. `--no-stubs` is the old, deprecated name. |
 
-`init --json` result: `{project, mod, modsDir, editorRoot, files: [{path, action}], userConfig: {path, keys}, stubs, doctor}`. `files` lists what was written (or left alone) relative to the project; `userConfig.keys` names the machine-specific settings written to the user config; `stubs` and `doctor` are the exit codes of those two steps (`stubs` is `null` with `--no-stubs`).
+`init --json` result: `{project, mod, modsDir, editorRoot, files: [{path, action}], userConfig: {path, keys}, stubs, doctor}`. `files` lists what was written (or left alone) relative to the project; `userConfig.keys` names the machine-specific settings written to the user config; `stubs` and `doctor` are the exit codes of the generate and doctor steps (the key keeps its old name `stubs`; it is `null` with `--no-generate`).
 
 ## abfc doctor
 
@@ -81,11 +81,13 @@ Prints the project, the mod, the profile, the Node version, the install kind, th
 
 `doctor --json` result: `{settings, backend, install}` where `settings` maps `editorRoot`, `documents`, `modsDir`, `modDir`, `python`, `backendDir`, `headlessDir` to `{value, source}` (`value` is `null` when not found), `backend` is the backend's `backend_info` (see [backend.md](backend.md)) or `null`, and `install` is `{kind, abfcVersion, runtimeDir}` (`kind` is `exe` or `source`). With `--deep` there is also `runtimeCheck`: `{files, repaired}` or `null`. `doctor --clean-runtimes --json` result: `{removed, failed, skipped, kept}` (lists of folders, and the kept folder or `null`).
 
-## abfc stubs
+## abfc generate
 
 ```
-abfc stubs [--resync]
+abfc generate [--resync]
 ```
+
+`abfc stubs` is the old name of this command. It still works and does the same, prints a deprecation warning on standard error, and is no longer listed in the usage text.
 
 Asks the backend to describe the classes listed in `abf.config.json` (`stubs.classes`, `stubs.scriptClasses`), reads the hand-made assets of the mod and writes the TypeScript declarations into `.abfc/stubs/<profile>/` together with `stubs.lock.json`. The first run needs the network once, because the backend downloads the Blueprint filter. Besides the engine and mod-asset declarations it writes `.abfc/tags.d.ts`, which declares the gameplay tags as constants (`ClassManager.EntityDirector.<Tag>`, used by `@director`, see [first-mod.md](first-mod.md#director-with-a-gameplay-tag)) from the game's tag list and the `Config/Tags/*.ini` files of your mod; a backend that cannot list the game's tags gives [ABFC3012](errors.md#abfc3012) and the file holds only the mod's own tags. Library functions whose parameters have defaults in the engine are generated with those parameters optional (`PrintString("hi")`). Run it again when the config's `stubs` section, the mod assets or the editor build change, and after updating abfc: stubs made by an older abfc give a warning ([ABFC3001](errors.md#abfc3001)) that names both generator versions and lack the newer additions; `abfc check` and `abfc build` refuse stubs that no longer match ([ABFC3010](errors.md#abfc3010) explains the one `stubs` key that is ignored).
 
@@ -93,7 +95,7 @@ Asks the backend to describe the classes listed in `abf.config.json` (`stubs.cla
 | --- | --- |
 | `--resync` | When mod assets are read, first recreate the staging copy from the mod (see [`abfc build`](#abfc-build)). |
 
-`stubs --json` result: `{dir, files, members, opaque, modAssets}` (`dir` is the profile folder; `files` and `members` count what was written; `opaque` lists types abfc could not describe; `modAssets` lists the hand-made mod assets that got stubs).
+`generate --json` result: `{dir, files, members, opaque, modAssets}` (`dir` is the profile folder; `files` and `members` count what was written; `opaque` lists types abfc could not describe; `modAssets` lists the hand-made mod assets that got stubs).
 
 ## abfc check
 
@@ -213,7 +215,7 @@ The publish also carries the structural changes of the build:
 abfc lsp [--stdio]
 ```
 
-Starts the language server on stdin and stdout: diagnostics, hover, quick fixes and completion. Completion offers the engine and mod library functions (typing `PrintS` offers `KismetSystemLibrary.PrintString` and adds the import) and, at the start of a member in a class body, `@override override ReceiveBeginPlay(): void { }` stubs for the events of the parent class (typing `Rec`). It reads the stubs, so run `abfc stubs` first. Standard output carries only the protocol; logs go to standard error. `--stdio` and the `--clientProcessId <pid>` that language clients add are accepted and ignored. See [language-service.md](language-service.md) for the editor setup.
+Starts the language server on stdin and stdout: diagnostics, hover, quick fixes and completion. Completion offers the engine and mod library functions (typing `PrintS` offers `KismetSystemLibrary.PrintString` and adds the import) and, at the start of a member in a class body, `@override override ReceiveBeginPlay(): void { }` stubs for the events of the parent class (typing `Rec`). It reads the stubs, so run `abfc generate` first. Standard output carries only the protocol; logs go to standard error. `--stdio` and the `--clientProcessId <pid>` that language clients add are accepted and ignored. See [language-service.md](language-service.md) for the editor setup.
 
 ## abfc version
 
@@ -239,7 +241,7 @@ Prints `abfc <version> (<exe|source install>, node <version>)` and exits 0. It w
 | `--editor-root`, `--mods-dir`, `--mod-dir`, `--backend-dir`, `--python`, `--headless-dir` | all project commands (`init`: the first four, see above) |
 | `--timings` | check, build, test, publish |
 | `--cold` | build, test, status, adopt, publish |
-| `--resync` | stubs, build, test, status, adopt, publish |
+| `--resync` | generate, build, test, status, adopt, publish |
 | `--drift` | build |
 | `--keep-failed-stage` | build, test, publish |
 | `--no-build` | test |
@@ -247,7 +249,7 @@ Prints `abfc <version> (<exe|source install>, node <version>)` and exits 0. It w
 | `--yes` | init, adopt |
 | `--discard-editor-changes`, `--remove-node` | adopt |
 | `--watch` | check |
-| `--mod`, `--no-stubs` | init |
+| `--mod`, `--no-generate` | init |
 | `--deep`, `--clean-runtimes` | doctor |
 | `--version` | `abfc --version` only |
 | `--stdio`, `--clientProcessId` | lsp (accepted, ignored) |
@@ -256,7 +258,7 @@ A flag the command does not use is ignored, except for the three that are refuse
 
 ## Running one command at a time
 
-`build`, `test`, `publish`, `status`, `stubs` and `adopt` take a lock per project, `.abfc/lock.json`. A second one started while the first runs stops with [ABFC4019](errors.md#abfc4019) before it starts the backend; `check`, `doctor`, `init` and `lsp` take no lock. The lock of a crashed run is replaced by the next run.
+`build`, `test`, `publish`, `status`, `generate` and `adopt` take a lock per project, `.abfc/lock.json`. A second one started while the first runs stops with [ABFC4019](errors.md#abfc4019) before it starts the backend; `check`, `doctor`, `init` and `lsp` take no lock. The lock of a crashed run is replaced by the next run.
 
 ## Exit codes
 

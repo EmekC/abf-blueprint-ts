@@ -26,8 +26,10 @@ export interface CliFlags {
   watch: boolean;
   /** `--mod <name>`: the mod `abfc init` links the project to. */
   mod: string | undefined;
-  /** `--no-stubs`: `abfc init` does not run `abfc stubs`. */
-  noStubs: boolean;
+  /** `--no-generate` (or the deprecated `--no-stubs`): `abfc init` does not run `abfc generate`. */
+  noGenerate: boolean;
+  /** The deprecated `--no-stubs` spelling was used (main prints a warning). */
+  noStubsAlias: boolean;
   /** `--deep`: `abfc doctor` checks the extracted runtime by sha256 (abfc.exe). */
   deep: boolean;
   /** `--clean-runtimes`: `abfc doctor` deletes the old extracted runtime folders (works outside a project). */
@@ -84,6 +86,7 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
         "remove-node": { type: "string", multiple: true },
         watch: { type: "boolean" },
         mod: { type: "string" },
+        "no-generate": { type: "boolean" },
         "no-stubs": { type: "boolean" },
         deep: { type: "boolean" },
         "clean-runtimes": { type: "boolean" },
@@ -129,7 +132,8 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
       removeNode: v["remove-node"] ?? [],
       watch: v.watch === true,
       mod: v.mod,
-      noStubs: v["no-stubs"] === true,
+      noGenerate: v["no-generate"] === true || v["no-stubs"] === true,
+      noStubsAlias: v["no-stubs"] === true,
       deep: v.deep === true,
       cleanRuntimes: v["clean-runtimes"] === true,
       version: v.version === true,

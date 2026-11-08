@@ -44,7 +44,7 @@
     },
     "stubs": {
       "type": "object",
-      "description": "Which declarations abfc stubs generates.",
+      "description": "Which declarations abfc generate writes.",
       "properties": {
         "classes": {
           "type": "array",

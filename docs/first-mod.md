@@ -47,7 +47,7 @@ What `abfc init` writes:
 
 - in the project folder: `abf.config.json` (the mod name and the stub settings, see [config.md](config.md)), `tsconfig.json`, `.gitignore`, `.vscode\tasks.json` and `.vscode\extensions.json` (only when absent), and the sample `src\Samples\BP_HelloAbfc.ts` with its test `src\Samples\BP_HelloAbfc.test.ts` (only when `src` holds no TypeScript file yet);
 - one per-machine file, the user config (`%APPDATA%\abfc\config.json`), with the Mod Editor folder and the mods folder;
-- then it generates the stubs (the `.d.ts` files that describe the engine and your mod's assets to TypeScript; add `--no-stubs` to skip) and prints the `abfc doctor` checklist.
+- then it generates the stubs (the `.d.ts` files that describe the engine and your mod's assets to TypeScript; add `--no-generate` to skip) and prints the `abfc doctor` checklist.
 
 It never writes into the mods folder or the mod. Running it again changes nothing.
 
@@ -94,7 +94,7 @@ KismetSystemLibrary.Delay();             // Duration keeps 0.2
 const player = GameplayStatics.GetPlayerCharacter();   // PlayerIndex is 0
 ```
 
-Only a trailing run of parameters can be left out, as in TypeScript. Run `abfc stubs` once (and again after updating abfc) so the stubs carry the defaults.
+Only a trailing run of parameters can be left out, as in TypeScript. Run `abfc generate` once (and again after updating abfc) so the stubs carry the defaults.
 
 ### Text from values: template literals
 
@@ -161,7 +161,7 @@ export class BPC_MyDirector extends ActorComponent {}
 
 To see it run, use Play In Editor (Play or Simulate) in the Mod Editor on its default map: during play the World Outliner lists `Abiotic_AIDirector` with your class among its components (for example `BPC_MyDirector_C_0`), next to the game's own directors. Another parent than ActorComponent is [ABFC2089](errors.md#abfc2089).
 
-Typing `ClassManager.EntityDirector.` in your editor lists every tag the game and your mod know (they come from `abfc stubs`); a string such as `"ClassManager.EntityDirector.MyDirector"` works as well and autocompletes. A tag the mod does not have yet is created: the build adds it to the mod's tag list (`Config/Tags/ExampleModTags.ini`), `abfc publish` publishes the file, and an open Mod Editor is told about the new tag at publish (only when that fails, [ABFC7015](errors.md#abfc7015) asks you to restart it). Tags a build adds stay in the list even if you remove the director later, because the list is shared mod content. Without a tag the row starts nothing ([ABFC2079](errors.md#abfc2079)).
+Typing `ClassManager.EntityDirector.` in your editor lists every tag the game and your mod know (they come from `abfc generate`); a string such as `"ClassManager.EntityDirector.MyDirector"` works as well and autocompletes. A tag the mod does not have yet is created: the build adds it to the mod's tag list (`Config/Tags/ExampleModTags.ini`), `abfc publish` publishes the file, and an open Mod Editor is told about the new tag at publish (only when that fails, [ABFC7015](errors.md#abfc7015) asks you to restart it). Tags a build adds stay in the list even if you remove the director later, because the list is shared mod content. Without a tag the row starts nothing ([ABFC2079](errors.md#abfc2079)).
 
 ### Where the asset goes
 
