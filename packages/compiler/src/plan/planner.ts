@@ -37,6 +37,11 @@ export interface PlanInput {
    * blame the modder for abfc's own change.
    */
   editedByAbfc?: Set<string>;
+  /**
+   * Assets (paths, lower case) whose file the Mod Editor saved since the stage was copied (the build re-synced because of it): their class
+   * defaults pass runs again although the hash is unchanged, because the saved class defaults may differ from the TypeScript.
+   */
+  editedInMod?: Set<string>;
 }
 
 export interface PlanResult {
@@ -111,12 +116,14 @@ function isGraphContent(n: T3dNode): boolean {
 }
 
 /** Does the asset's class defaults pass need to run (hash or stage changed)? */
-function defaultsStale(asset: IrModule["assets"][number], manifest: Manifest | null, stage: StageInfo, directorRows = false): boolean {
+function defaultsStale(asset: IrModule["assets"][number], manifest: Manifest | null, stage: StageInfo, directorRows = false, editedInMod?: Set<string>): boolean {
   // The `@director` is gone but the manifest still records its row: the pass runs once more so the build can clear the record.
   if (manifest?.directorRow !== undefined && asset.director === undefined) return true;
   if (asset.classDefaults === undefined && asset.classManagerRow === undefined && asset.director === undefined) return false;
   const hash = classDefaultsHash(asset.classDefaults ?? {}, asset.classManagerRow, asset.director?.asset, asset.director?.tag);
   if (manifest?.classDefaultsHash !== hash) return true;
+  // The Mod Editor saved this asset (that is why the stage was copied again): its class defaults may differ from the TypeScript, which wins.
+  if (editedInMod?.has(asset.path.toLowerCase()) === true) return true;
   // A re-sync discards unpublished defaults only: published ones come back with the mod's copy.
   if ((manifest.classDefaultsStageSyncedAt ?? null) !== stage.syncedAt && manifest.classDefaultsPublished !== true) return true;
   // The backend can write class-manager rows now but the last pass only verified the row (or wrote another one): run the pass again.
@@ -130,7 +137,7 @@ function defaultsStale(asset: IrModule["assets"][number], manifest: Manifest | n
  */
 export function assetsNeedingRead(
   ir: IrModule,
-  input: { manifests: Map<string, Manifest | null>; stage: StageInfo; forceReplan?: Set<string>; directorRows?: boolean },
+  input: { manifests: Map<string, Manifest | null>; stage: StageInfo; forceReplan?: Set<string>; directorRows?: boolean; editedInMod?: Set<string> },
 ): Set<string> {
   const out = new Set<string>();
   for (const asset of ir.assets) {
@@ -150,7 +157,7 @@ export function assetsNeedingRead(
       }) ||
       // a unit that is no longer in the TS: its stage nodes are removed (or its manifest entry dropped)
       (manifest?.units.some((mu) => !asset.units.some((unit) => unit.id === mu.id)) ?? false) ||
-      defaultsStale(asset, manifest, input.stage, input.directorRows === true) ||
+      defaultsStale(asset, manifest, input.stage, input.directorRows === true, input.editedInMod) ||
       fieldsStale(asset, manifest) ||
       parentStale(asset, manifest);
     if (need) out.add(asset.path);
@@ -537,7 +544,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
     if (asset.classDefaults !== undefined || asset.classManagerRow !== undefined || asset.director !== undefined || (manifest?.directorRow !== undefined && asset.director === undefined)) {
       const values = asset.classDefaults ?? {};
       const hash = classDefaultsHash(values, asset.classManagerRow, asset.director?.asset, asset.director?.tag);
-      if (retypedFields.size > 0 || defaultsStale(asset, manifest, input.stage, input.directorRows === true)) {
+      if (retypedFields.size > 0 || defaultsStale(asset, manifest, input.stage, input.directorRows === true, input.editedInMod)) {
         const classPath = `${asset.path}.${asset.path.slice(asset.path.lastIndexOf("/") + 1)}_C`;
         defaults = {
           classPath,

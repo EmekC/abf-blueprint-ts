@@ -116,8 +116,8 @@ export function driftDiagnostics(
       out.push({
         ...base,
         code: "ABFC5002",
-        message: `${label}: ${plural(gone.length, "owned node")} missing in the asset (${gone.slice(0, 5).join(", ")}${gone.length > 5 ? ", ..." : ""}). The next build replaces it (TypeScript wins).`,
-        fix: "nothing to do: abfc build applies the unit again; to keep the editor version, move it into the .ts file first.",
+        message: `${label}: ${plural(gone.length, "owned node")} missing in the asset (${gone.slice(0, 5).join(", ")}${gone.length > 5 ? ", ..." : ""}). abfc build --drift replaces it now (TypeScript wins); otherwise the next build that changes this class does.`,
+        fix: "run abfc build --drift to apply the unit again now (a plain build skips an asset whose TypeScript did not change); to keep the editor version, move it into the .ts file first.",
       });
     } else if (state === "edited") {
       const fp = fingerprintUnit(snapshot, unit.nodes);
@@ -133,8 +133,8 @@ export function driftDiagnostics(
       out.push({
         ...base,
         code: "ABFC5001",
-        message: `${label} was edited in the editor since the last build${counts}. The next build replaces it (TypeScript wins).`,
-        fix: "nothing to do: abfc build replaces the edited nodes; to keep the edit, move it into the .ts file first.",
+        message: `${label} was edited in the editor since the last build${counts}. abfc build --drift replaces it now (TypeScript wins); otherwise the next build that changes this class does.`,
+        fix: "run abfc build --drift to replace the edited nodes now (a plain build skips an asset whose TypeScript did not change); to keep the edit, move it into the .ts file first.",
       });
     } else if (state === "staleStage" && builtGraphMatches(unit, snapshot)) {
       continue; // re-synced from a published mod that holds the abfc-built graph

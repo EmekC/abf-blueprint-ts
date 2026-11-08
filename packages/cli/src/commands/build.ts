@@ -140,7 +140,13 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   if (emitAll(ctx, opsPlan.diagnostics)) return false;
 
   const tStage = performance.now();
-  const { status: stage, resynced } = await ensureStage(backend, env, config, { resync: args.flags.resync, warn: (d) => output.diag(d) });
+  const { status: stage, resynced, changedInMod } = await ensureStage(backend, env, config, { resync: args.flags.resync, warn: (d) => output.diag(d) });
+  // The assets the Mod Editor saved (their files caused the re-sync): their class defaults are applied again, TypeScript wins.
+  const editedInMod = new Set<string>();
+  for (const rel of changedInMod) {
+    const m = /^Content\/(.+)\.uasset$/i.exec(rel.replace(/\\/g, "/"));
+    if (m !== null) editedInMod.add(`/${mod}/${m[1]!}`.toLowerCase());
+  }
   // A stage copied from the mod again holds no unpublished work: the manifests follow before anything is planned from them.
   if (resynced) await pruneManifestsToStage(ctx, backend, mod, { ir, owned });
   rec.record("build.stage", since(tStage));
@@ -206,6 +212,29 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     }
   }
 
+  // A struct whose TypeScript is gone stays (Blueprints and saved games that use it would break): reported once, then recorded.
+  const declaredStructs = new Set(fe.hir.structs.map((s) => s.path.toLowerCase()));
+  for (const m of listManifests(projectDir)) {
+    if (m.structFieldsHash === undefined || m.deleted === true || !m.asset.startsWith(`/${mod}/`)) continue;
+    if (declaredStructs.has(m.asset.toLowerCase())) {
+      // declared again: a later removal is reported again
+      if (m.structRetired === true) {
+        const { structRetired: _retired, ...rest } = m;
+        writeManifest(projectDir, rest);
+      }
+      continue;
+    }
+    if (m.structRetired === true) continue;
+    output.diag({
+      severity: "warning",
+      code: "ABFC5018",
+      asset: m.asset,
+      message: `the @struct ${m.asset} is no longer declared in TypeScript; abfc never deletes a struct (Blueprints and saved games that use it would break). Delete it in the Mod Editor once nothing uses it.`,
+      fix: "delete the struct in the Mod Editor when no Blueprint uses it, or declare it in TypeScript again.",
+    });
+    writeManifest(projectDir, { ...m, structRetired: true });
+  }
+
   // A class whose asset is not in the stage yet is created by the apply: it is not read, its manifest (if any) is ignored, every unit is planned.
   const missing = missingInStage(ctx, stage.stagingPath, [...structAssets, ...owned].filter((a) => a.create !== undefined).map((a) => a.path));
 
@@ -230,7 +259,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   // Assets that cannot have anything to plan are not read (no drift check there; `abfc status` still reads everything), unless `readAll`.
   const tRead = performance.now();
   const existing = owned.filter((a) => !missing.has(a.path));
-  const toRead = readAll ? new Set(existing.map((a) => a.path)) : assetsNeedingRead({ ...ir, assets: existing }, { manifests, stage, forceReplan, directorRows: caps.classManagerRows });
+  const toRead = readAll ? new Set(existing.map((a) => a.path)) : assetsNeedingRead({ ...ir, assets: existing }, { manifests, stage, forceReplan, directorRows: caps.classManagerRows, editedInMod });
   // The asset ops edited the nodes of renamed assets and of their referencers: those are read too, so drifted units are replaced now
   // (editedByAbfc) instead of reading as editor edits in `abfc status` and blaming the modder at the next real change.
   for (const p of assetOpsOutcome.edited ?? []) if (existing.some((a) => a.path === p)) toRead.add(p);
@@ -296,6 +325,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     snapshotVariableTypes,
     forceReplan,
     editedByAbfc: new Set([...(assetOpsOutcome.edited ?? []), ...reparented]),
+    editedInMod,
     selfEventCalls: caps.selfEventCalls,
     missing,
     createKinds: caps.createKinds,

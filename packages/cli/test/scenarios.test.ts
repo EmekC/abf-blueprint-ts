@@ -571,11 +571,9 @@ test("(S12b) published class defaults are not applied again after a re-sync; unp
     r.backend.markPublished();
     assert.equal(readManifest(r.dir, "/TestMod/Relay/BP_Relay")?.classDefaultsPublished, true);
 
-    // published: another re-sync brings them back from the mod, nothing is applied and nothing is left to publish
-    r.backend.stageStale = ["Content/Relay/BP_Relay.uasset"];
-    x = await r.run(["build"]);
+    // published: an explicit re-sync (no editor save behind it) brings them back from the mod, nothing is applied and nothing is left to publish
+    x = await r.run(["build", "--resync"]);
     assert.equal(x.code, 0, x.out);
-    assert.match(x.out, /warning ABFC4017/);
     assert.equal(defaultsPasses(r), 2, "published defaults are not applied again");
     x = await r.run(["publish"]);
     assert.equal(x.code, 0, x.out);
@@ -587,6 +585,88 @@ test("(S12b) published class defaults are not applied again after a re-sync; unp
     assert.equal(x.code, 0, x.out);
     assert.equal(defaultsPasses(r), 3);
     assert.equal(readManifest(r.dir, "/TestMod/Relay/BP_Relay")?.classDefaultsPublished, undefined);
+  });
+});
+
+const defaultsAssets = (r: { backend: { calls: Array<{ tool: string; label?: string; specs?: Array<Record<string, any>> }> } }): string[] =>
+  r.backend.calls.filter((c) => c.tool === "bp_apply" && c.label === "defaults").flatMap((c) => (c.specs ?? []).map((s) => String(s.asset)));
+
+test("(S12c) class defaults of an asset saved in the Mod Editor are applied again; other assets are not", async () => {
+  await withRig({ ...OPS }, async (r) => {
+    const withTick = (cls: string): string => tally(cls).replace("@blueprint()", "@blueprint({ tickInterval: 0.5 })");
+    tallyOnly(r.dir, withTick("BP_Zed"));
+    writeFileSync(join(r.dir, "src", "Other.ts"), withTick("BP_Other"), "utf8");
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.deepEqual(defaultsAssets(r).sort(), ["/TestMod/BP_Other", "/TestMod/BP_Zed"]);
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    r.backend.markPublished();
+    assert.equal(readManifest(r.dir, "/TestMod/BP_Zed")?.classDefaultsPublished, true);
+
+    // the editor saved one asset: its class defaults may differ from the TypeScript, so they are applied again (TypeScript wins)
+    r.backend.stageStale = ["Content/BP_Zed.uasset"];
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC4017/);
+    assert.deepEqual(defaultsAssets(r).sort(), ["/TestMod/BP_Other", "/TestMod/BP_Zed", "/TestMod/BP_Zed"], "only the saved asset gets its defaults again");
+    assert.equal(readManifest(r.dir, "/TestMod/BP_Zed")?.classDefaultsPublished, undefined);
+    assert.equal(readManifest(r.dir, "/TestMod/BP_Other")?.classDefaultsPublished, true);
+    x = await r.run(["build"]);
+    assert.match(x.out, /up to date/);
+    assert.equal(defaultsAssets(r).length, 3, "a rebuild applies nothing");
+  });
+});
+
+test("(S24b) a struct whose TypeScript is gone warns once (ABFC5018) and stays", async () => {
+  await withRig({ ...OPS, structs: true }, async (r) => {
+    tallyOnly(r.dir, tally("BP_Zed"));
+    writeFileSync(
+      join(r.dir, "src", "Entry.ts"),
+      `import { struct } from "@abfc/runtime";
+import type { int } from "@abfc/runtime";
+
+@struct({ path: "/TestMod/S_Entry" })
+export class S_Entry {
+  Count!: int;
+}
+`,
+      "utf8",
+    );
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.ok(r.backend.stageAssets().includes("/TestMod/S_Entry"));
+    assert.doesNotMatch(x.out, /ABFC5018/);
+
+    rmSync(join(r.dir, "src", "Entry.ts"));
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(x.out.split("\n").filter((l) => /ABFC5018/.test(l) && /S_Entry/.test(l)).length, 1, x.out);
+    assert.match(x.out, /abfc never deletes a struct/);
+    assert.ok(r.backend.stageAssets().includes("/TestMod/S_Entry"), "the struct stays on the stage");
+    assert.equal(readManifest(r.dir, "/TestMod/S_Entry")?.structRetired, true);
+
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC5018/);
+    assert.ok(r.backend.stageAssets().includes("/TestMod/S_Entry"));
+
+    // declared again: nothing to do; removing it once more is reported again
+    writeFileSync(join(r.dir, "src", "Entry.ts"), `import { struct } from "@abfc/runtime";
+import type { int } from "@abfc/runtime";
+
+@struct({ path: "/TestMod/S_Entry" })
+export class S_Entry {
+  Count!: int;
+}
+`, "utf8");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC5018/);
+    assert.equal(readManifest(r.dir, "/TestMod/S_Entry")?.structRetired, undefined);
+    rmSync(join(r.dir, "src", "Entry.ts"));
+    x = await r.run(["build"]);
+    assert.match(x.out, /ABFC5018/);
   });
 });
 

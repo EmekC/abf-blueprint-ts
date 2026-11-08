@@ -1063,7 +1063,7 @@ TypeScript wins: a build (and a publish, which builds) makes the Blueprint match
 
 Severity: warning (`abfc status`) · Exit: -
 
-Meaning: a unit that abfc built was edited in the Mod Editor since the last build, or the staged copy differs from what abfc applied. The next build replaces it (TypeScript wins); [ABFC5014](#abfc5014) lists it then. The message counts the nodes and links that changed.
+Meaning: a unit that abfc built was edited in the Mod Editor since the last build, or the staged copy differs from what abfc applied. `abfc build --drift` replaces it now, otherwise the next build that changes this class does (a plain build does not read an asset whose TypeScript did not change); either way TypeScript wins, and [ABFC5014](#abfc5014) lists it then. The message counts the nodes and links that changed.
 
 Typical cause: you changed, moved or reconnected a generated node in the Blueprint editor, or the stage was re-synced from a mod that holds a different version.
 
@@ -1073,7 +1073,7 @@ Fix: nothing is required. To keep the edit, move it into the `.ts` file before b
 
 Severity: warning (`abfc status`); error · Exit 3 (`abfc adopt`)
 
-Meaning: nodes that abfc owns are missing from the asset. The next build applies the unit again (TypeScript wins). The same code is an error of `abfc adopt` when the unit to adopt does not exist in the asset.
+Meaning: nodes that abfc owns are missing from the asset. `abfc build --drift` applies the unit again now, otherwise the next build that changes this class does (a plain build does not read an asset whose TypeScript did not change); TypeScript wins. The same code is an error of `abfc adopt` when the unit to adopt does not exist in the asset.
 
 Typical cause: you deleted generated nodes in the editor, or the stage was re-synced from a mod that never had them.
 
@@ -1232,6 +1232,16 @@ Meaning: a class that was declared in TypeScript is gone, but its asset was not 
 Typical cause: you deleted the file of a class that took over an asset you had made in the Mod Editor.
 
 Fix: delete the asset in the Mod Editor if you no longer need it. Nothing else is required.
+
+### ABFC5018
+
+Severity: warning · Exit: -
+
+Meaning: a `@struct` that abfc created is no longer declared in TypeScript (its file was deleted, or the struct was renamed together with its file). abfc never deletes a struct, because Blueprints and saved games that use it would break, so the struct stays in the mod. The warning appears once; the next builds are silent.
+
+Typical cause: you renamed or removed the struct, as ABFC2046 suggests for a field change.
+
+Fix: delete the struct in the Mod Editor once no Blueprint uses it, or declare it in TypeScript again (nothing else is needed; if you remove it again later, abfc warns again).
 
 ### ABFC5101
 

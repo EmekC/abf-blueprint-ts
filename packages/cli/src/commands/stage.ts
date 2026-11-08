@@ -17,7 +17,7 @@ export async function ensureStage(
   env: Environment,
   config: ProjectConfig,
   o: { resync: boolean; onConflict?: "resync" | "report"; warn?: (d: Diagnostic) => void },
-): Promise<{ status: StageStatus; resynced: boolean }> {
+): Promise<{ status: StageStatus; resynced: boolean; changedInMod: string[] }> {
   const mod = config.mod.name;
   const modDir = env.modDir.value;
   const stageFrom = async (discardChanges: boolean): Promise<StageStatus> => {
@@ -56,6 +56,8 @@ export async function ensureStage(
   // Conflicts (edited in the stage and in the mod) and stale files (untouched in the stage, saved or deleted in the mod): either way
   // the stage no longer shows the real mod.
   const changedInMod = [...status.conflicts, ...status.stale];
+  // The files whose change caused the automatic re-sync below (the caller re-applies the class defaults of those assets: the editor saved them).
+  let editedInMod: string[] = [];
   if (changedInMod.length > 0) {
     const listed = changedInMod.slice(0, 10).join(", ") + (changedInMod.length > 10 ? `, and ${changedInMod.length - 10} more` : "");
     if (o.onConflict === "report") {
@@ -69,6 +71,7 @@ export async function ensureStage(
       // The stage only holds abfc's own work, which the same build regenerates from the TypeScript: copy the mod again and go on.
       status = await stageFrom(true);
       resynced = true;
+      editedInMod = changedInMod;
       if (status.conflicts.length > 0) {
         throw new AbfcError({
           severity: "error",
@@ -84,5 +87,5 @@ export async function ensureStage(
       });
     }
   }
-  return { status, resynced };
+  return { status, resynced, changedInMod: editedInMod };
 }
