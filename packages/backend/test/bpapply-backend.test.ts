@@ -254,6 +254,7 @@ test("reflect reads the result file (BOM tolerated) and maps the filter", async 
     assert.equal(res.data.classes["/Script/Fake.Widget"]?.castPin, "AsWidget");
     assert.deepEqual(res.data.structs, {});
     assert.deepEqual(res.data.errors, ["one member failed"]);
+    assert.deepEqual(res.data.memberSources, ["widgetTree", "scs", "cookedClass"]);
     assert.deepEqual(res.filter, { contentVersion: "v1", rules: [["Allow", "Fake.Widget"], ["Block", "Fake.Widget.Secret"]] });
     assert.deepEqual(calls()[0]?.args, {
       mod: "TestMod",
@@ -273,6 +274,17 @@ test("reflect asks for gameplay tags only when requested and parses them", async
     const res = await backend.reflect({ mod: "TestMod", classes: [], structs: [], castTargets: [], gameplayTags: true });
     assert.equal(calls()[1]?.args.gameplay_tags, true);
     assert.deepEqual(res.data.gameplayTags, { tags: ["ClassManager.EntityDirector.Fake"], sources: { settings: 1 } });
+  });
+});
+
+test("reflect passes supers_of only when given and parses supers", async () => {
+  await withBackend({}, async ({ backend, calls }) => {
+    const plain = await backend.reflect({ mod: "TestMod", classes: [], structs: [], castTargets: [] });
+    assert.equal(plain.data.supers, undefined);
+    assert.equal("supers_of" in (calls()[0]?.args ?? {}), false);
+    const res = await backend.reflect({ mod: "TestMod", classes: [], structs: [], castTargets: [], supersOf: ["/Script/Fake.Other"] });
+    assert.deepEqual(calls()[1]?.args.supers_of, ["/Script/Fake.Other"]);
+    assert.deepEqual(res.data.supers, { "/Script/Fake.Widget": ["/Script/Fake.Base", "/Script/CoreUObject.Object"] });
   });
 });
 

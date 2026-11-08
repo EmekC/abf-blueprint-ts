@@ -35,6 +35,14 @@ export interface StubIndex {
   overridden: string[];
   missing: string[];
   opaque: string[];
+  /** `"<class> -> <ancestor> (opaque|no members|cycle)"`: a class whose parent chain reaches a placeholder or a loop. */
+  chainGaps: string[];
+  /** Reflected `/Game` (non-script) classes the backend gave no `supers` entry for. */
+  noSupers: string[];
+  /** Opaque classes that extend UObject because no chain or `supers` entry names their parent. */
+  opaqueNoParent: string[];
+  /** `<class>:<member> (<kind>)` members found beyond the class defaults (widgets, components, widget/component variables). */
+  discovered: string[];
 }
 
 const EMPTY_CLASS: ReflectClass = {
@@ -67,6 +75,41 @@ export function missingStructs(data: ReflectData, extra: TypeRef[] = []): string
   return [...out].sort();
 }
 
+/** Ancestors of `path`, nearest first: the backend's `supers` entry when present, else the native `ancestors`. */
+export function classChain(data: ReflectData, path: string): string[] {
+  const s = data.supers?.[path];
+  const chain = Array.isArray(s) && s.length > 0 ? s : (data.classes[path]?.ancestors ?? []);
+  return chain.filter((a) => a !== path);
+}
+
+const isChainPath = (p: string): boolean => p.startsWith("/Script/") || p.startsWith("/Game/");
+
+/** Class paths on the parent chains of the reflected classes (and of `roots`) that have no members in `data` (drives the reflect closure). */
+export function missingAncestors(data: ReflectData, roots: string[] = [], skip: ReadonlySet<string> = new Set()): string[] {
+  const sources = [...Object.entries(data.classes).filter(([, c]) => c.castOnly !== true).map(([p]) => p), ...roots];
+  const out = new Set<string>();
+  for (const src of sources) {
+    for (const p of [src, ...classChain(data, src)]) {
+      if (!isChainPath(p) || p === UOBJECT_PATH || skip.has(p)) continue;
+      const have = data.classes[p];
+      if (have !== undefined && have.castOnly !== true) continue;
+      out.add(p);
+    }
+  }
+  return [...out].sort();
+}
+
+/** Class paths mentioned by pins (or `extra`) that have neither members nor a `supers` entry (drives the `supers_of` request). */
+export function classesWithoutSupers(data: ReflectData, extra: TypeRef[] = []): string[] {
+  const out = new Set<string>();
+  for (const r of [...reflectReferences(data), ...extra]) {
+    if (r.kind !== "class" || !isChainPath(r.path) || r.path === UOBJECT_PATH) continue;
+    if (data.classes[r.path] !== undefined || data.supers?.[r.path] !== undefined) continue;
+    out.add(r.path);
+  }
+  return [...out].sort();
+}
+
 interface Item {
   path: string;
   render(fb: FileBuilder): string;
@@ -77,6 +120,7 @@ interface Counters {
   deprecated: string[];
   overridden: string[];
   missing: string[];
+  discovered: string[];
 }
 
 function pickProperty(m: ReflectMember): ReflectPin | undefined {
@@ -94,6 +138,7 @@ function renderClass(
   counters: Counters,
   opaque: boolean,
   fb: FileBuilder,
+  inherited: ReadonlySet<string>,
 ): string {
   const { profile, filter } = input;
   const name = tsIdent(path);
@@ -111,6 +156,8 @@ function renderClass(
   const callArrayShort = profile.nodeClasses.callArrayFunction.slice(profile.nodeClasses.callArrayFunction.lastIndexOf(".") + 1);
 
   for (const p of c.properties) {
+    // A member beyond the class defaults is listed once, on the class that declares it.
+    if (p.kind !== undefined && inherited.has(p.name.toLowerCase())) continue;
     const pin = pickProperty(p);
     if (!pin || seen.has(`i:${p.name}`)) {
       counters.missing.push(`${path}:${p.name}`);
@@ -131,7 +178,11 @@ function renderClass(
     }
     mt.push(`@bpType ${g}`);
     if (isUnsupported(g)) mt.push(`@bpUnsupported ${unsupportedLabel(g)}`);
-    instance.push(jsdoc(mt, "  ") + `  ${memberKey(p.name)}: ${tsOfGrammar(g, fb)};\n`);
+    if (p.kind === "widget") mt.push("@bpWidget");
+    else if (p.kind === "component") mt.push("@bpComponent");
+    if (p.kind !== undefined) counters.discovered.push(`${path}:${p.name} (${p.kind})`);
+    const ro = p.kind === "widget" || p.kind === "component" ? "readonly " : "";
+    instance.push(jsdoc(mt, "  ") + `  ${ro}${memberKey(p.name)}: ${tsOfGrammar(g, fb)};\n`);
   }
 
   if (!opaque) {
@@ -147,8 +198,11 @@ function renderClass(
     }
   }
 
+  // Member names are FNames (case-insensitive), and the CLI matches discovered names that way: dedupe the config entries the same way.
+  const seenLower = new Set([...seen].filter((k) => k.startsWith("i:")).map((k) => k.toLowerCase()));
   for (const [member, widgetCls] of Object.entries(input.widgetMembers?.[path] ?? {})) {
-    if (seen.has(`i:${member}`)) continue;
+    if (seenLower.has(`i:${member}`.toLowerCase())) continue;
+    seenLower.add(`i:${member}`.toLowerCase());
     seen.add(`i:${member}`);
     counters.members++;
     // A widget class that was not reflected (no `scriptClasses` entry) is typed UObject; `abfc stubs` warns about it.
@@ -259,15 +313,47 @@ export function emitStubsWithIndex(input: EmitInput): { files: Map<string, strin
   }
   for (const p of input.opaque) if (!defined.has(p) && !opaqueKinds.has(p)) opaqueKinds.set(p, "class");
 
-  const counters: Counters = { members: 0, deprecated: [], overridden: [], missing: [] };
-  const opaqueClassPaths = new Set([...opaqueKinds].filter(([, k]) => k === "class").map(([p]) => p));
-  const parentOf = (path: string, c: ReflectClass): string | null => {
-    if (path === UOBJECT_PATH) return null;
-    for (const a of c.ancestors) {
-      if (a !== path && (classes.has(a) || opaqueClassPaths.has(a))) return a;
+  // Parent chains: the nearest ancestor of every class (reflected or named by `supers`) is its real parent; a chain entry
+  // that was not reflected becomes an opaque class that keeps its own known parent.
+  const chained = new Set<string>([...classes.keys(), ...Object.keys(reflect.supers ?? {})]);
+  chained.delete(UOBJECT_PATH);
+  const knownParent = new Map<string, string>();
+  for (const p of chained) knownParent.set(p, classChain(reflect, p)[0] ?? UOBJECT_PATH);
+  for (const p of chained) {
+    const ch = classChain(reflect, p);
+    for (let i = 0; i < ch.length; i++) {
+      const a = ch[i] as string;
+      if (a !== UOBJECT_PATH && !knownParent.has(a)) knownParent.set(a, ch[i + 1] ?? UOBJECT_PATH);
     }
-    return UOBJECT_PATH;
+  }
+  const chainPaths = new Set<string>(knownParent.values());
+  for (const p of chained) for (const a of classChain(reflect, p)) chainPaths.add(a);
+  for (const a of chainPaths) if (!defined.has(a) && !opaqueKinds.has(a)) opaqueKinds.set(a, "class");
+
+  const counters: Counters = { members: 0, deprecated: [], overridden: [], missing: [], discovered: [] };
+  // Lower-case property names of every reflected class on a class's parent chain (discovered members are not repeated on subclasses).
+  const inheritedMemo = new Map<string, ReadonlySet<string>>();
+  const inheritedOf = (path: string): ReadonlySet<string> => {
+    let s = inheritedMemo.get(path);
+    if (s === undefined) {
+      const acc = new Set<string>();
+      for (const a of classChain(reflect, path)) for (const x of classes.get(a)?.properties ?? []) acc.add(x.name.toLowerCase());
+      inheritedMemo.set(path, (s = acc));
+    }
+    return s;
   };
+  const parentOf = (path: string): string | null => (path === UOBJECT_PATH ? null : (classChain(reflect, path)[0] ?? UOBJECT_PATH));
+
+  const opaqueNoParent: string[] = [];
+  const emittedParent = new Map<string, string | null>();
+  for (const path of classes.keys()) emittedParent.set(path, parentOf(path));
+  for (const [path, kind] of opaqueKinds) {
+    if (kind !== "class") continue;
+    const kp = knownParent.get(path);
+    if (kp === undefined) opaqueNoParent.push(path);
+    emittedParent.set(path, kp ?? UOBJECT_PATH);
+  }
+  for (const m of input.manual) emittedParent.set(m.classPath, m.parent ?? UOBJECT_PATH);
 
   const groups = new Map<string, Item[]>();
   const add = (path: string, render: (fb: FileBuilder) => string): void => {
@@ -276,13 +362,39 @@ export function emitStubsWithIndex(input: EmitInput): { files: Map<string, strin
     if (!g) groups.set(spec, (g = []));
     g.push({ path, render });
   };
-  for (const [path, c] of classes) add(path, (fb) => renderClass(path, c, parentOf(path, c), input, counters, false, fb));
+  for (const [path, c] of classes) add(path, (fb) => renderClass(path, c, emittedParent.get(path) ?? null, input, counters, false, fb, inheritedOf(path)));
   for (const [path, s] of structs) add(path, (fb) => renderStruct(path, s.fields, fb));
   for (const [path, kind] of opaqueKinds) {
-    if (kind === "class") add(path, (fb) => renderClass(path, EMPTY_CLASS, UOBJECT_PATH, input, counters, true, fb));
+    if (kind === "class") add(path, (fb) => renderClass(path, EMPTY_CLASS, emittedParent.get(path) ?? UOBJECT_PATH, input, counters, true, fb, new Set()));
     else if (kind === "struct") add(path, (fb) => renderStruct(path, null, fb));
     else add(path, (fb) => renderEnum(path, fb));
   }
+
+  // Audit: every non-opaque class should reach UObject through classes that have members.
+  const chainGaps: string[] = [];
+  const isOpaqueClass = (p: string): boolean => opaqueKinds.get(p) === "class";
+  const auditStarts = [...classes.entries()].filter(([, c]) => c.castOnly !== true).map(([p]) => p).concat(input.manual.map((m) => m.classPath));
+  for (const start of auditStarts) {
+    const seen = new Set<string>([start]);
+    for (let cur = emittedParent.get(start) ?? null; cur !== null; cur = emittedParent.get(cur) ?? null) {
+      if (seen.has(cur)) {
+        chainGaps.push(`${start} -> ${cur} (cycle)`);
+        break;
+      }
+      seen.add(cur);
+      if (isOpaqueClass(cur)) {
+        chainGaps.push(`${start} -> ${cur} (opaque)`);
+        break;
+      }
+      if (classes.get(cur)?.castOnly === true) {
+        chainGaps.push(`${start} -> ${cur} (no members)`);
+        break;
+      }
+    }
+  }
+  const noSupers = Object.entries(reflect.classes)
+    .filter(([p, c]) => !p.startsWith("/Script/") && c.castOnly !== true && reflect.supers?.[p] === undefined)
+    .map(([p]) => p);
 
   const files = new Map<string, string>();
   for (const spec of [...groups.keys()].sort()) {
@@ -306,6 +418,10 @@ export function emitStubsWithIndex(input: EmitInput): { files: Map<string, strin
       overridden: counters.overridden.sort(),
       missing: counters.missing.sort(),
       opaque: [...opaqueKinds.keys()].sort(),
+      chainGaps: chainGaps.sort(),
+      noSupers: noSupers.sort(),
+      opaqueNoParent: opaqueNoParent.sort(),
+      discovered: counters.discovered.sort(),
     },
   };
 }

@@ -71,6 +71,8 @@ export interface ReflectRequest {
   castTargets: string[];
   /** Also list the gameplay tags the engine knows (backend 2.6.0, capability `gameplayTags`). */
   gameplayTags?: boolean;
+  /** Class paths whose parent chain only is wanted (opaque types); backends that report `supers`. */
+  supersOf?: string[];
 }
 
 /** One pin of a reflected member (the backend's `Pin` shape of `reflect.json`). */
@@ -89,6 +91,8 @@ export interface ReflectPin {
 export interface ReflectMember {
   name: string;
   pins: ReflectPin[];
+  /** Set for members GetClassDefaults cannot list (backend member pass); absent for class-default properties and functions. */
+  kind?: "widget" | "component" | "member";
   /** Function metadata read from the engine (backends with the reflect meta pass); null/absent when unreadable. */
   meta?: { tooltip?: string | null; displayName?: string | null; /** pin name -> default text from the UFunction `CPP_Default_*` metadata (backend 2.6.0); null when unreadable. */ defaults?: Record<string, string> | null } | null;
 }
@@ -111,6 +115,10 @@ export interface ReflectData {
   errors: string[];
   /** Gameplay tags of the engine (only when requested and the backend supports it); `sources` is the backend's per-source count or error. */
   gameplayTags?: { tags: string[]; sources: Record<string, unknown> };
+  /** Class path -> every ancestor, Blueprint and native, nearest first, ending at UObject; absent from older backends. */
+  supers?: Record<string, string[]>;
+  /** Member sources the backend ran (widgetTree, scs, cookedClass, pythonDoc); absent from older backends. */
+  memberSources?: string[];
 }
 
 export interface ReflectResult {

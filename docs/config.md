@@ -20,7 +20,7 @@ Schema 2. A JSON schema ships with the VS Code extension, so the editor complete
 | `stubs.classes` | string array | Extra engine or game class paths to generate stubs for. |
 | `stubs.scriptClasses` | string array | Script class paths (`/Script/Module.Class`) to generate stubs for. |
 | `stubs.modAssets` | `"all"` or a list | `"all"` stubs every Blueprint of the mod. A list holds mod-relative paths such as `"Relays/BP_Example"`. A leading `/` is [ABFC1021](errors.md#abfc1021). |
-| `stubs.widgetMembers` | object | Designer widgets of widget Blueprints that cannot be read from an export: class path, then member name, then widget class path. |
+| `stubs.widgetMembers` | object | Deprecated. Members are found by `abfc stubs`; entries that reflection finds warn [ABFC3015](errors.md#abfc3015), others are still emitted (class path, then member name, then widget class path). |
 | `stubs.scriptModules` | ignored | Deprecated; use `stubs.scriptClasses` ([ABFC3010](errors.md#abfc3010)). |
 | `backend.kind` | `"bp_apply"` | The only supported backend. |
 | `backend.minProtocol` | integer, `1` | Lowest backend protocol the project needs. |

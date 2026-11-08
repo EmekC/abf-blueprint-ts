@@ -43,7 +43,7 @@ test("lock round trip through a folder", () => {
     const l = lock();
     writeLock(stubs, l);
     assert.deepEqual(readLock(stubs), l);
-    assert.equal(l.generator, "0.5.0");
+    assert.equal(l.generator, "0.7.0");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

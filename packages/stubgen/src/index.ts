@@ -3,6 +3,7 @@ export * from "./names.js";
 export * from "./filter.js";
 export * from "./typemap.js";
 export * from "./emit.js";
+export * from "./audit.js";
 export * from "./manual.js";
 export * from "./lock.js";
 export * from "./paths.js";

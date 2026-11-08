@@ -8,8 +8,14 @@ abfc uses semantic versioning for its command-line surface: the commands, their 
 
 ## [Unreleased]
 
+### Deprecated
+
+- `stubs.widgetMembers`: designer widgets, components and widget/component variables are found by `abfc stubs` itself. Entries that reflection finds warn ABFC3015; the others are still emitted.
+
 ### Fixed
 
+- Stubs now list the designer widgets (`readonly`, `@bpWidget`), SCS components (`readonly`, `@bpComponent`) and widget- or component-typed variables of game Blueprints, and the component and widget properties of native classes (a character's mesh or movement component), on the declaring class only. Needs a backend with the member pass (otherwise warning ABFC3014). `_index.json` lists them under `discovered`. Run `abfc stubs` once (generator 0.7.0).
+- Stubs keep the complete parent chain of every class: a Blueprint whose parent is a game-module class or another Blueprint now inherits all its ancestors' functions and properties (for example `IsLocalController` and `K2_GetPawn` on a player controller Blueprint), and placeholder types extend their real parent. Needs a backend whose `reflect` reports `supers`; with an older one Blueprint parents are skipped (warning ABFC3013). `_index.json` lists `chainGaps`, `noSupers` and `opaqueNoParent`, and `node scripts/stub-chain-audit.mjs --stubs <dir>` audits any stub folder. Run `abfc stubs` once (generator 0.6.0).
 - Editor completion finds Blueprint library functions by the C++ name without its `K2_`/`BP_` prefix, by any word of the name (`timer`) and by the Blueprint node name (`settimerbyevent` offers `KismetSystemLibrary.K2_SetTimerDelegate` with its import). After a dot, stub members are also found by their node name. Works with existing stubs.
 
 ## [1.0.0] - 2026-11-08
