@@ -2,7 +2,7 @@
 import { win32 } from "node:path";
 import { nodeKey } from "@abfc/backend";
 import type { Backend } from "@abfc/backend";
-import { buildHir, listManifests, loadProgram, lowerChecked, movedClassDiagnostics, readManifest, readSourceMap, writeManifest, writeSourceMap } from "@abfc/compiler";
+import { buildHir, listManifests, loadProgram, lowerChecked, readManifest, readSourceMap, writeManifest, writeSourceMap } from "@abfc/compiler";
 import type { CompilerProjectConfig, HirProgram, LoadedProgram, Manifest, SourceMapFile } from "@abfc/compiler";
 import { AbfcError } from "@abfc/env";
 import type { ProjectConfig } from "@abfc/env";
@@ -88,8 +88,6 @@ export function compileFrontend(ctx: CliContext): Frontend {
   const loaded = loadProgram(ctx.projectDir);
   const hir = buildHir(loaded, compilerConfigOf(ctx.config), ctx.env.profile);
   const diags = [...loaded.diagnostics, ...hir.diagnostics];
-  // A class file that moved since its asset was built stops here, before anything is planned or the backend starts (ABFC5012).
-  if (!hasError(diags)) diags.push(...movedClassDiagnostics(hir, listManifests(ctx.projectDir), ctx.config.mod.name, { singleMatch: "error" })); // until the build wires asset ops (A10), a move stays an error
   emitAll(ctx, diags);
   if (hasError(diags)) return { loaded, hir, ir: null };
   const lowered = lowerChecked(hir, ctx.env.profile);
@@ -235,8 +233,14 @@ export async function pruneManifestsToStage(
         try {
           held = new Set((await readAsset(ctx, backend, asset)).parsed.nodes.keys());
         } catch {
-          // unreadable stage: do not treat it as empty (that would drop published units), keep this manifest as it is
-          continue;
+          // A stage-only rename is gone after a re-sync: the published nodes are still in the asset under its old path.
+          try {
+            if (base.renamedFrom === undefined) throw new Error("no earlier path");
+            held = new Set((await readAsset(ctx, backend, base.renamedFrom)).parsed.nodes.keys());
+          } catch {
+            // unreadable stage: do not treat it as empty (that would drop published units), keep this manifest as it is
+            continue;
+          }
         }
         units = base.units.filter((u) => u.adopt !== null || u.nodes.every((n) => held.has(n)));
       }

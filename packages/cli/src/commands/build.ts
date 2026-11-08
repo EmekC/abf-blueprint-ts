@@ -6,6 +6,7 @@ import {
   listManifests,
   mapCompileMessages,
   featureGates,
+  planAssetOps,
   planBuild,
   readManifest,
   readSourceMap,
@@ -39,6 +40,7 @@ import {
   since,
 } from "./common.js";
 import { refreshTagsFile } from "../tags.js";
+import { runAssetOps, runParentChange } from "./assetops.js";
 import { ensureStage } from "./stage.js";
 
 /** True for an @event whose doc comment is its tooltip: the backend only writes it with the bp_apply feature `event_meta`. */
@@ -122,7 +124,42 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   for (const c of [...fe.hir.classes, ...fe.hir.structs]) sources.set(c.path, { file: c.span.file, class: c.name, derived: c.pathDerived });
   // Mod-defined structs (UserDefinedStruct): created from the TS, never read; planned first.
   const structAssets = ir.assets.filter((a) => a.structFields !== undefined);
-  const owned = ir.assets.filter((a) => a.units.length > 0 || a.classDefaults !== undefined || a.classManagerRow !== undefined || a.director !== undefined || a.variables.some((v) => v.temp !== true) || (a.director === undefined && readManifest(projectDir, a.path)?.directorRow !== undefined));
+  /** The manifest of an asset; a tombstone (the asset was deleted by an earlier build) counts as none. */
+  const liveManifest = (asset: string): Manifest | null => {
+    const m = readManifest(projectDir, asset);
+    return m === null || m.deleted === true ? null : m;
+  };
+  const owned = ir.assets.filter((a) => a.units.length > 0 || a.classDefaults !== undefined || a.classManagerRow !== undefined || a.director !== undefined || a.variables.some((v) => v.temp !== true) || (a.director === undefined && liveManifest(a.path)?.directorRow !== undefined));
+  const { backend, info } = await session.open();
+  const caps = info.capabilities;
+  // Feature gates: Map/Set types and creatable kinds the backend (or abfc's native policy) lacks fail here, before the stage is touched.
+  if (emitAll(ctx, featureGates({ ...ir, assets: [...structAssets, ...owned] }, caps))) return false;
+
+  // Renames of moved classes and deletes of assets abfc created are decided before the stage is touched (ABFC5012 errors stop here).
+  const opsPlan = planAssetOps(fe.hir, listManifests(projectDir), mod, { assetOps: caps.assetOps });
+  if (emitAll(ctx, opsPlan.diagnostics)) return false;
+
+  const tStage = performance.now();
+  const { status: stage, resynced } = await ensureStage(backend, env, config, { resync: args.flags.resync, warn: (d) => output.diag(d) });
+  // A stage copied from the mod again holds no unpublished work: the manifests follow before anything is planned from them.
+  if (resynced) await pruneManifestsToStage(ctx, backend, mod, { ir, owned });
+  rec.record("build.stage", since(tStage));
+  // Stage-only operations: renames and deletes (and their repetition after a re-sync) run now, before anything is read or planned.
+  const tOps = performance.now();
+  const assetOpsOutcome = await runAssetOps(ctx, backend, {
+    stagingPath: stage.stagingPath,
+    plan: opsPlan,
+    classPaths: new Set([...fe.hir.classes, ...fe.hir.structs].map((c) => c.path)),
+    owned: new Set(owned.map((a) => a.path)),
+    manifests: listManifests(projectDir),
+    assetOps: caps.assetOps,
+  });
+  rec.record("build.assetOps", since(tOps), assetOpsOutcome.ok);
+  if (!assetOpsOutcome.ok) return false;
+  const opsJson = {
+    ...(assetOpsOutcome.renamed.length > 0 ? { renamed: assetOpsOutcome.renamed } : {}),
+    ...(assetOpsOutcome.deleted.length > 0 ? { deleted: assetOpsOutcome.deleted } : {}),
+  };
   // A class whose TypeScript is gone but whose manifest still lists units: its units are retired like those of a removed event.
   for (const m of listManifests(projectDir)) {
     if (!m.asset.startsWith(`/${mod}/`) || m.units.length === 0 || owned.some((a) => a.path === m.asset)) continue;
@@ -137,16 +174,6 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     }
   }
 
-  const { backend, info } = await session.open();
-  const caps = info.capabilities;
-  // Feature gates: Map/Set types and creatable kinds the backend (or abfc's native policy) lacks fail here, before the stage is touched.
-  if (emitAll(ctx, featureGates({ ...ir, assets: [...structAssets, ...owned] }, caps))) return false;
-
-  const tStage = performance.now();
-  const { status: stage, resynced } = await ensureStage(backend, env, config, { resync: args.flags.resync, warn: (d) => output.diag(d) });
-  // A stage copied from the mod again holds no unpublished work: the manifests follow before anything is planned from them.
-  if (resynced) await pruneManifestsToStage(ctx, backend, mod, { ir, owned });
-  rec.record("build.stage", since(tStage));
   // A class whose asset is not in the stage yet is created by the apply: it is not read, its manifest (if any) is ignored, every unit is planned.
   const missing = missingInStage(ctx, stage.stagingPath, [...structAssets, ...owned].filter((a) => a.create !== undefined).map((a) => a.path));
 
@@ -157,9 +184,9 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   const forceReplan = new Set<string>();
   const manifests = new Map<string, Manifest | null>();
   // A struct's manifest is read even when the stage lacks the file: its field hash guards against changing a created struct.
-  for (const a of structAssets) manifests.set(a.path, readManifest(projectDir, a.path));
+  for (const a of structAssets) manifests.set(a.path, liveManifest(a.path));
   for (const a of owned) {
-    manifests.set(a.path, missing.has(a.path) ? null : readManifest(projectDir, a.path));
+    manifests.set(a.path, missing.has(a.path) ? null : liveManifest(a.path));
     for (const u of a.units) {
       const c = cache[a.path]?.[u.id];
       if (c !== undefined && (c.stubLockHash !== stubLockHash || c.compilerVersion !== COMPILER_ID || c.irHash !== u.hash)) forceReplan.add(`${a.path} ${u.id}`);
@@ -177,11 +204,38 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   const snapshots = new Map<string, Map<string, T3dNode>>();
   const snapshotVariables = new Map<string, string[]>();
   const snapshotVariableTypes = new Map<string, Map<string, string>>();
+  const snapshotParents = new Map<string, string | null>();
+  const keepSnapshot = (path: string, parsed: Awaited<ReturnType<typeof readAsset>>["parsed"]): void => {
+    snapshots.set(path, parsed.nodes);
+    snapshotVariables.set(path, parsed.variables.map((v) => v.name));
+    snapshotVariableTypes.set(path, new Map(parsed.variables.map((v) => [v.name, v.type])));
+    snapshotParents.set(path, parsed.parentClass);
+  };
+  for (const a of readAssets) keepSnapshot(a.path, (await readAsset(ctx, backend, a.path)).parsed);
+
+  // A changed `extends`: the same family is reparented on the stage (every unit is applied again), another family recreates the asset
+  // (it is planned as missing, its manifest ignored). Assets read here without a recorded parent learn it (backfill).
+  const parentRecords = new Set<string>();
+  const reparented = new Set<string>();
   for (const a of readAssets) {
-    const { parsed } = await readAsset(ctx, backend, a.path);
-    snapshots.set(a.path, parsed.nodes);
-    snapshotVariables.set(a.path, parsed.variables.map((v) => v.name));
-    snapshotVariableTypes.set(a.path, new Map(parsed.variables.map((v) => [v.name, v.type])));
+    const cls = classByPath.get(a.path);
+    const m = manifests.get(a.path) ?? null;
+    if (cls === undefined || m === null) continue;
+    const res = await runParentChange(ctx, backend, { asset: a.path, manifest: m, snapshotParent: snapshotParents.get(a.path) ?? null, cls, assetOps: caps.assetOps });
+    if (emitAll(ctx, res.diagnostics)) return false;
+    if (res.action === "reparent") {
+      keepSnapshot(a.path, (await readAsset(ctx, backend, a.path)).parsed);
+      for (const u of a.units) forceReplan.add(`${a.path} ${u.id}`);
+      reparented.add(a.path);
+      parentRecords.add(a.path);
+    } else if (res.action === "recreate") {
+      missing.add(a.path);
+      manifests.set(a.path, null);
+      for (const map of [snapshots, snapshotVariables, snapshotVariableTypes, snapshotParents]) map.delete(a.path);
+      toRead.delete(a.path);
+    } else if (m.parent === undefined && snapshotParents.get(a.path) !== undefined && snapshotParents.get(a.path) !== null) {
+      parentRecords.add(a.path);
+    }
   }
   rec.record("build.read", since(tRead), true, readAssets.length);
 
@@ -213,6 +267,16 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   });
   if (emitAll(ctx, planned.diagnostics)) return false;
   for (const a of skipped) for (const u of a.units) planned.upToDate.push(`${a.path} ${u.id}`);
+  // A parent change or backfill of an asset the plan does not apply anything to is recorded now (applied assets get it with their final manifest).
+  const planAssetPaths = new Set(planned.plan.assets.map((a) => a.asset));
+  for (const p of parentRecords) {
+    const m = manifests.get(p) ?? null;
+    const cls = classByPath.get(p);
+    if (m === null || cls === undefined || planAssetPaths.has(p)) continue;
+    const next: Manifest = { ...m, parent: cls.parent, parentFamily: cls.family };
+    manifests.set(p, next);
+    writeManifest(projectDir, next);
+  }
 
   // Manifests of assets this build does not touch still learn where their class lives now (an older manifest has no source yet).
   const refreshSources = (touched: ReadonlySet<string>): void => {
@@ -228,7 +292,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     refreshSources(new Set());
     writeCache(ctx, owned, cache, stubLockHash, caps.eventMeta === true);
     output.info(`up to date (${planned.upToDate.length} unit(s) unchanged)`);
-    output.json({ applied: [], upToDate: planned.upToDate });
+    output.json({ applied: [], upToDate: planned.upToDate, ...opsJson });
     return true;
   }
 
@@ -466,7 +530,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     } else if (args.flags.keepFailedStage) {
       output.info("the stage keeps the graphs that failed to compile (--keep-failed-stage); abfc build --resync discards them");
     }
-    output.json({ applied: [], compileFailed: true, stageResynced });
+    output.json({ applied: [], compileFailed: true, stageResynced, ...opsJson });
     return false;
   }
   for (const m of finals) writeManifest(projectDir, m);
@@ -475,7 +539,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
 
   writeCache(ctx, owned, cache, stubLockHash, caps.eventMeta === true);
   output.info(`applied ${stagedUnits.length > 0 ? stagedUnits.join(", ") : "no units"} in ${appliedAssets.join(", ")} (route: ${route})${createdStructs.length > 0 ? `, created struct ${createdStructs.join(", ")}` : ""}${removedUnits.length > 0 ? `, removed ${removedUnits.join(", ")}` : ""}${removedOrphanTags > 0 ? `, removed ${removedOrphanTags} orphan tag comment(s)` : ""}`);
-  output.json({ applied: stagedUnits, assets: appliedAssets, ...(createdStructs.length > 0 ? { structs: createdStructs } : {}), route, upToDate: planned.upToDate, ...(removedUnits.length > 0 ? { removed: removedUnits } : {}), ...(removedOrphanTags > 0 ? { removedOrphanTags } : {}) });
+  output.json({ applied: stagedUnits, assets: appliedAssets, ...(createdStructs.length > 0 ? { structs: createdStructs } : {}), route, upToDate: planned.upToDate, ...(removedUnits.length > 0 ? { removed: removedUnits } : {}), ...(removedOrphanTags > 0 ? { removedOrphanTags } : {}), ...opsJson });
   return true;
 }
 

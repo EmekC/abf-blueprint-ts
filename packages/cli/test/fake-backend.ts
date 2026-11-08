@@ -463,6 +463,16 @@ export class FakeBackend implements Backend {
     this.changed.clear();
   }
 
+  /** Paths of the Blueprint assets the stage holds. */
+  stageAssets(): string[] {
+    return [...this.assets.keys()];
+  }
+
+  /** The parent class path of a stage asset (set by create/reparent), or undefined. */
+  parentOf(asset: string): string | undefined {
+    return this.assets.get(asset)?.parent;
+  }
+
   /** The recorded `bp_apply` labels, in order. */
   applyLabels(): string[] {
     return this.calls.filter((c) => c.tool === "bp_apply").map((c) => c.label ?? "");
@@ -713,6 +723,7 @@ export class FakeBackend implements Backend {
         this.rowClasses.set(r.asset, rowStage.get(r.asset)!);
         if (r.created || r.changed) this.changed.add(`Content/${r.asset.split("/").slice(2).join("/")}.uasset`);
       }
+      this.mirrorFiles();
     }
     return {
       ok,
@@ -732,7 +743,7 @@ export class FakeBackend implements Backend {
   private mirrorFiles(): void {
     const content = join(this.root, "stage", "Content");
     rmSync(content, { recursive: true, force: true });
-    for (const path of this.assets.keys()) {
+    for (const path of [...this.assets.keys(), ...this.rowClasses.keys()]) {
       const file = join(content, ...path.split("/").slice(2)) + ".uasset";
       mkdirSync(dirname(file), { recursive: true });
       writeFileSync(file, "", "utf8");
