@@ -17,8 +17,8 @@
     "repo": "https://github.com/EmekC/abf-mod-editor-mcp",
     "version": "2.6.0",
     "tag": "v2.6.0",
-    "commit": "735e907b3126290a751a420a9c749f235a8aebc1",
-    "filesSha256": "4d56803a18176cfe2168db08c7950ba53488b57f7c7732cb0040834f8ae3b348"
+    "commit": "f70a7f16a561fb8720f918f41ff9f43de6fa2d07",
+    "filesSha256": "fadfaf1fa0bd4c6da5d1b476568d63d567b01211501b0c1db735bd626f31b93d"
   },
   "innosetup": {
     "version": "",
