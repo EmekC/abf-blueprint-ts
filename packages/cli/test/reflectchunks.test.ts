@@ -67,6 +67,20 @@ test("reflectAll: a failing call is split in chunks of 500 and the results are m
   assert.deepEqual(lines, ["stubs: reflect chunk 1/3 (500 classes)", "stubs: reflect chunk 2/3 (500 classes)", "stubs: reflect chunk 3/3 (100 classes)"]);
 });
 
+test("reflectAll: a chunk without the cooked member reader removes cookedClass from the merged memberSources", async () => {
+  const classes = Array.from({ length: REFLECT_CHUNK + 10 }, (_, i) => classPath(i));
+  const bad = classes[0]!;
+  const backend = fakeBackend((r) => r.classes.length > REFLECT_CHUNK, [], (r) => ({
+    memberSources: r.classes.includes(bad) ? ["widgetTree", "scs"] : ["widgetTree", "scs", "cookedClass"],
+  }));
+  const out = await reflectAll(backend, request(classes), () => {});
+  assert.deepEqual(out.result.data.memberSources, ["widgetTree", "scs"]);
+
+  const good = fakeBackend((r) => r.classes.length > REFLECT_CHUNK, [], () => ({ memberSources: ["widgetTree", "scs", "cookedClass"] }));
+  const ok = await reflectAll(good, request(classes), () => {});
+  assert.deepEqual(ok.result.data.memberSources, ["widgetTree", "scs", "cookedClass"], "deduplicated, and kept when every chunk had it");
+});
+
 test("reflectAll: a list of at most 500 classes is bisected down to the single failing class", async () => {
   const classes = Array.from({ length: 9 }, (_, i) => classPath(i));
   const bad = classPath(5);

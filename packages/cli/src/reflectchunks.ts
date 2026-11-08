@@ -27,6 +27,12 @@ function mergeGeneric(into: Record<string, unknown>, add: Record<string, unknown
   }
 }
 
+/** The predicate `abfc stubs` uses to merge rounds: Blueprint classes were reflected (not just cast targets) but the cooked-class reader did not run. */
+export function lacksCookedClass(data: Pick<ReflectResult["data"], "classes" | "memberSources">): boolean {
+  const reflectedGame = Object.entries(data.classes).some(([p, c]) => p.startsWith("/Game/") && c.castOnly !== true);
+  return reflectedGame && !(data.memberSources ?? []).includes("cookedClass");
+}
+
 const halves = <T>(xs: T[]): [T[], T[]] => {
   const mid = Math.ceil(xs.length / 2);
   return [xs.slice(0, mid), xs.slice(mid)];
@@ -62,6 +68,7 @@ async function reflectInParts(
   const st: { data: Record<string, unknown> | null; head: ReflectResult | null; seconds: number } = { data: null, head: null, seconds: 0 };
   let tagsSent = false;
   let leafFailures = 0;
+  let cookedMissing = false;
 
   const call = async (classes: string[], label: string): Promise<boolean> => {
     report(`stubs: reflect ${label} (${classes.length} classes)`);
@@ -79,6 +86,7 @@ async function reflectInParts(
       tagsSent = true;
       st.seconds += r.seconds;
       st.head ??= r;
+      if (lacksCookedClass(r.data)) cookedMissing = true;
       st.data ??= {};
       mergeGeneric(st.data, r.data as unknown as Record<string, unknown>);
       return true;
@@ -103,6 +111,11 @@ async function reflectInParts(
     if (await call(chunks[i]!, `chunk ${i + 1}/${chunks.length}`)) any = true;
   }
   if (!any || st.head === null || st.data === null) throw firstError;
+  // The union of the chunks' member sources must not hide a chunk whose cooked-class reader failed (ABFC3014 reads the gap).
+  if (Array.isArray(st.data.memberSources)) {
+    const sources = (st.data.memberSources as unknown[]).filter((s) => !(cookedMissing && s === "cookedClass"));
+    st.data.memberSources = [...new Set(sources)];
+  }
   const first = st.head;
   return { result: { ...first, seconds: st.seconds, data: st.data as unknown as ReflectResult["data"], filter: first.filter }, failed: [...new Set(failed)].sort() };
 }
