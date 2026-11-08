@@ -199,7 +199,8 @@ function renderClass(
         if (/WorldContext/.test(p.name)) worldContext = true;
         continue;
       }
-      (p.dir === "in" ? ins : outs).push({ pin: p.name, grammar: grammarOfPin(p) });
+      const dflt = p.dir === "in" ? f.meta?.defaults?.[p.name] : undefined;
+      (p.dir === "in" ? ins : outs).push({ pin: p.name, grammar: grammarOfPin(p), ...(dflt === undefined ? {} : { default: dflt }) });
     }
     if (latent) mt.push("@bpLatent");
     if (worldContext) mt.push("@bpWorldContext");

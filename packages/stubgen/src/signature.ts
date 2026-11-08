@@ -7,6 +7,8 @@ export interface SigPin {
   /** Real pin name. */
   pin: string;
   grammar: string;
+  /** Default text of the pin from the engine's `CPP_Default_*` metadata (backend 2.6.0); undefined = no C++ default. */
+  default?: string;
 }
 
 export interface Signature {
@@ -30,12 +32,18 @@ export function buildSignature(ins: SigPin[], outs: SigPin[], extraExec: string[
     const ts = tsName(p.pin);
     if (ts !== p.pin) tags.push(`@bpPin ${ts} ${JSON.stringify(p.pin)}`);
   };
-  const params = ins.map((p) => {
+  // the longest trailing run of inputs that all have a C++ default is optional (TS needs optional parameters last)
+  let firstOptional = ins.length;
+  while (firstOptional > 0 && ins[firstOptional - 1]?.default !== undefined) firstOptional--;
+  const params = ins.map((p, i) => {
     note(p);
     if (isUnsupported(p.grammar)) unsupported.add(unsupportedLabel(p.grammar));
-    return `${tsName(p.pin)}: ${tsOfGrammar(p.grammar, ctx, "param")}`;
+    return `${tsName(p.pin)}${i >= firstOptional ? "?" : ""}: ${tsOfGrammar(p.grammar, ctx, "param")}`;
   });
   for (const p of ins) tags.push(`@bpParam ${p.pin} ${p.grammar}`);
+  ins.forEach((p, i) => {
+    if (i >= firstOptional && p.default !== undefined) tags.push(`@bpDefault ${p.pin} ${JSON.stringify(p.default)}`);
+  });
   const outTs = outs.map((p) => {
     note(p);
     if (isUnsupported(p.grammar)) unsupported.add(unsupportedLabel(p.grammar));

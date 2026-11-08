@@ -56,7 +56,7 @@ export interface FunctionInfo {
   pure: boolean;
   static: boolean;
   execOutputs: string[] | null;
-  params: Array<{ tsName: string; pin: string; type: BpType }>;
+  params: Array<{ tsName: string; pin: string; type: BpType; /** `@bpDefault`: the engine has a C++ default for this pin, so the argument may be omitted. */ default?: string }>;
   outs: Array<{ pin: string; type: BpType }>;
   /** TS name -> real pin name for renamed pins (`@bpPin`). */
   pinOfTs: Map<string, string>;
@@ -77,9 +77,20 @@ export function functionInfo(sym: ts.Symbol): FunctionInfo | undefined {
       ts.isMethodDeclaration(d) || ts.isMethodSignature(d) || ts.isFunctionDeclaration(d),
   );
   const tsNames = decl ? decl.parameters.map((p) => p.name.getText()) : [];
+  const defaults = new Map<string, string>();
+  for (const t of tags.get("bpDefault") ?? []) {
+    const { head, rest } = firstWord(t);
+    try {
+      const v = JSON.parse(rest) as unknown;
+      if (typeof v === "string") defaults.set(head, v);
+    } catch {
+      // malformed tag: ignore
+    }
+  }
   const params = (tags.get("bpParam") ?? []).map((t, i) => {
     const { head, rest } = firstWord(t);
-    return { tsName: tsNames[i] ?? head, pin: head, type: rest };
+    const d = defaults.get(head);
+    return { tsName: tsNames[i] ?? head, pin: head, type: rest, ...(d === undefined ? {} : { default: d }) };
   });
   const outs = (tags.get("bpOut") ?? []).map((t) => {
     const { head, rest } = firstWord(t);

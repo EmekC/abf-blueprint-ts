@@ -1422,9 +1422,14 @@ class HirBuilder {
     }
 
     const args: Array<{ pin: string; value: HirExpr }> = [];
-    node.arguments.forEach((a) => {
-      const p = fi.params[args.length];
+    node.arguments.forEach((a, argIndex) => {
+      const p = fi.params[argIndex];
       if (!p) f.fail("ABFC2099", `too many arguments for ${fi.name}`, a);
+      if (ts.isIdentifier(a) && a.text === "undefined") {
+        // an omitted argument sets no pin: the call node keeps the default Unreal fills in when the node is created
+        if (p.default === undefined) f.fail("ABFC2099", `argument ${p.pin} of ${fi.name} has no default`, a);
+        return;
+      }
       args.push({ pin: p.pin, value: p.type === "unsupported:delegate" ? this.delegateArg(a) : this.expr(a, p.type) });
     });
 
