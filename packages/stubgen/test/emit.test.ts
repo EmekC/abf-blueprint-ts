@@ -490,6 +490,13 @@ test("stubs.widgetMembers: a /Game class stub gets readonly @bpWidget members; a
   assert.doesNotMatch(text, /readonly Count/);
 });
 
+test("stubs.widgetMembers: names that differ only in case from a property or from each other emit one property", () => {
+  const files = emitStubs(input({ widgetMembers: { [THING]: { count: THING, COUNT: THING, titletext: THING, TitleText: THING } } }));
+  const text = files.get("Script/FakeEngine.d.ts") ?? "";
+  assert.equal((text.match(/^ {2}(readonly )?count: /gim) ?? []).length, 1);
+  assert.equal((text.match(/^ {2}(readonly )?titletext: /gim) ?? []).length, 1);
+});
+
 const WIDGET = "/Script/UMG.Widget";
 const PANEL_SLOT = "/Script/UMG.PanelSlot";
 

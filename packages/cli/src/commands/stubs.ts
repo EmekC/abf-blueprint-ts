@@ -70,9 +70,17 @@ function merge(into: ReflectData, add: ReflectData): void {
     const sup = (into.supers ??= {});
     for (const [k, v] of Object.entries(add.supers)) if (sup[k] === undefined) sup[k] = v;
   }
+  // The cooked-class source counts as present only when every round that reflected Blueprint classes had it (a round whose reader
+  // failed must not be hidden by another round's union).
   if (add.memberSources !== undefined) into.memberSources = [...new Set([...(into.memberSources ?? []), ...add.memberSources])];
+  const reflectedGame = Object.entries(add.classes).some(([p, c]) => p.startsWith("/Game/") && c.castOnly !== true);
+  if (reflectedGame && !(add.memberSources ?? []).includes("cookedClass")) cookedMissing.add(into);
+  if (cookedMissing.has(into) && into.memberSources !== undefined) into.memberSources = into.memberSources.filter((s) => s !== "cookedClass");
   into.errors.push(...add.errors);
 }
+
+/** Merged reflect results that had a round without the cooked-class member source. */
+const cookedMissing = new WeakSet<ReflectData>();
 
 async function reflectAndRead(ctx: CliContext, backend: Backend): Promise<number> {
   const { config, env, output, deps, paths } = ctx;

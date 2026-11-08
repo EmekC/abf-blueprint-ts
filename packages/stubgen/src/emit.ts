@@ -198,8 +198,11 @@ function renderClass(
     }
   }
 
+  // Member names are FNames (case-insensitive), and the CLI matches discovered names that way: dedupe the config entries the same way.
+  const seenLower = new Set([...seen].filter((k) => k.startsWith("i:")).map((k) => k.toLowerCase()));
   for (const [member, widgetCls] of Object.entries(input.widgetMembers?.[path] ?? {})) {
-    if (seen.has(`i:${member}`)) continue;
+    if (seenLower.has(`i:${member}`.toLowerCase())) continue;
+    seenLower.add(`i:${member}`.toLowerCase());
     seen.add(`i:${member}`);
     counters.members++;
     // A widget class that was not reflected (no `scriptClasses` entry) is typed UObject; `abfc stubs` warns about it.
