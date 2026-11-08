@@ -897,16 +897,16 @@ function typedPlain(dir: string): void {
   writeFileSync(file, text.replace(old, "  /**\n   * @bpPath /Game/Fake/BP_FakePot.BP_FakePot_C:Plain\n   * @bpType int\n   */\n  Plain: int;"));
 }
 
-test("a counted loop whose start value has null exits: every exit runs into the ForLoop Exec", () => {
+test("a counted loop whose start value has null exits: every exit runs into the ForLoop execute pin", () => {
   const mod = lowerSweep("    for (let i = this.Pots[0]?.Plain; i < 3; i++) {\n      this.Count = i;\n    }\n    this.Armed = true;", undefined, typedPlain);
   const u = sweepUnit(mod);
   const loop = macroNodes(u, "ForLoop")[0]!;
   assert.ok(loop);
-  // evaluating the start value (an optional chain) is part of entering the loop: both the valid and the invalid exit run into Exec, none skips it
+  // evaluating the start value (an optional chain) is part of entering the loop: both the valid and the invalid exit run into execute, none skips it
   // (on the invalid exit FirstIndex reads from an invalid object, i.e. 0; the manual lowering keeps a stale counter; neither matches TS exactly)
   const k = kit(u);
   const branch = u.nodes.find((n) => n.sem?.k === "branch")!;
-  assert.deepEqual(k.into(`${loop.id}.Exec`).sort(), [`${branch.id}.else`, `${branch.id}.then`]);
+  assert.deepEqual(k.into(`${loop.id}.execute`).sort(), [`${branch.id}.else`, `${branch.id}.then`]);
   assert.equal(k.into(`${loop.id}.FirstIndex`).length, 1);
   assert.equal(u.wires.filter((w) => w[0] === `${loop.id}.Completed`).length, 1);
 });

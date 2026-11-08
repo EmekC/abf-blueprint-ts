@@ -56,9 +56,9 @@ const SET_LIBRARY = "/Script/Engine.BlueprintSetLibrary";
 const K2_MACRO_INSTANCE = "/Script/BlueprintGraph.K2Node_MacroInstance";
 /** Engine macro library of the standard loops (For Each Loop, For Loop). */
 const STD_MACROS_ASSET = "/Engine/EditorBlueprintResources/StandardMacros.StandardMacros";
-/** Pin names of the StandardMacros loop macros (their tunnel pins). */
+/** Pin names of the StandardMacros loop macros (their tunnel pins; ForEachLoop takes its exec input on `Exec`, ForLoop on `execute`, verified live). */
 const FOR_EACH = { exec: "Exec", array: "Array", body: "LoopBody", element: "Array Element", index: "Array Index", completed: "Completed" } as const;
-const FOR_LOOP = { exec: "Exec", first: "FirstIndex", last: "LastIndex", body: "LoopBody", index: "Index", completed: "Completed" } as const;
+const FOR_LOOP = { exec: "execute", first: "FirstIndex", last: "LastIndex", body: "LoopBody", index: "Index", completed: "Completed" } as const;
 
 /** Splits `map:<K>:<V>` into key and value type, `set:<T>` into the element type (as `key`). */
 function containerTypes(type: string): { key: string; value?: string } {
@@ -838,7 +838,7 @@ export class UnitBuilder {
     }
   }
 
-  /** Instances an engine StandardMacros loop macro; every current exit runs into its `Exec` pin. */
+  /** Instances an engine StandardMacros loop macro; every current exit runs into its exec input pin (`Exec` for ForEachLoop, `execute` for ForLoop). */
   private stdMacro(name: "ForEachLoop" | "ForLoop", origin: Span, pinTypes?: Record<string, string>): string {
     const id = this.emit(
       "loop",
@@ -848,7 +848,7 @@ export class UnitBuilder {
       origin,
       pinTypes ? { pinTypes } : undefined,
     );
-    for (const x of this.cur) this.link(x, `${id}.${FOR_EACH.exec}`);
+    for (const x of this.cur) this.link(x, `${id}.${name === "ForLoop" ? FOR_LOOP.exec : FOR_EACH.exec}`);
     return id;
   }
 
