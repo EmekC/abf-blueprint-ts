@@ -1,6 +1,7 @@
 // Source map (design 8.5): IR node -> TS span and IR node -> real node name; maps Unreal compile messages back to TS.
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { t3dNodeKey, t3dNodeName } from "@abfc/ir";
 import type { Diagnostic, Span } from "@abfc/ir";
 import { assetFileStem, stringifySorted } from "./manifest.js";
 
@@ -41,9 +42,16 @@ export function readSourceMap(dir: string, asset: string): SourceMapFile | null 
   return JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, "")) as SourceMapFile;
 }
 
+/** The graph a unit's nodes live in: a function unit in the graph of its name, events and overrides in the EventGraph. */
+function unitGraphOf(unitId: string): string {
+  return unitId.startsWith("function:") ? unitId.slice("function:".length) : "EventGraph";
+}
+
 /**
  * Compile messages -> diagnostics. `nodeIds` maps a real node name to `<unit id>/<IR node id>` for the owned nodes of the
- * asset (names recorded in the source map's `real` fields are used as well).
+ * asset (names recorded in the source map's `real` fields are used as well). Real names are unique per graph only, so the lookup
+ * key is `t3dNodeKey(graph, real)` and a message is matched with its `graph`; without one the EventGraph node of that name, else
+ * the only owned node of that name, is taken.
  *
  * Messages without a usable node are located by their text: `[spec:<id>]` (an apply error about a planned node; `specIds` maps the
  * spec node id to `<unit id>/<IR node id>`) and `Could not find a function named "X"` (`ownCalls` lists the TS spans of the calls to
@@ -58,14 +66,19 @@ export function mapCompileMessages(
   specIds: Record<string, string> = {},
   ownCalls: Record<string, Span[]> = {},
 ): Diagnostic[] {
-  const byReal = new Map<string, { unit: string; node: string }>();
+  // keyed like the stage snapshot: a function unit's nodes live in its own graph (Unreal names nodes uniquely per graph only)
+  const byKey = new Map<string, { unit: string; node: string }>();
   for (const [unitId, u] of Object.entries(sm.units)) {
-    for (const [irId, n] of Object.entries(u.nodes)) if (n.real !== null) byReal.set(n.real, { unit: unitId, node: irId });
+    for (const [irId, n] of Object.entries(u.nodes)) if (n.real !== null) byKey.set(t3dNodeKey(unitGraphOf(unitId), n.real), { unit: unitId, node: irId });
   }
   for (const [real, key] of Object.entries(nodeIds)) {
     const slash = key.indexOf("/");
-    if (slash > 0) byReal.set(real, { unit: key.slice(0, slash), node: key.slice(slash + 1) });
+    if (slash > 0) byKey.set(t3dNodeKey(unitGraphOf(key.slice(0, slash)), real), { unit: key.slice(0, slash), node: key.slice(slash + 1) });
   }
+  const uniqueByName = (name: string): { unit: string; node: string } | undefined => {
+    const hits = [...byKey].filter(([k]) => t3dNodeName(k) === name);
+    return hits.length === 1 ? hits[0]![1] : undefined;
+  };
   const unitIds = Object.keys(sm.units);
   const out: Diagnostic[] = [];
   const fallbackOfUnowned = new Set<Diagnostic>();
@@ -73,7 +86,7 @@ export function mapCompileMessages(
   for (const m of messages) {
     if (m.asset !== null && m.asset !== asset) continue;
     if (m.node !== undefined) {
-      const hit = byReal.get(m.node);
+      const hit = m.graph !== undefined ? byKey.get(t3dNodeKey(m.graph, m.node)) : (byKey.get(m.node) ?? uniqueByName(m.node));
       const span = hit ? sm.units[hit.unit]?.nodes[hit.node]?.span : undefined;
       if (hit && span) {
         out.push({ severity: "error", code: "ABFC6001", message: `[Unreal] ${m.message}`, span, asset });

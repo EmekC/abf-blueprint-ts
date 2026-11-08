@@ -38,8 +38,8 @@ export interface T3dNode {
 }
 export interface T3dExport {
   /**
-   * Keyed by node name. When two graphs hold a node of the same name (e.g. `K2Node_FunctionEntry_0`), the first graph
-   * keeps the plain name and later ones are keyed `<graph>/<name>` (`T3dNode.name` is always the real name).
+   * Keyed by `t3dNodeKey(graph, name)`: EventGraph nodes by their name, nodes of every other graph as `<graph>/<name>`
+   * (`T3dNode.name` is always the real name; pin links hold real names of the same graph).
    */
   nodes: Map<string, T3dNode>;
   variables: Array<{ name: string; type: string; default: string | null; propertyFlags: string | null }>;
@@ -156,23 +156,22 @@ const BEGIN = /^\s*Begin Object(?: Class=(\S+))? Name="([^"]+)"(?: ExportPath="(
 const END = /^\s*End Object\b/;
 const EVENT_GRAPH = "EventGraph";
 
+/**
+ * Key of a node in `T3dExport.nodes`: the EventGraph (or no graph) keeps the plain node name, any other graph is
+ * `<graph>/<name>` (Unreal names nodes uniquely only inside a graph).
+ */
+export function t3dNodeKey(graph: string | null, name: string): string {
+  return graph === null || graph === EVENT_GRAPH ? name : `${graph}/${name}`;
+}
+
+/** Real node name of a key from `t3dNodeKey`. */
+export function t3dNodeName(key: string): string {
+  return key.slice(key.lastIndexOf("/") + 1);
+}
+
 export function parseExport(text: string): T3dExport {
   const lines = text.split(/\r?\n/);
-  // Names used in the event graph: it always keeps the plain key, whatever order the engine lists the graphs in (a warm
-  // export may list the generated per-event stub graphs first, whose node names collide with the event graph's).
-  const eventGraphNames = new Set<string>();
-  {
-    const open: string[] = [];
-    for (const line of lines) {
-      const b = BEGIN.exec(line);
-      if (b) {
-        if (open.length === 2 && open[1] === EVENT_GRAPH) eventGraphNames.add(b[2] ?? "");
-        open.push(b[2] ?? "");
-      } else if (END.test(line)) open.pop();
-    }
-  }
   const nodes = new Map<string, T3dNode>();
-  const byGraphName = new Map<string, string>(); // "<graph>\0<name>" -> key in `nodes`
   const variables: T3dExport["variables"] = [];
   let parentClass: string | null = null;
   // stack of open blocks: [0] root, [1] graphs, [2] nodes
@@ -186,16 +185,13 @@ export function parseExport(text: string): T3dExport {
         const graph = stack[1]?.name ?? null;
         const name = b[2] ?? "";
         const cls = b[1] ?? b[3] ?? "";
-        const id = `${graph ?? ""}\0${name}`;
-        let key = byGraphName.get(id);
-        if (key === undefined) {
-          const plain = graph === EVENT_GRAPH ? !nodes.has(name) : !nodes.has(name) && !eventGraphNames.has(name);
-          key = plain ? name : `${graph ?? ""}/${name}`;
-          byGraphName.set(id, key);
-          nodes.set(key, { name, cls, graph, head: [], pins: [] });
-        }
+        const key = t3dNodeKey(graph, name);
         node = nodes.get(key) ?? null;
-        if (node && node.cls === "") node.cls = cls;
+        if (node === null) {
+          node = { name, cls, graph, head: [], pins: [] };
+          nodes.set(key, node);
+        }
+        if (node.cls === "") node.cls = cls;
       }
       stack.push({ name: b[2] ?? "", node });
       continue;
@@ -319,16 +315,18 @@ const HEAD_KEEP = /^(FunctionReference|VariableReference|EventReference|CustomFu
 
 /**
  * Hash of the semantic state of the named nodes: class, identity-bearing property lines and pins with their links.
- * Positions, GUIDs, pin ids and comment sizes are excluded.
+ * Positions, GUIDs, pin ids and comment sizes are excluded. `names` are snapshot keys; link targets are resolved inside the
+ * graph of the linking node.
  */
 export function unitStateHash(nodes: Map<string, T3dNode>, names: string[]): string {
-  const linkName = (l: { node: string; pinId: string }): string => {
-    const target = nodes.get(l.node);
-    return `${l.node}.${(target ? pinName(target, l.pinId) : null) ?? l.pinId}`;
-  };
   const state = [...names].sort().map((name) => {
     const n = nodes.get(name);
     if (!n) return { missing: true };
+    const linkName = (l: { node: string; pinId: string }): string => {
+      const key = t3dNodeKey(n.graph, l.node);
+      const target = nodes.get(key);
+      return `${key}.${(target ? pinName(target, l.pinId) : null) ?? l.pinId}`;
+    };
     return {
       cls: n.cls,
       head: n.head.filter((h) => HEAD_KEEP.test(h)).map((h) => h.replace(/MemberGuid=[0-9A-F]{32},?/g, "")),

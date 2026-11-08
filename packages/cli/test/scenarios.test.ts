@@ -1110,3 +1110,57 @@ test("(S32b) a backend without the function_graphs feature: a function is ABFC20
     assert.equal(x.code, 0, x.out);
   });
 });
+
+// ---- (S33) node names are unique per graph only (as in Unreal) ----
+
+// different parameter names on purpose: the fake's pin ids derive from node name + pin name, so equal names would hide a wrong entry
+// the functions read different members (Total, Other) that the EventGraph never reads: that variable-get node name exists only in the two function graphs, with different contents (the old per-name parse resolved it by graph order)
+const withTwoFunctions = (bodyOne = "a + this.Total", extra = ""): string =>
+  tally("BP_Tally")
+    .replace("  Total!: int;", "  Total!: int;\n  Other!: int;")
+    .replace("this.Total = by;", "this.Total = this.addOne(by) + this.addTwo(by);")
+    .replace(/\n\}\n$/, `\n\n  addOne(a: int): int {\n    return ${bodyOne};\n  }\n\n  addTwo(b: int): int {\n    return b + this.Other;\n  }\n${extra}}\n`);
+
+test("(S33) per-graph node names (as in Unreal): a class with functions has no drift right after its build, and keys stay stable when a function changes or is added", async () => {
+  await withRig({ ...OPS, perGraphNames: true }, async (r) => {
+    tallyOnly(r.dir, withTwoFunctions());
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    x = await r.run(["status"]);
+    assert.doesNotMatch(x.out, /ABFC500[12]/, x.out);
+    const units = readManifest(r.dir, TA)!.units;
+    for (const u of units) {
+      if (u.id.startsWith("function:")) {
+        const n = u.id.slice("function:".length);
+        assert.ok(u.nodes.length > 0, `${u.id} has nodes`);
+        assert.ok(u.nodes.every((k) => k.startsWith(`${n}/`)), `${u.id} nodes are graph-scoped keys: ${u.nodes.join(", ")}`);
+      } else {
+        assert.ok(u.nodes.every((k) => !k.includes("/")), `${u.id} nodes are plain: ${u.nodes.join(", ")}`);
+      }
+    }
+    x = await r.run(["build"]);
+    assert.match(x.out, /up to date/);
+
+    // a changed body: only that function is recreated, nothing drifts afterwards
+    let before = appliedSpecs(r).length;
+    writeFileSync(join(r.dir, "src", "Tally.ts"), withTwoFunctions("a + this.Total + 10"), "utf8");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    let specs = appliedSpecs(r).slice(before).filter((s) => s.asset === TA);
+    assert.deepEqual(specs.flatMap((s) => (s.functions ?? []).map((f: any) => f.name)), ["addOne"]);
+    x = await r.run(["status"]);
+    assert.doesNotMatch(x.out, /ABFC500[12]/, x.out);
+    x = await r.run(["build"]);
+    assert.match(x.out, /up to date/);
+
+    // a third (uncalled) function: only it is created
+    before = appliedSpecs(r).length;
+    writeFileSync(join(r.dir, "src", "Tally.ts"), withTwoFunctions("a + this.Total + 10", "\n  addThree(c: int): int {\n    return c + 3;\n  }\n"), "utf8");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    specs = appliedSpecs(r).slice(before).filter((s) => s.asset === TA);
+    assert.deepEqual(specs.flatMap((s) => (s.functions ?? []).map((f: any) => f.name)), ["addThree"]);
+    x = await r.run(["status"]);
+    assert.doesNotMatch(x.out, /ABFC500[12]/, x.out);
+  });
+});

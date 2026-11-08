@@ -487,6 +487,8 @@ Each owned unit gets one `EdGraphNode_Comment` around its region: `abfc:owned un
   "variables": [{ "name": "abfc_UpdateTarget_t0", "type": "name", "hash": "sha256:..." }] }
 ```
 
+`nodes` (and the keys of `nodeHashes`, the ends in `links`) are snapshot keys: a node of the EventGraph by its name, a node of any other graph (a function graph) as `<graph>/<name>`, because Unreal names nodes uniquely only inside a graph (a function's nodes reuse names like `K2Node_CallFunction_9001`). `nodeIds`, `tag` and the source map keep the real node names.
+
 `retiredUnpublished?: string[]` (optional) lists unit ids that a build removed from the stage but that are not published yet. `abfc publish` includes such assets in its asset list even though they hold no units. After a successful publish the field is cleared; a manifest left with no units, no variables and no `classDefaultsHash` is then deleted together with its source map and its unit-cache entry (`no longer owned by abfc`).
 
 Further optional manifest fields (all absent in manifests written by older versions):

@@ -1,5 +1,5 @@
 // Build planner: IR + manifests + stage snapshots -> the units to (re)apply, and the diagnostics that block others.
-import { classDefaultsHash, structFieldsHash } from "@abfc/ir";
+import { classDefaultsHash, structFieldsHash, t3dNodeKey, t3dNodeName } from "@abfc/ir";
 import type { ApplyPlan, AssetPlan, Diagnostic, IrModule, IrUnit, IrVariable, Span, T3dNode } from "@abfc/ir";
 import { builtGraphMatches, driftDiagnostics, unitState } from "../ownership/drift.js";
 import { analyzeAdoption } from "../ownership/adopt.js";
@@ -388,14 +388,14 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
       const drift = driftDiagnostics(asset.path, [mu], snapshot, input.stage, spans, { severity: "warning" });
       if (drift.length > 0) {
         if (!abfcEdited) for (const d of drift) report.push(`${d.code}: ${d.message}`);
-        picked.push({ unit, removeNodes: [...mu.nodes.filter((n) => snapshot.has(n)), ...(mu.adopt?.nodes ?? []).filter((n) => snapshot.has(n)), ...tagsOf(snapshot, mu.id, mu.graph)] });
+        picked.push({ unit, removeNodes: [...mu.nodes.filter((n) => snapshot.has(n)).map(t3dNodeName), ...(mu.adopt?.nodes ?? []).filter((n) => snapshot.has(n)).map(t3dNodeName), ...tagsOf(snapshot, mu.id, mu.graph)] });
         continue;
       }
       if (state === "pendingAdoption" || state === "staleStage") {
-        picked.push({ unit, removeNodes: [...(mu.adopt?.nodes ?? []), ...tagsOf(snapshot, mu.id, mu.graph)] });
+        picked.push({ unit, removeNodes: [...(mu.adopt?.nodes ?? []).map(t3dNodeName), ...tagsOf(snapshot, mu.id, mu.graph)] });
       } else if (mu.irHash !== unit.hash || retypedFields.size > 0 || input.forceReplan?.has(`${asset.path} ${unit.id}`) === true) {
         // the old tag comment (and any orphan of it) goes with the unit's nodes; the tag pass writes the new one
-        picked.push({ unit, removeNodes: [...mu.nodes, ...tagsOf(snapshot, mu.id, mu.graph)] });
+        picked.push({ unit, removeNodes: [...mu.nodes.map(t3dNodeName), ...tagsOf(snapshot, mu.id, mu.graph)] });
       } else {
         upToDate.push(`${asset.path} ${unit.id}`);
       }
@@ -420,7 +420,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
       let state = unitState(mu, snapshot, input.stage);
       if (state === "staleStage" && builtGraphMatches(mu, snapshot)) state = "clean";
       if (state === "clean") {
-        removeUnits.push({ id: mu.id, graph: mu.graph, nodes: [...mu.nodes, ...tagsOf(snapshot, mu.id, mu.graph)] });
+        removeUnits.push({ id: mu.id, graph: mu.graph, nodes: [...mu.nodes.map(t3dNodeName), ...tagsOf(snapshot, mu.id, mu.graph)] });
       } else if (state === "pendingApply" || state === "pendingAdoption") {
         forgetUnits.push(mu.id);
         const left = tagsOf(snapshot, mu.id, mu.graph);
@@ -430,7 +430,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
         if (drift.length > 0) {
           // TS wins: the removed unit goes although it was edited or lost nodes; the nodes still on the stage are removed.
           if (!abfcEdited) for (const d of drift) report.push(`${d.code}: ${d.message}`);
-          removeUnits.push({ id: mu.id, graph: mu.graph, nodes: [...mu.nodes.filter((n) => snapshot.has(n)), ...tagsOf(snapshot, mu.id, mu.graph)] });
+          removeUnits.push({ id: mu.id, graph: mu.graph, nodes: [...mu.nodes.filter((n) => snapshot.has(n)).map(t3dNodeName), ...tagsOf(snapshot, mu.id, mu.graph)] });
         } else forgetUnits.push(mu.id); // adopted hand-made nodes of a stale stage: nothing of abfc's to remove
       }
     }
@@ -447,7 +447,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
         if (pickedIds.has(unit.id) || !((unit.crossWires ?? []).some((w) => pickedIds.has(w.toUnit)) || callsPicked)) continue;
         const mu = manifest?.units.find((m) => m.id === unit.id);
         if (!mu || !upToDate.includes(`${asset.path} ${unit.id}`)) continue; // blocked by a diagnostic, or not applied yet (then it is picked anyway)
-        picked.push({ unit, removeNodes: unit.kind === "function" ? [] : [...mu.nodes, ...tagsOf(snapshot, mu.id, mu.graph)] });
+        picked.push({ unit, removeNodes: unit.kind === "function" ? [] : [...mu.nodes.map(t3dNodeName), ...tagsOf(snapshot, mu.id, mu.graph)] });
         pickedIds.add(unit.id);
         upToDate.splice(upToDate.indexOf(`${asset.path} ${unit.id}`), 1);
         grew = true;
@@ -465,14 +465,16 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
     // A removed or renamed event that a node staying on the stage still calls. Unreal's compile would refuse that graph with a message
     // that names no TS line and the apply would be rolled back, so refuse before the apply and name the node, its graph and its owner.
     const hybridAsset = input.hybrid?.has(asset.path) === true;
-    const leaving = new Set<string>([...removeUnits.flatMap((r) => r.nodes), ...picked.flatMap((p) => p.removeNodes)]);
+    // snapshot keys (t3dNodeKey): the plan lists hold real node names, the manifest and the snapshot hold keys
+    const leaving = new Set<string>([...removeUnits.flatMap((r) => r.nodes.map((x) => t3dNodeKey(r.graph, x))), ...picked.flatMap((p) => p.removeNodes.map((x) => t3dNodeKey(p.unit.graph, x)))]);
     for (const r of removeUnits) {
       if (!r.id.startsWith("event:") && !r.id.startsWith("function:")) continue;
       const name = r.id.slice(r.id.indexOf(":") + 1);
       if (asset.units.some((u) => u.name === name)) continue; // declared again as another unit of the same name: the calls still resolve
       for (const n of snapshot.values()) {
-        if (leaving.has(n.name) || (n.graph !== null && removeFunctionSet.has(n.graph)) || !n.cls.includes("K2Node_Call") || !callsOwnFunction(n, name)) continue;
-        const owner = manifest?.units.find((m) => m.nodes.includes(n.name));
+        const key = t3dNodeKey(n.graph, n.name);
+        if (leaving.has(key) || (n.graph !== null && removeFunctionSet.has(n.graph)) || !n.cls.includes("K2Node_Call") || !callsOwnFunction(n, name)) continue;
+        const owner = manifest?.units.find((m) => m.nodes.includes(key));
         if (owner === undefined && !hybridAsset) continue; // TS wins: a hand-made node of a non-hybrid class goes with the sweep below
         const where = `${n.name} in graph ${n.graph ?? "?"}`;
         if (owner !== undefined) {
@@ -521,7 +523,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
     const removeGraphNodes: NonNullable<AssetPlan["removeGraphNodes"]> = [];
     if (!hybridAsset && snapshot.size > 0) {
       const tsUnitIds = new Set(asset.units.map((u) => u.id));
-      const gone = new Set<string>([...leaving, ...removeTags.flatMap((r) => r.nodes)]);
+      const gone = new Set<string>([...leaving, ...removeTags.flatMap((r) => r.nodes.map((x) => t3dNodeKey(r.graph, x)))]);
       const owned = new Set<string>();
       for (const mu of manifest?.units ?? []) {
         if (!tsUnitIds.has(mu.id)) continue;
@@ -548,7 +550,8 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
       const byGraph = new Map<string, string[]>();
       for (const n of snapshot.values()) {
         if (n.graph === null || !isGraphContent(n) || macroGraphs.has(n.graph) && !functionGraphs.has(n.graph) || dropGraphs.has(n.graph)) continue;
-        if (gone.has(n.name) || owned.has(n.name)) continue;
+        const key = t3dNodeKey(n.graph, n.name);
+        if (gone.has(key) || owned.has(key)) continue;
         if (n.cls.endsWith("K2Node_FunctionEntry") || n.cls.endsWith("K2Node_FunctionResult") || isIntermediate(n)) continue;
         if (n.cls.endsWith("K2Node_Event") && n.head.includes("EnabledState=Disabled")) continue;
         const tagOf = tagUnitOf(n);
