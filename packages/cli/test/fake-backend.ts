@@ -529,6 +529,25 @@ export class FakeBackend implements Backend {
     return entry.name;
   }
 
+  /**
+   * Adds what Unreal itself leaves in an exported Blueprint next to the event graph: the intermediate stub graphs of the compiler
+   * (`ReceiveBeginPlay`, `Bump`), each with a function entry and a call to the ubergraph, all flagged `bIsIntermediateNode=True`.
+   * The two graphs hold nodes of the same name, as the real export does. Returns the graph names.
+   */
+  addIntermediateStubs(asset: string): string[] {
+    const a = this.assets.get(asset);
+    if (a === undefined) throw new Error(`fake stage: no asset ${asset}`);
+    const inter = ["bIsIntermediateNode=True", "NodePosX=0", "NodePosY=0"];
+    const graphs = ["ReceiveBeginPlay", "Bump"];
+    for (const graph of graphs) {
+      a.nodes.push(
+        { name: "K2Node_FunctionEntry_0", cls: "/Script/BlueprintGraph.K2Node_FunctionEntry", graph, head: [...inter], pins: [] },
+        { name: "K2Node_CallFunction_0", cls: CLS.callFunction, graph, head: [...inter, 'FunctionReference=(MemberName="ExecuteUbergraph_Stub",bSelfContext=True)'], pins: [] },
+      );
+    }
+    return graphs;
+  }
+
   /** Adds a custom event and a call node after it to the event graph by hand; returns both node names. */
   addHandMadeEvent(asset: string, eventName: string): string[] {
     const a = this.assets.get(asset);
