@@ -1,8 +1,8 @@
 # Language service and watch mode
 
 `abfc lsp` is a language server (LSP 3.17, over stdio). In an editor it shows what `abfc check` would say about the file you
-are typing in, the lint findings of `@abfc/eslint-plugin`, a short description of the Blueprint nodes under the cursor, and
-quick fixes. `abfc check --watch` gives the same checks from a terminal task.
+are typing in, the lint findings of `@abfc/eslint-plugin`, a short description of the Blueprint nodes under the cursor,
+quick fixes, and completion of Blueprint library functions and overridable events. `abfc check --watch` gives the same checks from a terminal task.
 
 Parity is by construction: the server and `abfc check` both call the compiler's `checkProject()`. The server runs it over
 the whole program (once per program version, over the editor's unsaved text) and shows the part that belongs to each open
@@ -122,7 +122,25 @@ The VS Code extension sends `tsDiagnostics: false` and `tsHover: false`.
   - `Replace classManagerRow with @director` on ABFC2076.
   - `Keep the existing asset path (path: "...")` on ABFC5012 (a moved or renamed source file).
 
-Completion, go to definition and rename are not provided; they stay with the editor's TypeScript server.
+- **Completion.** Two kinds of items, both added to what the editor's TypeScript server offers (the lists merge; abfc never
+  replaces them), and both completing the identifier under the cursor. The trigger character is `@`; the list is also
+  offered on explicit completion (Ctrl+Space) and while typing a word.
+  - *Library functions.* In a statement or expression, typing the start of a Blueprint library function (`PrintS`, any case)
+    offers `PrintString` and inserts `KismetSystemLibrary.PrintString`. The item carries the import as an additional edit:
+    the container (`KismetSystemLibrary`) is added to an existing import of its stub module, or a new `import` line is
+    added after the last import. An existing import (also under an alias) is reused, and an item is left out when the
+    container name is bound to something else in scope. Deprecated functions are not listed; at most 100 items are
+    returned. The list comes from the stubs of the project's profile (`.abfc/stubs/<profile>`) and is rebuilt when
+    `stubs.lock.json` changes (run `abfc stubs` to refresh it).
+  - *Overridable events.* In a class body at the start of a member (`Rec` matches `ReceiveBeginPlay`, `ReceiveTick`, ...;
+    an empty prefix lists them all), the events of the parent class that can be overridden are offered as snippets:
+    `@override override ReceiveTick(DeltaSeconds: double): void { ... }`, with the cursor inside the body. The
+    `override` import from `@abfc/runtime` and the `import type` lines for the parameter types are added as additional
+    edits. Events the class already declares are not offered; they sort before library items.
+  There is no completion in comments, strings, imports, after a `.` or `?.`, or after an `@` decorator name, and no
+  completion of gameplay tags or director names yet.
+
+Go to definition and rename are not provided; they stay with the editor's TypeScript server.
 
 ## Moving from @abfc/ts-plugin
 

@@ -9,6 +9,8 @@ import { McpStdioClient, spawnBackendServer } from "./mcp.js";
 import type { PublishGrant } from "./safety.js";
 import type {
   AssetSnapshot,
+  AssetOp,
+  AssetOpsResult,
   AuditReport,
   Backend,
   BpApplyResult,
@@ -65,6 +67,7 @@ function strList(v: unknown): string[] {
 /** Maps the raw `bp_publish` JSON (a success, "Nothing to publish", or a refusal with its extras) to a {@link PublishResult}. */
 export function publishResultFrom(json: Record<string, unknown>): PublishResult {
   const published = strList(json.published);
+  const deleted = strList(json.deleted);
   const refused = str(json.refused);
   const message = str(json.message) ?? str(json.error) ?? "";
   const compileErrors = (Array.isArray(json.compile_errors) ? json.compile_errors : []).map((item: unknown) => {
@@ -77,10 +80,12 @@ export function publishResultFrom(json: Record<string, unknown>): PublishResult 
     return `${str(o.path) ?? JSON.stringify(item)}: ${str(o.reason) ?? "changed"}`;
   });
   return {
-    ok: refused === null && (published.length > 0 || message.startsWith("Nothing to publish")),
+    // A publish that only deleted files (a renamed or removed class) copies nothing: `published` is empty but `deleted` is not.
+    ok: refused === null && (published.length > 0 || deleted.length > 0 || message.startsWith("Nothing to publish")),
     published,
     refused,
     message,
+    deleted,
     backup: str(json.backup),
     route: str(json.route),
     compileErrors,
@@ -97,6 +102,10 @@ export function publishResultFrom(json: Record<string, unknown>): PublishResult 
       const o = isObject(item) ? item : {};
       return { asset: str(o.asset), message: str(o.message) ?? JSON.stringify(item) };
     }),
+    tagsRegistered: strList(json.tags_registered),
+    tagsUnregistered: strList(json.tags_unregistered),
+    tagsStrategy: str(json.tags_strategy),
+    tagsError: str(json.tags_error),
     raw: json,
   };
 }
@@ -128,7 +137,10 @@ function rowList(v: unknown): BpApplyResult["rows"] {
     if (!isObject(r)) continue;
     const asset = str(r.asset);
     if (asset === null || asset === "") continue;
-    out.push({ asset, created: r.created === true, changed: r.changed === true });
+    const row: BpApplyResult["rows"][number] = { asset, created: r.created === true, changed: r.changed === true };
+    const tag = str(r.tag);
+    if (tag !== null) row.tag = tag;
+    out.push(row);
   }
   return out;
 }
@@ -217,7 +229,9 @@ export class BpApplyBackend implements Backend {
       changed: strList(json.changed),
       added: strList(json.added),
       removed: strList(json.removed),
-      conflicts: strList(json.conflicts),
+      // The backend lists a conflict as {path, reason}: the messages (ABFC4017) name the file only.
+      conflicts: (Array.isArray(json.conflicts) ? json.conflicts : []).map((c: unknown) => (typeof c === "string" ? c : isObject(c) && str(c.path) !== null ? str(c.path)! : JSON.stringify(c))),
+      stale: strList(json.stale),
     };
   }
 
@@ -274,6 +288,8 @@ export class BpApplyBackend implements Backend {
       compile: { errors: compileList(compile.errors), warnings: compileList(compile.warnings) },
       rows: rowList(json.rows),
     };
+    const tagsAdded = strList(json.tags_added);
+    if (tagsAdded.length > 0) result.tagsAdded = tagsAdded;
     let error = str(json.error);
     if (error === "invalid spec" && Array.isArray(json.problems) && json.problems.length > 0) {
       error = `invalid spec: ${JSON.stringify(json.problems)}`;
@@ -310,7 +326,14 @@ export class BpApplyBackend implements Backend {
     await this.ensureWarm(r.mod);
     const { json } = await this.call(
       "reflect",
-      { mod: r.mod, classes: r.classes, structs: r.structs, cast_targets: r.castTargets, timeout_seconds: 900 },
+      {
+        mod: r.mod,
+        classes: r.classes,
+        structs: r.structs,
+        cast_targets: r.castTargets,
+        ...(r.gameplayTags === true ? { gameplay_tags: true } : {}),
+        timeout_seconds: 900,
+      },
       { timeoutMs: 960_000 },
     );
     this.lastWarm = json.warm === true;
@@ -322,13 +345,19 @@ export class BpApplyBackend implements Backend {
         message: `backend tool "reflect" returned no result file (run folder: ${str(json.run) ?? "unknown"}).`,
       });
     }
-    const parsed = JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, "")) as Partial<ReflectData>;
+    const parsed = JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, "")) as Partial<ReflectData> & { gameplayTags?: unknown };
     const data: ReflectData = {
       engineVersion: parsed.engineVersion ?? null,
       classes: parsed.classes ?? {},
       structs: parsed.structs ?? {},
       errors: parsed.errors ?? [],
     };
+    if (isObject(parsed.gameplayTags)) {
+      data.gameplayTags = {
+        tags: strList(parsed.gameplayTags.tags),
+        sources: isObject(parsed.gameplayTags.sources) ? parsed.gameplayTags.sources : {},
+      };
+    }
     const filter = isObject(json.filter) ? json.filter : {};
     const rules: Array<["Allow" | "Block", string]> = [];
     if (Array.isArray(filter.rules)) {
@@ -394,12 +423,38 @@ export class BpApplyBackend implements Backend {
     return { ok: json.ok === true, raw: json, seconds: num(json.seconds) };
   }
 
-  async publish(mod: string, assets: string[], grant: PublishGrant): Promise<PublishResult> {
+  async assetOps(mod: string, ops: AssetOp[]): Promise<AssetOpsResult> {
+    this.lastWarm = false; // asset ops run in the commandlet (and may stop a running warm session)
+    this.warmStarted = false;
+    const { json } = await this.call(
+      "bp_asset_ops",
+      { mod, ops, timeout_seconds: 600 },
+      { timeoutMs: 720_000, tolerate: (j) => typeof j.ok === "boolean" },
+    );
+    const results = (Array.isArray(json.results) ? json.results : []).map((item: unknown) => {
+      const o = isObject(item) ? item : {};
+      const r: AssetOpsResult["results"][number] = { op: str(o.op) ?? "", ok: o.ok === true };
+      const detail = str(o.detail) ?? str(o.error);
+      if (detail !== null) r.detail = detail;
+      return r;
+    });
+    let error = str(json.error);
+    if (error === "invalid asset ops" && Array.isArray(json.problems) && json.problems.length > 0) {
+      error = `invalid asset ops: ${json.problems.map((p) => (typeof p === "string" ? p : JSON.stringify(p))).join("; ")}`;
+    }
+    const out: AssetOpsResult = { ok: json.ok === true, results, touched: strList(json.touched), error };
+    if (typeof json.rolled_back === "boolean") out.rolledBack = json.rolled_back;
+    const run = str(json.run);
+    if (run !== null) out.run = run;
+    return out;
+  }
+
+  async publish(mod: string, assets: string[], grant: PublishGrant, o?: { deleteRemoved?: boolean }): Promise<PublishResult> {
     // bp_publish's compile check runs on the warm session when one runs; the publish does not stop it, so close() still stops it
     this.lastWarm = false;
     const { json } = await this.call(
       "bp_publish",
-      { mod, assets },
+      { mod, assets, ...(o?.deleteRemoved === true ? { delete_removed: true } : {}) },
       { timeoutMs: 900_000, publishGrant: grant, tolerate: (j) => Array.isArray(j.published) },
     );
     return publishResultFrom(json);

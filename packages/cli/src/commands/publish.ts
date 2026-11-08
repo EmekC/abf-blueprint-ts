@@ -25,6 +25,9 @@ const isHelperFile = (f: string): boolean => /(^|[\\/])(_McpTest|_McpTmp)([\\/]|
 /** A file below `Content/` of the mod folder. */
 const isContentFile = (f: string): boolean => /^Content[\\/]/i.test(f);
 
+/** A tag list of the mod: `Config/Tags/<Mod>Tags.ini` (the only config file abfc changes on the stage). */
+const isTagIni = (f: string): boolean => /^Config[\\/]Tags[\\/][^\\/]+\.ini$/i.test(f);
+
 /** `Content/Relay/BP_Relay.uasset` -> `relay/bp_relay` (lower case, no extension, no `Content/`). */
 const contentKey = (f: string): string =>
   f
@@ -77,7 +80,9 @@ export async function publish(ctx: CliContext): Promise<number> {
 
 const fail = (ctx: CliContext): number => ctx.output.exitCode() || 1;
 
-type PublishList = { changed: string[]; added: string[] };
+/** What a publish still owes the mod besides new content: per manifest, the stage's removed files it wants deleted. */
+type PendingDelete = { manifest: string; kind: "tombstone" | "renamed" | "rows"; files: string[] };
+type PublishList = { changed: string[]; added: string[]; deleted: string[]; config: string[]; pending: PendingDelete[]; alsoOf: string[]; syncedAt: string | null };
 
 /** Build, list, copy. */
 async function publishFast(ctx: CliContext, rec: Recorder, session: BackendSession): Promise<number> {
@@ -86,13 +91,13 @@ async function publishFast(ctx: CliContext, rec: Recorder, session: BackendSessi
   if (!(await runBuild(ctx, session, rec))) return fail(ctx);
 
   const t = performance.now();
-  const { backend } = await session.open();
+  const { backend, info } = await session.open();
   const stage = await backend.stageStatus(mod);
   const list = wouldPublish(ctx, stage);
   rec.record("publish.list", since(t));
 
   if (args.flags.dryRun) return output.exitCode();
-  return copyToMod(ctx, rec, backend, list, "publish.copy");
+  return copyToMod(ctx, rec, backend, list, "publish.copy", info.capabilities.publishDeletes, info.capabilities.liveTags);
 }
 
 /** The release checks, then the same copy. */
@@ -181,7 +186,7 @@ async function publishFull(ctx: CliContext, rec: Recorder, session: BackendSessi
 
   if (args.flags.dryRun) return output.exitCode();
   // gate 8: bp_publish for the owned assets of the list
-  return copyToMod(ctx, rec, backend, list, "gate.8");
+  return copyToMod(ctx, rec, backend, list, "gate.8", info.capabilities.publishDeletes, info.capabilities.liveTags);
 }
 
 /** Prints the would-publish list: files of the stage that differ from the mod, limited to assets that hold owned units or adoptions. */
@@ -201,6 +206,13 @@ function wouldPublish(ctx: CliContext, stage: StageStatus | null): PublishList {
     if (!m.asset.startsWith(`/${ctx.config.mod.name}/`)) continue;
     if (m.units.length > 0 || (m.retiredUnpublished?.length ?? 0) > 0) owned.add(m.asset);
   }
+  // Renamed assets (and the referencers the rename saved too) reach the mod with the rename.
+  const modManifests = listManifests(ctx.projectDir).filter((m) => m.asset.startsWith(`/${ctx.config.mod.name}/`));
+  for (const m of modManifests) {
+    if (m.deleted === true) continue;
+    if (m.renamedFrom !== undefined) owned.add(m.asset);
+    for (const p of m.publishAlso ?? []) if (p.startsWith(`/${ctx.config.mod.name}/`)) owned.add(p);
+  }
   // Class-manager rows abfc wrote for classes that still have a `@director` (published only when the stage lists them as changed or added).
   for (const a of fe.ir?.assets ?? []) {
     if (a.director === undefined) continue;
@@ -211,29 +223,65 @@ function wouldPublish(ctx: CliContext, stage: StageStatus | null): PublishList {
   const mine = (f: string): boolean => isContentFile(f) && !isHelperFile(f) && ownedKeys.has(contentKey(f));
   const changed = (stage?.changed ?? []).filter(mine);
   const added = (stage?.added ?? []).filter(mine);
+  // Files the stage lost for a deleted class (and its row), a renamed asset's old path and rows retired by a changed `@director`.
+  const removedFiles = (stage?.removed ?? []).filter((f) => isContentFile(f) && !isHelperFile(f));
+  const keyOf = (asset: string): string => asset.split("/").slice(2).join("/").toLowerCase();
+  const pending: PendingDelete[] = [];
+  for (const m of modManifests) {
+    const gone: Array<[PendingDelete["kind"], string[]]> = [
+      ["tombstone", m.deleted === true ? [m.asset, ...(m.directorRow !== undefined ? [m.directorRow] : [])] : []],
+      ["renamed", m.deleted !== true && m.renamedFrom !== undefined ? [m.renamedFrom] : []],
+      ["rows", m.retiredRows ?? []],
+    ];
+    for (const [kind, assets] of gone) {
+      if (assets.length === 0) continue;
+      const keys = new Set(assets.map(keyOf));
+      pending.push({ manifest: m.asset, kind, files: removedFiles.filter((f) => keys.has(contentKey(f))) });
+    }
+  }
+  const deleted = [...new Set(pending.flatMap((p) => p.files))];
+  const config = [...(stage?.changed ?? []), ...(stage?.added ?? [])].filter(isTagIni);
+  const alsoOf = modManifests.filter((m) => (m.publishAlso?.length ?? 0) > 0).map((m) => m.asset);
   output.info("would publish:");
   for (const f of changed) output.info(`  changed ${f}`);
   for (const f of added) output.info(`  added   ${f}`);
-  if (changed.length + added.length === 0) output.info("  (nothing)");
-  output.json({ changed, added, dryRun: args.flags.dryRun, full: args.flags.full });
-  return { changed, added };
+  for (const f of config) output.info(`  changed config ${f}`);
+  for (const f of deleted) output.info(`  deleted ${f}`);
+  if (changed.length + added.length + config.length + deleted.length === 0) output.info("  (nothing)");
+  output.json({ changed, added, deleted, config, dryRun: args.flags.dryRun, full: args.flags.full });
+  return { changed, added, deleted, config, pending, alsoOf, syncedAt: stage?.syncedAt ?? null };
 }
 
 /** `bp_publish` for the owned assets of the list, with a grant for the project's own mod. */
-async function copyToMod(ctx: CliContext, rec: Recorder, backend: Backend, list: PublishList, step: string): Promise<number> {
+async function copyToMod(ctx: CliContext, rec: Recorder, backend: Backend, list: PublishList, step: string, canDelete: boolean, liveTags: boolean): Promise<number> {
   const { output, config } = ctx;
   const mod = config.mod.name;
-  const files = [...list.changed, ...list.added];
-  if (files.length === 0) {
+  // Removed files are deleted from the mod only by a backend that can (publishDeletes); otherwise they stay and the user deletes them.
+  const deleting = canDelete ? list.deleted : [];
+  if (!canDelete && list.deleted.length > 0) {
+    output.diag({
+      severity: "warning",
+      code: "ABFC7014",
+      message: `the backend cannot delete files from the mod (no publishDeletes); these removed assets stay in ${mod}: ${list.deleted.join(", ")}`,
+      fix: "delete them in the Mod Editor (Content Browser), or update abf-mod-editor-mcp to 2.6.0 or newer and run abfc publish again.",
+    });
+  }
+  const files = [...list.changed, ...list.added, ...deleting];
+  if (files.length + list.config.length === 0) {
+    finishPending(ctx, list, canDelete, null);
     output.info("nothing to publish.");
     return output.exitCode();
   }
+  // The backend strips file extensions, so `Config/Tags/<Mod>Tags.ini` names the tag list (published as a file of the mod).
   const assets = [
-    ...new Set(files.map((f) => `/${mod}/${f.replaceAll("\\", "/").replace(/^Content\//i, "").replace(/\.[^./]+$/, "")}`)),
+    ...new Set([
+      ...files.map((f) => `/${mod}/${f.replaceAll("\\", "/").replace(/^Content\//i, "").replace(/\.[^./]+$/, "")}`),
+      ...list.config.map((f) => f.replaceAll("\\", "/")),
+    ]),
   ];
   const grant = grantPublish(mod);
   const t = performance.now();
-  const r = await backend.publish(mod, assets, grant);
+  const r = await (canDelete ? backend.publish(mod, assets, grant, { deleteRemoved: true }) : backend.publish(mod, assets, grant));
   rec.record(step, since(t), r.ok);
 
   if (!r.ok) {
@@ -257,15 +305,37 @@ async function copyToMod(ctx: CliContext, rec: Recorder, backend: Backend, list:
       writeManifest(ctx.projectDir, rest);
     }
   }
+  // Class defaults applied to the stage's current sync are in the mod now: a later re-sync brings them back (the planner keeps them).
+  for (const asset of assets) {
+    const m = readManifest(ctx.projectDir, asset);
+    if (m === null || m.classDefaultsHash === undefined || m.classDefaultsPublished === true) continue;
+    if (list.syncedAt === null || (m.classDefaultsStageSyncedAt ?? null) !== list.syncedAt) continue;
+    writeManifest(ctx.projectDir, { ...m, classDefaultsPublished: true });
+  }
+  finishPending(ctx, list, canDelete, r);
   output.info("published:");
   if (r.published.length === 0) output.info(`  ${r.message}`);
   for (const f of r.published) output.info(`  ${f}`);
+  for (const f of r.deleted) output.info(`  deleted ${f}`);
   output.info(`route: ${r.route ?? "(none)"}`);
   output.info(`backup: ${r.backup ?? "(none)"}`);
   if (r.route === "live-reload") {
     output.info(
       "the open Mod Editor reloaded the published assets in place; the asset editor tabs of the published assets and of the assets that reference them were closed (reopen them to see the change).",
     );
+  }
+  if (r.tagsRegistered.length > 0) output.info(`gameplay tags registered in the open Mod Editor: ${r.tagsRegistered.join(", ")}`);
+  const unknownTags = r.tagsUnregistered;
+  if (r.route === "live-reload" && (unknownTags.length > 0 || (!liveTags && list.config.length > 0))) {
+    output.diag({
+      severity: "warning",
+      code: "ABFC7015",
+      message:
+        unknownTags.length > 0
+          ? `the open Mod Editor does not know these gameplay tags yet: ${unknownTags.join(", ")}${r.tagsError !== null ? ` (${r.tagsError})` : ""}; rows that use them load with an invalid tag there and their directors do not start in Play In Editor.`
+          : `the tag list ${list.config.join(", ")} was published while the Mod Editor is open; this backend cannot register new tags in the open editor (update abf-mod-editor-mcp), so the editor does not know them yet.`,
+      fix: 'restart the Mod Editor before you play or open the director rows. Do not save a row the editor reports "Invalid Tags that have been removed" for; if you did, run abfc build and abfc publish again (the tag is set again).',
+    });
   }
   if (r.skippedDirty.length > 0) {
     output.info(
@@ -298,6 +368,8 @@ async function copyToMod(ctx: CliContext, rec: Recorder, backend: Backend, list:
   }
   output.json({
     published: r.published,
+    deleted: r.deleted,
+    config: list.config,
     backup: r.backup,
     route: r.route,
     reloadedInPlace: r.reloadedInPlace,
@@ -306,8 +378,45 @@ async function copyToMod(ctx: CliContext, rec: Recorder, backend: Backend, list:
     skippedDirty: r.skippedDirty,
     dirtyPublished: r.dirtyPublished,
     compileErrorsAfter: r.compileErrorsAfter,
+    tagsRegistered: r.tagsRegistered,
+    tagsUnregistered: r.tagsUnregistered,
+    tagsStrategy: r.tagsStrategy,
+    tagsError: r.tagsError,
   });
   return output.exitCode();
+}
+
+/**
+ * What a publish settled: the pending deletions (tombstones, renamed-from paths, retired rows) that are done or have nothing left to
+ * delete, and the `publishAlso` lists. `r` is null when nothing was sent (nothing left to publish). Without `publishDeletes` the
+ * manifests with files still on the stage's removed list stay, so a later publish with a newer backend deletes them.
+ */
+function finishPending(ctx: CliContext, list: PublishList, canDelete: boolean, r: PublishResult | null): void {
+  const { projectDir, output } = ctx;
+  for (const p of list.pending) {
+    if (p.files.length > 0 && !(canDelete && r !== null)) continue;
+    const m = readManifest(projectDir, p.manifest);
+    if (m === null) continue;
+    if (p.kind === "tombstone") {
+      deleteManifest(projectDir, p.manifest);
+      deleteSourceMap(projectDir, p.manifest);
+      dropUnitCacheAsset(win32.join(ctx.paths.cacheDir, "units.json"), p.manifest);
+    } else if (p.kind === "renamed") {
+      const { renamedFrom: _r, ...rest } = m;
+      writeManifest(projectDir, rest);
+    } else {
+      const { retiredRows: _rr, ...rest } = m;
+      writeManifest(projectDir, rest);
+    }
+  }
+  if (r === null) return;
+  for (const asset of list.alsoOf) {
+    const m = readManifest(projectDir, asset);
+    if (m === null || m.publishAlso === undefined) continue;
+    const { publishAlso: _p, ...rest } = m;
+    writeManifest(projectDir, rest);
+  }
+  if (r.deleted.length > 0) output.info(`deleted from the mod: ${r.deleted.length} file(s)`);
 }
 
 /** The diagnostic for a refused `bp_publish`: the backend's message and a specific fix. */
@@ -321,7 +430,7 @@ export function publishRefusal(mod: string, r: PublishResult): Diagnostic[] {
     case "conflicts":
       return d(
         "ABFC7005",
-        "the mod's files changed outside abfc since the stage was synced (for example saved in the Mod Editor): run abfc build --resync, then abfc publish again.",
+        "the mod's files changed outside abfc since the stage was synced (for example saved in the Mod Editor): run abfc publish again (the build copies the mod again by itself); if it keeps happening, close programs that write to the mod folder.",
       );
     case "editor refused": {
       const why = r.editorReason ?? r.message;

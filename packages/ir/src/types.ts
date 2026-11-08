@@ -20,7 +20,7 @@ export interface IrAsset {
   /** Row asset path whose class reference is verified (read-only) by the class-defaults pass. */
   classManagerRow?: string;
   /** `@director("Row")`: the class-manager row asset (`/<mod>/<table>/<Row>`) that should reference this class. */
-  director?: { row: string; asset: string };
+  director?: { row: string; asset: string; /** The gameplay tag the row holds (`@director("Row", tag)`). */ tag?: string };
   variables: IrVariable[];
   units: IrUnit[]; // owned functions/events/overrides
   structFields?: IrVariable[]; // only for UserDefinedStruct
@@ -32,7 +32,7 @@ export interface IrUnit {
   kind: "function" | "event" | "override";
   name: string;
   graph: string; // "EventGraph" for events, the function name for functions
-  signature: { inputs: IrParam[]; outputs: IrParam[]; net?: "server" | "client" | "multicast"; reliable?: boolean };
+  signature: { inputs: IrParam[]; outputs: IrParam[]; net?: "server" | "client" | "multicast"; reliable?: boolean; /** Functions only: the Blueprint access specifier. */ access?: "public" | "protected" | "private" };
   locals: IrVariable[]; // honored when the backend has functionLocals; else hoisted by the lowering
   nodes: IrNode[];
   wires: IrWire[];
@@ -107,6 +107,22 @@ export interface BackendCapabilities {
   eventMeta: boolean;
   /** `backend_info.capabilities.classManagerRows` (backend 2.5.0) AND bp_apply feature `class_manager_row`: the defaults spec may carry `class_manager_row`. */
   classManagerRows: boolean;
+  /** `backend_info.capabilities.assetOps` (backend 2.6.0) AND the `bp_asset_ops` tool: the operations it supports (`rename`, `delete`, `reparent`, `recreate`); empty when absent. */
+  assetOps: string[];
+  /** `backend_info.capabilities.publishDeletes` (backend 2.6.0) AND `bp_publish`: `delete_removed` deletes removed files from the mod. */
+  publishDeletes: boolean;
+  /** `backend_info.capabilities.gameplayTags` (backend 2.6.0): reflect can list gameplay tags and the tag ini is managed. */
+  gameplayTags: boolean;
+  /** `backend_info.capabilities.liveTags` (backend 2.6.0) AND `bp_publish`: a publish with the Mod Editor open registers the mod's gameplay tags in it before it reloads the rows. */
+  liveTags: boolean;
+  /** `backend_info.capabilities.reflectDefaults` (backend 2.6.0): reflect function meta carries `defaults`. */
+  reflectDefaults: boolean;
+  /** `classManagerRows` AND bp_apply feature `class_manager_row_tag` (backend 2.6.0): `class_manager_row` may carry `gameplay_tag`. */
+  classManagerRowTag: boolean;
+  /** bp_apply feature `variable_defaults`: the spec may carry `variable_defaults` to change or drop the default of an existing variable in place. */
+  variableDefaults: boolean;
+  /** bp_apply feature `function_graphs`: own functions with access flags and same-name replace. */
+  functionGraphs: boolean;
   bpApplyFeatures: string[];
   nodeKinds: string[];
   /** `mod_audit` can audit the stage (false in Phase 1: it audits the real mod). */
@@ -157,6 +173,8 @@ export interface Profile {
   };
   functions: {
     isValid: ProfileFunctionRef; arrayLength: ProfileFunctionRef; lessInt: ProfileFunctionRef; addInt: ProfileFunctionRef;
+    /** Converts a Format Text result to a string (template literal where a string is expected). */
+    textToString: ProfileFunctionRef;
     equal: Record<ProfileEqualKey, ProfileFunctionRef>;
     notEqual: Record<ProfileEqualKey, ProfileFunctionRef>;
   };
@@ -184,8 +202,20 @@ export interface AssetPlan {
   removeTags?: Array<{ graph: string; nodes: string[] }>;
   /** Manifest units dropped without touching the stage (never applied, or adopted hand-made nodes). */
   forgetUnits?: string[];
+  /** TS wins: hand-made nodes (no unit of abfc's) removed from a graph of a non-hybrid class. */
+  removeGraphNodes?: Array<{ graph: string; nodes: string[] }>;
+  /** TS wins: member variables removed from the asset (hand-made ones of a non-hybrid class, and own fields gone from the TS). */
+  removeVariables?: string[];
+  /** Own fields declared in the asset whose TS default differs from the manifest: the new text, or null to drop the default. */
+  variableDefaults?: Record<string, string | null>;
+  /** Function graphs to create (signature only; the body comes in graphs). A name also in removeFunctions is replaced. */
+  functions?: Array<{ name: string; inputs: IrParam[]; outputs: IrParam[]; access: "public" | "protected" | "private" }>;
+  /** TS wins: hand-made function graphs removed from a non-hybrid class. */
+  removeFunctions?: string[];
+  /** Own fields gone from the TS that were not in the asset any more: only the manifest record is dropped. */
+  forgetVariables?: string[];
   /** Class defaults to apply in pass 5 (plan item `defaults`); present only when they changed. */
-  defaults?: { classPath: string; values: Record<string, string>; hash: string; classManagerRow?: string; director?: { asset: string; classPath: string } };
+  defaults?: { classPath: string; values: Record<string, string>; hash: string; classManagerRow?: string; director?: { asset: string; classPath: string; tag?: string } };
 }
 export interface ApplyPlan { mod: string; assets: AssetPlan[] }
 

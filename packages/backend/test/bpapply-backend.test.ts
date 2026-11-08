@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AbfcError } from "@abfc/env";
-import { BpApplyBackend, McpStdioClient, publishResultFrom } from "../src/index.js";
+import { BpApplyBackend, McpStdioClient, grantPublish, publishResultFrom } from "../src/index.js";
 
 const FIXTURE = fileURLToPath(new URL("../../test/fixtures/fake-bpapply-server.mjs", import.meta.url));
 
@@ -149,7 +149,15 @@ test("stage and stageStatus", async () => {
       added: [],
       removed: ["Content/B.uasset"],
       conflicts: [],
+      stale: [],
     });
+  });
+});
+
+test("(S13) stageStatus names a conflicting file by its path, not as JSON", async () => {
+  await withBackend({}, async ({ backend }) => {
+    const st = await backend.stageStatus("conflicted");
+    assert.deepEqual(st?.conflicts, ["Content/C.uasset"]);
   });
 });
 
@@ -257,6 +265,46 @@ test("reflect reads the result file (BOM tolerated) and maps the filter", async 
   });
 });
 
+test("reflect asks for gameplay tags only when requested and parses them", async () => {
+  await withBackend({}, async ({ backend, calls }) => {
+    const plain = await backend.reflect({ mod: "TestMod", classes: [], structs: [], castTargets: [] });
+    assert.equal(plain.data.gameplayTags, undefined);
+    assert.equal("gameplay_tags" in (calls()[0]?.args ?? {}), false);
+    const res = await backend.reflect({ mod: "TestMod", classes: [], structs: [], castTargets: [], gameplayTags: true });
+    assert.equal(calls()[1]?.args.gameplay_tags, true);
+    assert.deepEqual(res.data.gameplayTags, { tags: ["ClassManager.EntityDirector.Fake"], sources: { settings: 1 } });
+  });
+});
+
+test("assetOps sends bp_asset_ops and maps the result; a refused op is a result, not an exception", async () => {
+  await withBackend({}, async ({ backend, calls }) => {
+    const ok = await backend.assetOps("TestMod", [{ op: "rename", from: "/TestMod/A", to: "/TestMod/B" }, { op: "recreate", asset: "/TestMod/C" }]);
+    assert.equal(ok.ok, true);
+    assert.deepEqual(ok.results, [{ op: "rename", ok: true }, { op: "recreate", ok: true }]);
+    assert.deepEqual(ok.touched, ["/TestMod/Row"]);
+    assert.equal(ok.error, null);
+    assert.deepEqual(calls()[0]?.args.ops, [{ op: "rename", from: "/TestMod/A", to: "/TestMod/B" }, { op: "recreate", asset: "/TestMod/C" }]);
+    assert.equal(calls()[0]?.args.mod, "TestMod");
+    const bad = await backend.assetOps("TestMod", [{ op: "delete", asset: "/TestMod/Referenced" }]);
+    assert.equal(bad.ok, false);
+    assert.equal(bad.rolledBack, true);
+    assert.ok((bad.error ?? "").includes("referenced by /TestMod/Other"));
+    assert.equal(bad.results[0]?.detail, "referenced by /TestMod/Other");
+  });
+});
+
+test("publish passes delete_removed only when asked and returns the deleted files", async () => {
+  await withBackend({}, async ({ backend, calls }) => {
+    const grant = grantPublish("TestMod");
+    const plain = await backend.publish("TestMod", ["/TestMod/A"], grant);
+    assert.deepEqual(plain.deleted, []);
+    assert.equal("delete_removed" in (calls()[0]?.args ?? {}), false);
+    const del = await backend.publish("TestMod", ["/TestMod/A"], grant, { deleteRemoved: true });
+    assert.equal(calls()[1]?.args.delete_removed, true);
+    assert.deepEqual(del.deleted, ["Content/Old.uasset"]);
+  });
+});
+
 test("gameTest returns a failing report as a result", async () => {
   await withBackend({}, async ({ backend }) => {
     const rep = await backend.gameTest("TestMod", [{ op: "python" }], { timeoutSeconds: 120 });
@@ -351,6 +399,11 @@ test("publishResultFrom maps bp_publish results", () => {
   assert.deepEqual(a.dirtyAfter, []);
 
   assert.equal(publishResultFrom({ published: [], message: "Nothing to publish: no changes" }).ok, true);
+  // a publish that only deleted files (published stays empty) is a success, a refusal with deletions is not
+  const onlyDeleted = publishResultFrom({ published: [], deleted: ["Content/Old.uasset"], message: "Copied 0 file(s)... Deleted 1 file(s)" });
+  assert.equal(onlyDeleted.ok, true);
+  assert.deepEqual(onlyDeleted.deleted, ["Content/Old.uasset"]);
+  assert.equal(publishResultFrom({ published: [], deleted: ["Content/Old.uasset"], refused: "copy failed" }).ok, false);
 
   const c = publishResultFrom({
     published: [],
@@ -411,6 +464,19 @@ test("publishResultFrom maps bp_publish results", () => {
     { asset: "/M/C", message: "cannot connect" },
     { asset: null, message: '"plain"' },
   ]);
+  assert.deepEqual([g.tagsRegistered, g.tagsUnregistered, g.tagsStrategy, g.tagsError], [[], [], null, null]);
+  const h = publishResultFrom({
+    published: ["Content/A.uasset"],
+    message: "ok",
+    tags_registered: ["A.B"],
+    tags_unregistered: ["C.D", "E.F"],
+    tags_strategy: "settings",
+    tags_error: "refresh: boom",
+  });
+  assert.deepEqual(h.tagsRegistered, ["A.B"]);
+  assert.deepEqual(h.tagsUnregistered, ["C.D", "E.F"]);
+  assert.equal(h.tagsStrategy, "settings");
+  assert.equal(h.tagsError, "refresh: boom");
   assert.deepEqual(a.reloadedReferencers, []);
   assert.deepEqual(a.skippedDirty, []);
   assert.deepEqual(a.dirtyPublished, []);

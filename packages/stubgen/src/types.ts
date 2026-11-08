@@ -18,7 +18,7 @@ export interface ReflectMember {
   name: string;
   pins: ReflectPin[];
   /** Function metadata read from the engine (backends with the reflect meta pass); null/absent when unreadable. */
-  meta?: { tooltip?: string | null; displayName?: string | null } | null;
+  meta?: { tooltip?: string | null; displayName?: string | null; /** pin name -> default text from the UFunction `CPP_Default_*` metadata (backend 2.6.0); null when unreadable. */ defaults?: Record<string, string> | null } | null;
 }
 
 export interface ReflectClass {

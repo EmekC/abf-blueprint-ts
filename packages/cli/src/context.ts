@@ -101,5 +101,7 @@ export function loadContext(args: ParsedArgs, deps: CliDeps): CliContext {
     stdout: deps.stdout,
     stderr: deps.stderr,
   });
+  // The environment's other diagnostics are shown by `abfc doctor`; a mod name in the wrong case is corrected silently otherwise.
+  if (args.command !== "doctor") for (const d of env.diagnostics) if (d.code === "ABFC1045") output.diag(d);
   return { args, deps, projectDir, config: env.config, env, output, paths: pathsFor(projectDir) };
 }

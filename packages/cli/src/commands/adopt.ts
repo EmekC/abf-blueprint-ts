@@ -3,10 +3,11 @@ import type { AdoptionAnalysis, Manifest, ManifestUnit } from "@abfc/compiler";
 import { unitStateHash } from "@abfc/ir";
 import { UsageError } from "../args.js";
 import type { CliContext } from "../context.js";
-import { BackendSession, COMPILER_ID, Recorder, readAsset } from "./common.js";
+import { BackendSession, COMPILER_ID, Recorder, pruneManifestsToStage, readAsset } from "./common.js";
 import { ensureStage } from "./stage.js";
 
 /**
+ * Deprecated (warning ABFC5015): a build replaces hand-made units of the same name on its own.
  * `abfc adopt <asset> <unit> [--remove-node <name>]... [--yes] [--discard-editor-changes]`: records a hand-made event or engine
  * override (`override:ReceiveTick`) as owned; `--remove-node` adds comment boxes and unlinked nodes that go away with it. Never calls `bp_apply`.
  * A unit abfc has already applied is refused unless `--discard-editor-changes` is given; the next build then removes its
@@ -26,6 +27,13 @@ export async function adopt(ctx: CliContext): Promise<number> {
   const unitName = colon < 0 ? unitArg : unitArg.slice(colon + 1);
   const unitId = `${kind}:${unitName}`;
   const graph = "EventGraph";
+  output.diag({
+    severity: "warning",
+    code: "ABFC5015",
+    asset,
+    message: `abfc adopt is not needed any more: abfc build replaces a hand-made ${kind === "override" ? "override" : "event"} of the same name as a TypeScript unit (TypeScript wins). The command still works and is kept for compatibility.`,
+    fix: `declare ${unitName} in TypeScript and run abfc build; use abfc adopt only if you want the hand-made nodes to stay as they are until the first build.`,
+  });
 
   const existing = readManifest(projectDir, asset);
   const old = existing?.units.find((u) => u.id === unitId);
@@ -45,7 +53,8 @@ export async function adopt(ctx: CliContext): Promise<number> {
   const session = new BackendSession(ctx, rec);
   try {
     const { backend } = await session.open("adopt.backendStart");
-    const stage = await ensureStage(backend, env, config, { resync: args.flags.resync });
+    const { status: stage, resynced } = await ensureStage(backend, env, config, { resync: args.flags.resync, warn: (d) => output.diag(d) });
+    if (resynced) await pruneManifestsToStage(ctx, backend, config.mod.name);
     const { parsed } = await readAsset(ctx, backend, asset);
 
     let analysis: AdoptionAnalysis;

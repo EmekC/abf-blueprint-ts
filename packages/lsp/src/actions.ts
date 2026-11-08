@@ -1,7 +1,7 @@
 // Quick fixes, built from the server's own diagnostics for the requested range.
 import { CodeActionKind } from "vscode-languageserver/node.js";
 import type { CodeAction, Range } from "vscode-languageserver/node.js";
-import { directorFix, idivFix, keepPathFix, modImportFix, optionalChainFix, relativePathFix, removePathFix } from "@abfc/compiler";
+import { addDirectorTagFix, directorFix, idivFix, keepPathFix, modImportFix, optionalChainFix, relativePathFix, removePathFix, useOverrideFix } from "@abfc/compiler";
 import type { CompilerProjectConfig, TextEdit, TsSourceFile } from "@abfc/compiler";
 import type { Diagnostic } from "@abfc/ir";
 import { offsetRange, spanOffsets, toLspDiagnostic } from "./convert.js";
@@ -28,6 +28,13 @@ function fixFor(d: Diagnostic, sf: TsSourceFile, start: number, end: number, cfg
       return { title: "Import from @mod/", edits: modImportFix(sf, start, end, cfg.mod) };
     case "ABFC2076":
       return { title: "Replace classManagerRow with @director", edits: directorFix(sf, start, end, cfg.mod, cfg.classManagerTable ?? "DataTables/DT_ClassManager") };
+    case "ABFC2079": {
+      const tag = (d.data as { tag?: unknown } | undefined)?.tag;
+      if (typeof tag !== "string") return undefined;
+      return { title: `Add the gameplay tag "${tag}"`, edits: addDirectorTagFix(sf, start, end, tag) };
+    }
+    case "ABFC2078":
+      return { title: "Use @override", edits: useOverrideFix(sf, start, end) };
     case "ABFC5012": {
       const keepPath = (d.data as { keepPath?: unknown } | undefined)?.keepPath;
       if (typeof keepPath !== "string") return undefined;

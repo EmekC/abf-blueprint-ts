@@ -43,7 +43,7 @@ test("lock round trip through a folder", () => {
     const l = lock();
     writeLock(stubs, l);
     assert.deepEqual(readLock(stubs), l);
-    assert.equal(l.generator, "0.3.0");
+    assert.equal(l.generator, "0.5.0");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -52,6 +52,17 @@ test("lock round trip through a folder", () => {
 test("checkLock: missing lock is ABFC3003", () => {
   const d = checkLock(null, env(), config, "build");
   assert.deepEqual(d.map((x) => [x.code, x.severity]), [["ABFC3003", "error"]]);
+});
+
+test("checkLock: stubs from another generator version are a warning (ABFC3001) that names abfc stubs, in check and build mode", () => {
+  for (const mode of ["check", "build"] as const) {
+    const d = checkLock(lock({ generator: "0.0.1" }), env(), config, mode);
+    assert.equal(d.length, 1);
+    assert.equal(d[0]!.code, "ABFC3001");
+    assert.equal(d[0]!.severity, "warning");
+    assert.match(d[0]!.message, /abfc stubs 0.0.1/);
+    assert.match(d[0]!.message, /Run "abfc stubs"/);
+  }
 });
 
 test("checkLock: matching lock is clean", () => {

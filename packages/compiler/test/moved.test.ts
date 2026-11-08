@@ -1,12 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { movedClassDiagnostics } from "../src/index.js";
+import { matchOrphans, movedClassDiagnostics } from "../src/index.js";
 import type { HirClass, HirProgram, HirStruct, Manifest } from "../src/index.js";
 
 const span = (file: string) => ({ file, line: 3, col: 14, endLine: 3, endCol: 20 });
 
 const cls = (name: string, path: string, file: string, pathDerived = true): HirClass =>
-  ({ name, path, pathDerived, classPath: `${path}.${name}_C`, parent: "/Script/Engine.Actor", span: span(file), events: [], fields: [], manualUnits: [], defaults: {} }) as HirClass;
+  ({ name, path, pathDerived, classPath: `${path}.${name}_C`, parent: "/Script/Engine.Actor", family: "actor", span: span(file), events: [], fields: [], manualUnits: [], hybrid: false, defaults: {} }) as HirClass;
 
 const program = (classes: HirClass[], structs: HirStruct[] = []): HirProgram => ({ mod: "TestMod", classes, structs, classMeta: {}, diagnostics: [] });
 
@@ -21,7 +21,7 @@ const manifest = (asset: string, source?: Manifest["source"]): Manifest => ({
 
 test("a moved file is found through source.class", () => {
   const hir = program([cls("MyRelay", "/TestMod/New/MyRelay", "src/New/MyRelay.ts")]);
-  const ds = movedClassDiagnostics(hir, [manifest("/TestMod/Old/MyRelay", { file: "src/Old/MyRelay.ts", class: "MyRelay", derived: true })], "TestMod");
+  const ds = movedClassDiagnostics(hir, [manifest("/TestMod/Old/MyRelay", { file: "src/Old/MyRelay.ts", class: "MyRelay", derived: true })], "TestMod", { singleMatch: "error" });
   assert.equal(ds.length, 1);
   assert.equal(ds[0]!.code, "ABFC5012");
   assert.equal(ds[0]!.severity, "error");
@@ -105,4 +105,38 @@ test("several matching manifests give one error that lists them and has no quick
 test("a class whose derived path has a manifest is fine", () => {
   const hir = program([cls("MyRelay", "/TestMod/New/MyRelay", "src/New/MyRelay.ts")]);
   assert.deepEqual(movedClassDiagnostics(hir, [manifest("/TestMod/New/MyRelay"), manifest("/TestMod/Old/MyRelay")], "TestMod"), []);
+});
+
+test("without a backend (check, language server) one match of a class is a warning that says the build renames it; a struct stays an error", () => {
+  const hir = program([cls("MyRelay", "/TestMod/New/MyRelay", "src/New/MyRelay.ts")]);
+  const ds = movedClassDiagnostics(hir, [manifest("/TestMod/Old/MyRelay", { file: "src/Old/MyRelay.ts", class: "MyRelay", derived: true })], "TestMod");
+  assert.equal(ds.length, 1);
+  assert.equal(ds[0]!.severity, "warning");
+  assert.equal(ds[0]!.message, "MyRelay was built as /TestMod/Old/MyRelay (from src/Old/MyRelay.ts); the next abfc build renames the asset to /TestMod/New/MyRelay (backend 2.6.0).");
+  assert.deepEqual(ds[0]!.data, { keepPath: "Old/MyRelay", recorded: "/TestMod/Old/MyRelay" }, "the keep-path quick fix is still offered");
+  const s = { name: "S_Top", path: "/TestMod/New/S_Top", pathDerived: true, objectPath: "/TestMod/New/S_Top.S_Top", fields: [], span: span("src/New/S_Top.ts") } as HirStruct;
+  const st = movedClassDiagnostics(program([], [s]), [manifest("/TestMod/S_Top", { file: "src/S_Top.ts", class: "S_Top", derived: true })], "TestMod");
+  assert.equal(st[0]!.severity, "error");
+  // several matches are an error whatever the mode
+  const several = movedClassDiagnostics(hir, [manifest("/TestMod/A/MyRelay"), manifest("/TestMod/B/MyRelay")], "TestMod");
+  assert.equal(several[0]!.severity, "error");
+});
+
+test("matchOrphans: tombstones are no orphans, struct manifests do not match classes, explicit paths only on request", () => {
+  const hir = program([cls("MyRelay", "/TestMod/New/MyRelay", "src/New/MyRelay.ts", false)]);
+  const old = manifest("/TestMod/Old/MyRelay", { file: "src/Old/MyRelay.ts", class: "MyRelay", derived: true });
+  assert.equal(matchOrphans(hir, [old], "TestMod").matches.length, 0, "explicit path: skipped by default");
+  assert.equal(matchOrphans(hir, [old], "TestMod", { explicit: true }).matches.length, 1);
+  assert.equal(matchOrphans(hir, [{ ...old, deleted: true }], "TestMod", { explicit: true }).matches.length, 0, "a tombstone is gone");
+  assert.equal(matchOrphans(hir, [{ ...old, structFieldsHash: "h" }], "TestMod", { explicit: true }).matches.length, 0, "a struct manifest is no class");
+});
+
+test("a class and file renamed together are paired by folder and parent, and the message names that reason", () => {
+  const hir = program([cls("Fresh", "/TestMod/Zone/Fresh", "src/Zone/Fresh.ts")]);
+  const old: Manifest = { ...manifest("/TestMod/Zone/Stale", { file: "src/Zone/Stale.ts", class: "Stale", derived: true }), created: true, parent: "/Script/Engine.Actor" };
+  const { matches } = matchOrphans(hir, [old], "TestMod");
+  assert.equal(matches.length, 1);
+  assert.deepEqual(matches[0]!.pair, { folder: "/TestMod/Zone", parent: "/Script/Engine.Actor" });
+  const ds = movedClassDiagnostics(hir, [old], "TestMod");
+  assert.match(ds[0]!.message, /the only removed and only new class in Zone with parent \/Script\/Engine\.Actor; to keep both assets, restore the removed class\.$/);
 });

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import ts from "typescript";
-import { directorFix, idivFix, keepPathFix, modImportFix, optionalChainFix, relativePathFix, removePathFix } from "../src/index.js";
+import { directorFix, idivFix, keepPathFix, modImportFix, optionalChainFix, relativePathFix, removePathFix, useOverrideFix } from "../src/index.js";
 import type { TextEdit } from "../src/index.js";
 
 const sf = (text: string): ts.SourceFile => ts.createSourceFile("x.ts", text, ts.ScriptTarget.ES2023, true);
@@ -254,4 +254,41 @@ test("keepPathFix is undefined for a class without the decorator, one with a pat
   assert.equal(keepPathFix(sf(has), has.indexOf("MyRelay"), "Old/MyRelay"), undefined);
   const ok = `@blueprint()\nclass MyRelay {}\n`;
   assert.equal(keepPathFix(sf(ok), 3, "Old/MyRelay"), undefined);
+});
+
+test("useOverrideFix turns @event into @override, adds the override modifier and the runtime import", () => {
+  const text = `import { blueprint, event } from "@abfc/runtime";\n\nexport class A {\n  @event\n  ReceiveBeginPlay(): void {}\n}\n`;
+  const [s, e] = range(text, "@event");
+  const edits = useOverrideFix(sf(text), s, e);
+  assert.ok(edits);
+  assert.equal(
+    apply(text, edits),
+    `import { blueprint, event, override } from "@abfc/runtime";\n\nexport class A {\n  @override\n  override ReceiveBeginPlay(): void {}\n}\n`,
+  );
+});
+
+test("useOverrideFix keeps an existing override keyword and import, replaces @event()", () => {
+  const text = `import { override, event } from "@abfc/runtime";\n\nexport class A {\n  @event()\n  override ReceiveTick(DeltaSeconds: number): void {}\n}\n`;
+  const [s, e] = range(text, "@event()");
+  const edits = useOverrideFix(sf(text), s + 1, s + 3);
+  assert.ok(edits);
+  assert.equal(edits.length, 1);
+  assert.equal(
+    apply(text, edits),
+    `import { override, event } from "@abfc/runtime";\n\nexport class A {\n  @override\n  override ReceiveTick(DeltaSeconds: number): void {}\n}\n`,
+  );
+  void e;
+});
+
+test("useOverrideFix adds a new import line when there is none and is undefined away from a decorator", () => {
+  const text = `export class A {\n  @event\n  Go(): void {}\n}\n`;
+  const [s, e] = range(text, "@event");
+  const edits = useOverrideFix(sf(text), s, e);
+  assert.ok(edits);
+  assert.equal(
+    apply(text, edits),
+    `import { override } from "@abfc/runtime";\nexport class A {\n  @override\n  override Go(): void {}\n}\n`,
+  );
+  const [gs, ge] = range(text, "Go()");
+  assert.equal(useOverrideFix(sf(text), gs, ge), undefined);
 });

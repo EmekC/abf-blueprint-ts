@@ -140,3 +140,24 @@ test("without the capability a director row is verified and ABFC2077 is reported
   assert.equal(out.perAsset[0]!.directorRow, undefined);
   assert.deepEqual(out.perAsset[0]!.defaultsWarnings.map((d) => d.code), ["ABFC2077"]);
 });
+
+test("a director tag: the spec carries class_manager_row.gameplay_tag with classManagerRowTag; without it ABFC2082 once per asset and no tag in the spec", async () => {
+  const plan = plannedWithDirector();
+  const TAG = "ClassManager.EntityDirector.Test";
+  const a = plan.assets[0]!;
+  const tagged: ApplyPlan = { ...plan, assets: [{ ...a, defaults: { ...a.defaults!, director: { ...a.defaults!.director!, tag: TAG } } }] };
+  const on = renderDefaultsSpec(tagged.assets[0]!, { ...caps(true, true), classManagerRows: true, classManagerRowTag: true });
+  assert.equal(on.class_manager_row!.gameplay_tag, TAG);
+  const old = renderDefaultsSpec(tagged.assets[0]!, { ...caps(true, true), classManagerRows: true });
+  assert.equal(old.class_manager_row!.gameplay_tag, undefined);
+  // the untagged director has no key at all
+  assert.ok(!("gameplay_tag" in renderDefaultsSpec(plan.assets[0]!, { ...caps(true, true), classManagerRows: true, classManagerRowTag: true }).class_manager_row!));
+
+  const c = { ...caps(true, true), classManagerRows: true };
+  const ids = nodeIdsFor(tagged, c);
+  const backend = new FakeBackend(() => result({ assets: [{ asset: tagged.assets[0]!.asset, node_ids: ids }], rows: [{ asset: tagged.assets[0]!.defaults!.director!.asset, created: true, changed: true }] }));
+  const out = await applyPlan(backend, tagged, c, profile, { cacheDir: "cache", record: () => {} });
+  const warnings = out.perAsset[0]!.defaultsWarnings.filter((w) => w.code === "ABFC2082");
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]!.message, /update abf-mod-editor-mcp to 2\.6\.0 or newer/);
+});

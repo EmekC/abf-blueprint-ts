@@ -10,7 +10,7 @@ export class BP_Fields extends Actor {
   Counts!: Map<name, int>;
   Seen!: Set<name>;
   Names!: name[];
-  Bad1: int = 10; // ABFC2047
+  Bad1: int = 1 + 2; // ABFC2047
   readonly Bad2!: int; // ABFC2047
   Bad3?: int; // ABFC2047
   Bad4!: number; // ABFC2047

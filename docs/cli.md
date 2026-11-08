@@ -55,7 +55,7 @@ These options override what abfc discovers. They apply to every command that nee
 abfc init [dir] [--mod <name>] [--yes] [--no-stubs] [--mods-dir <dir>] [--editor-root <dir>] [--backend-dir <dir>] [--python <exe>]
 ```
 
-Creates (or updates) the project in `dir` (default: `--project`, else the working folder), links it to a mod of your mods folder, writes the sample class and its test, then runs `abfc stubs` and `abfc doctor`. It works outside a project. Without `--yes` it asks questions and shows the files before writing them. A schema-1 `abf.config.json` is upgraded and the old file is kept as `.v1.bak` ([ABFC1031](errors.md#abfc1031)). The steps are in [first-mod.md](first-mod.md) and [config.md](config.md).
+Creates (or updates) the project in `dir` (default: `--project`, else the working folder), links it to a mod of your mods folder, writes the sample class and its test, then runs `abfc stubs` and `abfc doctor`. Running it again on an existing project is safe: every file it finds is `kept` (or `updated` when it only adds a missing line, such as new `.gitignore` entries), your `src` and `abf.config.json` are never rewritten, and the sample is written only when `src` holds no TypeScript file. It also writes `.abfc/tags.d.ts` (the gameplay tag constants, see [`abfc stubs`](#abfc-stubs)) together with `.abfc/tsconfig.paths.json`, also with `--no-stubs`. It works outside a project. Without `--yes` it asks questions and shows the files before writing them. A schema-1 `abf.config.json` is upgraded and the old file is kept as `.v1.bak` ([ABFC1031](errors.md#abfc1031)). The steps are in [first-mod.md](first-mod.md) and [config.md](config.md).
 
 | Option | Meaning |
 | --- | --- |
@@ -72,7 +72,7 @@ Creates (or updates) the project in `dir` (default: `--project`, else the workin
 abfc doctor [--deep] [--clean-runtimes]
 ```
 
-Prints the project, the mod, the profile, the Node version, the install kind, then every setting with its winner and source (flag, env, project, user config, auto), then starts the backend and prints its version and capabilities. Warnings do not change the exit code; errors do. The backend is not started when Python, the backend folder or the headless folder is missing; the output says which.
+Prints the project, the mod, the profile, the Node version, the install kind, then every setting with its winner and source (flag, env, project, user config, auto), then starts the backend and prints its version and a `backend capabilities` line: asset ops (`rename/delete/reparent/recreate`), publish deletions, gameplay tags, reflect defaults, class-manager row tag and variable defaults, each `yes` or `no`. A backend older than 2.6.0, or one without one of the first four capabilities, gets the warning [ABFC4018](errors.md#abfc4018) naming what is missing; everything keeps working, only the matching feature (automatic renames, deletes, tags, default arguments) falls back as described under that code. Without `variable defaults` a changed field initializer cannot be applied to an existing variable ([ABFC2084](errors.md#abfc2084)). Warnings do not change the exit code; errors do. The backend is not started when Python, the backend folder or the headless folder is missing; the output says which.
 
 | Option | Meaning |
 | --- | --- |
@@ -87,7 +87,7 @@ Prints the project, the mod, the profile, the Node version, the install kind, th
 abfc stubs [--resync]
 ```
 
-Asks the backend to describe the classes listed in `abf.config.json` (`stubs.classes`, `stubs.scriptClasses`), reads the hand-made assets of the mod and writes the TypeScript declarations into `.abfc/stubs/<profile>/` together with `stubs.lock.json`. The first run needs the network once, because the backend downloads the Blueprint filter. Run it again when the config's `stubs` section, the mod assets or the editor build change; `abfc check` and `abfc build` refuse stubs that no longer match ([ABFC3010](errors.md#abfc3010) explains the one `stubs` key that is ignored).
+Asks the backend to describe the classes listed in `abf.config.json` (`stubs.classes`, `stubs.scriptClasses`), reads the hand-made assets of the mod and writes the TypeScript declarations into `.abfc/stubs/<profile>/` together with `stubs.lock.json`. The first run needs the network once, because the backend downloads the Blueprint filter. Besides the engine and mod-asset declarations it writes `.abfc/tags.d.ts`, which declares the gameplay tags as constants (`ClassManager.EntityDirector.<Tag>`, used by `@director`, see [first-mod.md](first-mod.md#director-with-a-gameplay-tag)) from the game's tag list and the `Config/Tags/*.ini` files of your mod; a backend that cannot list the game's tags gives [ABFC3012](errors.md#abfc3012) and the file holds only the mod's own tags. Library functions whose parameters have defaults in the engine are generated with those parameters optional (`PrintString("hi")`). Run it again when the config's `stubs` section, the mod assets or the editor build change, and after updating abfc: stubs made by an older abfc give a warning ([ABFC3001](errors.md#abfc3001)) that names both generator versions and lack the newer additions; `abfc check` and `abfc build` refuse stubs that no longer match ([ABFC3010](errors.md#abfc3010) explains the one `stubs` key that is ignored).
 
 | Option | Meaning |
 | --- | --- |
@@ -117,16 +117,28 @@ abfc build [--resync] [--drift] [--keep-failed-stage]
 
 Compiles the project and applies only the units whose TypeScript changed to a private staging copy of the mod, then compiles the changed Blueprints in Unreal. Your mod is not changed; `abfc publish` copies the result. The first build creates the staging copy. A build that finds nothing to do prints "up to date".
 
+TypeScript wins: a build makes each Blueprint it applies match the `.ts` file. What was changed in the Mod Editor is replaced, and one [ABFC5014](errors.md#abfc5014) warning per asset lists it; in a class without a `_Manual` interface merge the hand-made nodes, function graphs and variables are removed too. The build never refuses because of editor edits. A plain build reads only the assets whose TypeScript changed (use `--drift` for all).
+
+With backend 2.6.0 the build also does the following without a flag, one output line each:
+
+- `renamed <old> -> <new>`: a class that moved to another folder or was renamed (also together with its file) keeps its Blueprint: the asset is renamed in the staging copy and Unreal fixes the references. An unclear case (several earlier assets match) stays [ABFC5012](errors.md#abfc5012).
+- `reparented <asset>: <old> -> <new>`: a changed `extends` clause in the same family (Actor, component, widget, other) is reparented; `recreating <asset>: ...` when the new parent is in another family, which creates the asset again (only for assets abfc created, else [ABFC2048](errors.md#abfc2048)).
+- `deleted <asset>`: a class removed from TypeScript deletes the asset abfc created for it, after the build applied the classes that used it ([ABFC5016](errors.md#abfc5016) if another asset still references it). A hand-made asset that a class took over is emptied and stays ([ABFC5017](errors.md#abfc5017)); a `@struct` is never deleted ([ABFC5018](errors.md#abfc5018), once). The class-manager row of a changed or removed `@director` is deleted as well (`deleted <row> (the class-manager row of ...)`).
+- `gameplay tag <tag>: added to the mod's tag list`: a `@director` tag the mod did not have yet.
+- [ABFC4017](errors.md#abfc4017) (warning): the mod changed since the staging copy was made (for example saved in the Mod Editor), so it was copied again; the class defaults of exactly those assets are applied again.
+
+These operations only change the staging copy; the real mod changes with `abfc publish`. The backend takes at most 20 operations per call, so larger builds are sent in chunks ([ABFC5016](errors.md#abfc5016)). Two builds at once in one project are refused with [ABFC4019](errors.md#abfc4019), see [Running one command at a time](#running-one-command-at-a-time). A `mod.name` written in another letter case than the plugin file is corrected with the warning [ABFC1045](errors.md#abfc1045).
+
 | Option | Meaning |
 | --- | --- |
-| `--resync` | Recreate the staging copy from the mod before building. Unpublished staged work of every project that targets the same mod is discarded. Use it after you changed the mod by hand, or when abfc reports a conflict with the real mod ([ABFC4020](errors.md#abfc4020)). |
-| `--drift` | Read and drift-check every owned asset, not only the changed ones. It finds edits made in the Mod Editor to units that did not change in TypeScript ([ABFC5001](errors.md#abfc5001)) at the cost of one read per asset. It does not change what is applied. Only `abfc build` accepts it. |
+| `--resync` | Recreate the staging copy from the mod before building. Unpublished staged work of every project that targets the same mod is discarded; the manifests are pruned to what the new copy holds, and renames, deletes and class defaults that were not published yet are done again by the build. Rarely needed: when the real mod changed since the staging copy was made (for example saved in the Mod Editor), abfc copies it again by itself and says so ([ABFC4017](errors.md#abfc4017)). |
+| `--drift` | Read and drift-check every owned asset, not only the changed ones. Edits made in the Mod Editor to units that did not change in TypeScript are replaced too (TypeScript wins, [ABFC5014](errors.md#abfc5014)), at the cost of one read per asset. Use it after a manifest was lost, or when `abfc status` shows [ABFC5001](errors.md#abfc5001) or [ABFC5002](errors.md#abfc5002) for an asset you did not change. Only `abfc build` accepts it. |
 | `--keep-failed-stage` | After an Unreal compile failure keep the failed graphs in the staging copy for inspection. Without it abfc re-syncs the staging copy from the mod, which discards all unpublished staged work in every asset of the mod (like `--resync`), not only in the assets that failed to compile. abfc forgets the units that were never published, and the next build applies them again. If that re-sync fails, abfc warns with [ABFC4016](errors.md#abfc4016) and you run `abfc build --resync` before the next build. Also accepted by `abfc test` and `abfc publish`. |
 
 `build --json` result:
 
-- applied: `{applied: [unit id], assets: [asset path], structs?, route, upToDate, removed?, removedOrphanTags?}`; `route` is how the backend wrote the graphs;
-- nothing to do: `{applied: [], upToDate}`;
+- applied: `{applied: [unit id], assets: [asset path], structs?, route, upToDate, removed?, removedOrphanTags?, renamed?, deleted?}`; `route` is how the backend wrote the graphs; `renamed` is `[{from, to}]` and `deleted` a list of asset paths, each present only when the build did any;
+- nothing to do: `{applied: [], upToDate}` (with `renamed` and `deleted` when only those happened);
 - compile failure: `{applied: [], compileFailed: true, stageResynced}`.
 
 A compile failure exits 1; the Unreal messages are listed as `ABFC6xxx` diagnostics (see [errors.md](errors.md)).
@@ -137,7 +149,7 @@ A compile failure exits 1; the Unreal messages are listed as `ABFC6xxx` diagnost
 abfc test [pattern] [--no-build] [--resync] [--keep-failed-stage]
 ```
 
-Builds (unless `--no-build`), compiles the tests of the project and runs each one through the backend's game-test runner in a hidden editor. `pattern` selects tests whose name contains it. Tests that need the live HUD are skipped with a warning and listed as manual checks (the checklist is written to `.abfc/reports/manual-checks.md`).
+Builds (unless `--no-build`), compiles the tests of the project and runs each one through the backend's game-test runner in a hidden editor on the staging copy. The runner builds its test harness (`Content/_McpTest`) in the staging copy only; it is never published and never reaches your mod, and your open Mod Editor is not used. `pattern` selects tests whose name contains it. Tests that need the live HUD are skipped with a warning and listed as manual checks (the checklist is written to `.abfc/reports/manual-checks.md`).
 
 | Option | Meaning |
 | --- | --- |
@@ -152,7 +164,7 @@ Builds (unless `--no-build`), compiles the tests of the project and runs each on
 abfc status [--resync]
 ```
 
-Reads every owned asset from the staging copy and prints one line per unit: `<asset> <unit> <state> <ir hash> <asset hash>`, then how many staged files differ from the mod. Editor edits to a unit abfc owns are reported as drift ([ABFC5001](errors.md#abfc5001)).
+Reads every owned asset from the staging copy and prints one line per unit: `<asset> <unit> <state> <ir hash> <asset hash>`, then how many staged files differ from the mod. Editor edits to a unit abfc owns are reported as warnings ([ABFC5001](errors.md#abfc5001) to [ABFC5004](errors.md#abfc5004)): a preview of what the next build replaces (`abfc build --drift` replaces them now). Status itself changes nothing. A real mod that changed since the staging copy was made is reported as a warning ([ABFC4020](errors.md#abfc4020)); status never copies it again.
 
 `status --json` result: `{units: [{asset, unit, state, irHash, assetHash}], staging: {changed, added, removed, conflicts}}`.
 
@@ -162,7 +174,7 @@ Reads every owned asset from the staging copy and prints one line per unit: `<as
 abfc adopt <asset> <unit> [--remove-node <name>]... [--yes] [--discard-editor-changes] [--resync]
 ```
 
-Records a hand-made event (`UpdateTarget` or `event:UpdateTarget`) or engine override (`override:ReceiveTick`) of an existing Blueprint as owned by abfc, so that a class in TypeScript can take it over. It never applies anything. Without `--yes` it only prints what it would record and exits 3 with [ABFC5006](errors.md#abfc5006). A unit that abfc already applied is refused with [ABFC5007](errors.md#abfc5007) unless `--discard-editor-changes` is given.
+Deprecated ([ABFC5015](errors.md#abfc5015)): not needed any more, because `abfc build` replaces a hand-made event of the same name as a TypeScript unit. Records a hand-made event (`UpdateTarget` or `event:UpdateTarget`) or engine override (`override:ReceiveTick`) of an existing Blueprint as owned by abfc, so that a class in TypeScript can take it over. It never applies anything. Without `--yes` it only prints what it would record and exits 3 with [ABFC5006](errors.md#abfc5006). A unit that abfc already applied is refused with [ABFC5007](errors.md#abfc5007) unless `--discard-editor-changes` is given.
 
 | Option | Meaning |
 | --- | --- |
@@ -179,14 +191,21 @@ Records a hand-made event (`UpdateTarget` or `event:UpdateTarget`) or engine ove
 abfc publish [--dry-run] [--full] [--resync] [--keep-failed-stage]
 ```
 
-Builds, then copies the built assets of the project's mod from the staging copy into the mod. The backend refuses to publish on compile errors, conflicts, locked files or an editor in the wrong state, and keeps a backup of every replaced file. When the Mod Editor is open it reloads the published assets in place; stop Play In Editor and save or revert unsaved assets first ([ABFC7005](errors.md#abfc7005)). Nothing is ever uploaded: uploading a mod is a separate step you do yourself.
+Builds, then copies the built assets of the project's mod from the staging copy into the mod. The backend refuses to publish on compile errors, conflicts, locked files or an editor in the wrong state, and keeps a backup of every replaced or deleted file. When the Mod Editor is open it reloads the published assets in place. Play In Editor must not be running and no asset may have unsaved changes: otherwise the publish is refused with [ABFC7005](errors.md#abfc7005) (exit 3) and the message says which case; stop Play In Editor, save or revert, and run `abfc publish` again. Nothing is ever uploaded: uploading a mod is a separate step you do yourself.
+
+The publish also carries the structural changes of the build:
+
+- `deleted <file>`: the files of a deleted class (and its class-manager row), the old path of a renamed or moved class and the row of a changed `@director` are deleted from the mod, with a backup. The assets that Unreal edited for a rename (references fixed in other Blueprints) are published with it. A backend older than 2.6.0 cannot delete: the publish goes on and warns with [ABFC7014](errors.md#abfc7014) naming the files to delete by hand; the deletions stay pending for the next publish. An open Mod Editor may keep listing a deleted asset until it is restarted ([troubleshooting.md](troubleshooting.md#the-editor-still-lists-a-deleted-asset)).
+- `changed config <file>`: the mod's gameplay tag list `Config/Tags/<Mod>Tags.ini`, when a `@director` tag was added. With the Mod Editor open, backend 2.6.0 registers the new tags in it before the rows reload; only when that fails does [ABFC7015](errors.md#abfc7015) say to restart the editor.
+
+`--dry-run` lists all of these as `changed`, `added`, `changed config` and `deleted` lines and copies nothing. A publish that only deletes files is a real publish (it does not say "nothing to publish").
 
 | Option | Meaning |
 | --- | --- |
 | `--dry-run` | Print the would-publish list and stop before the copy. |
-| `--full` | Run the release checks first, in this order, stopping at the first failure: 1 stubs lock, 2 check and Blueprint-filter hits, 3 build with `--drift` semantics, 4 tests, 5 the mod audit of the staged copy ([ABFC7002](errors.md#abfc7002)), 6 upload file check, 7 the would-publish list, 8 the copy. There is no `abfc audit` command: `abfc publish --full --dry-run` runs gates 1 to 7 without copying. |
+| `--full` | Run the release checks first, in this order, stopping at the first failure: 1 stubs lock, 2 check and Blueprint-filter hits, 3 build with `--drift` semantics (editor changes are replaced, TypeScript wins), 4 tests, 5 the mod audit of the staged copy ([ABFC7002](errors.md#abfc7002)), 6 upload file check, 7 the would-publish list, 8 the copy. There is no `abfc audit` command: `abfc publish --full --dry-run` runs gates 1 to 7 without copying. |
 
-`publish --json` result: with `--dry-run` `{changed, added, dryRun, full}`; after a copy `{published, backup, route, reloadedInPlace, dirtyAfter, reloadedReferencers, skippedDirty, dirtyPublished, compileErrorsAfter}`. `--timings` prints the time of each gate.
+`publish --json` result: with `--dry-run` `{changed, added, deleted, config, dryRun, full}`; after a copy `{published, deleted, config, backup, route, reloadedInPlace, dirtyAfter, reloadedReferencers, skippedDirty, dirtyPublished, compileErrorsAfter, tagsRegistered, tagsUnregistered, tagsStrategy, tagsError}`. `--timings` prints the time of each gate.
 
 ## abfc lsp
 
@@ -194,7 +213,7 @@ Builds, then copies the built assets of the project's mod from the staging copy 
 abfc lsp [--stdio]
 ```
 
-Starts the language server on stdin and stdout. Standard output carries only the protocol; logs go to standard error. `--stdio` and the `--clientProcessId <pid>` that language clients add are accepted and ignored. See [language-service.md](language-service.md) for the editor setup.
+Starts the language server on stdin and stdout: diagnostics, hover, quick fixes and completion. Completion offers the engine and mod library functions (typing `PrintS` offers `KismetSystemLibrary.PrintString` and adds the import) and, at the start of a member in a class body, `@override override ReceiveBeginPlay(): void { }` stubs for the events of the parent class (typing `Rec`). It reads the stubs, so run `abfc stubs` first. Standard output carries only the protocol; logs go to standard error. `--stdio` and the `--clientProcessId <pid>` that language clients add are accepted and ignored. See [language-service.md](language-service.md) for the editor setup.
 
 ## abfc version
 
@@ -235,6 +254,10 @@ Prints `abfc <version> (<exe|source install>, node <version>)` and exits 0. It w
 
 A flag the command does not use is ignored, except for the three that are refused with a usage error: `--drift` outside `build`, `--keep-failed-stage` outside `build`, `test` and `publish`, and `--watch` with `--json`. An unknown option is a usage error too.
 
+## Running one command at a time
+
+`build`, `test`, `publish`, `status`, `stubs` and `adopt` take a lock per project, `.abfc/lock.json`. A second one started while the first runs stops with [ABFC4019](errors.md#abfc4019) before it starts the backend; `check`, `doctor`, `init` and `lsp` take no lock. The lock of a crashed run is replaced by the next run.
+
 ## Exit codes
 
 | Code | Meaning |
@@ -242,7 +265,7 @@ A flag the command does not use is ignored, except for the three that are refuse
 | 0 | Success. Warnings never change the exit code. |
 | 1 | Your code or your project is wrong: TypeScript subset errors (`ABFC2xxx`), test and compile failures (`ABFC6xxx`), publish refusals (`ABFC7xxx` except 7005 and 7006), ownership problems that are not conflicts (`ABFC5008` and up), and the `abfc init` user errors `ABFC1040` to `ABFC1044` (nested project, no terminal, mod not found, no mods in the folder). |
 | 2 | The setup, the stubs or the backend is wrong, or the command line is malformed: environment and config errors (`ABFC1xxx`), stub errors (`ABFC3xxx`), backend errors (`ABFC4xxx`), `ABFC7006`, an unexpected failure (`ABFC4002`), and every usage error (unknown option, unknown command). |
-| 3 | A conflict that needs your decision: `ABFC1020` (project inside a mod folder), `ABFC4090`, ownership and drift conflicts `ABFC5001` to `ABFC5007` (an edit in the editor to something abfc owns, a dry adopt) and `ABFC7005` (publish refused because the editor is playing or has unsaved assets). |
+| 3 | A conflict that needs your decision: `ABFC1020` (project inside a mod folder), `ABFC4090`, adopt conflicts `ABFC5005` to `ABFC5007` (a dry adopt) and `ABFC7005` (publish refused because the editor is playing or has unsaved assets). |
 
 When a command reports several errors the exit code is the highest of them. The exact code of every diagnostic is in [errors.md](errors.md).
 
@@ -267,5 +290,5 @@ Text-mode diagnostics go to standard error, informational lines to standard outp
 
 ## Not built
 
-- `abfc mv` does not exist. If you move or rename a class file, abfc stops with [ABFC5012](errors.md#abfc5012) and offers a quick fix that keeps the asset where it is with `path: "<its path below the mod>"` in the class decorator, so the move does not create a second asset or retire the first.
+- `abfc mv` does not exist and is not needed. With backend 2.6.0 a moved or renamed class file is followed by the next `abfc build` (`renamed <old> -> <new>`, references fixed by Unreal). Only when several earlier assets could be meant, or with an older backend, abfc stops with [ABFC5012](errors.md#abfc5012) and offers a quick fix that keeps the asset where it is with `path: "<its path below the mod>"` in the class decorator.
 - `abfc audit` does not exist. Use `abfc publish --full --dry-run` to run gates 1 to 7 of the release checks without copying anything.

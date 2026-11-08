@@ -2,8 +2,8 @@
 import { readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import type { Diagnostic as LspDiagnostic } from "vscode-languageserver/node.js";
-import { SourceFileCache, checkProject, loadProgram } from "@abfc/compiler";
-import type { LoadedProgram, ProjectCheck, TsSourceFile } from "@abfc/compiler";
+import { SourceFileCache, buildLibraryIndex, checkProject, loadProgram } from "@abfc/compiler";
+import type { LibraryEntry, LoadedProgram, ProjectCheck, TsSourceFile } from "@abfc/compiler";
 import { AbfcError, PROJECT_CONFIG_FILE } from "@abfc/env";
 import type { Environment } from "@abfc/env";
 import type { Diagnostic } from "@abfc/ir";
@@ -185,6 +185,13 @@ export class ProjectState {
     this.last = { loaded, check, byKey, lint: new Map() };
     this.dirty = false;
     return this.last;
+  }
+
+  /** The static library functions of the project's stubs profile (memoised by the compiler while `stubs.lock.json` keeps its modification time); empty without a loaded config. */
+  libraryIndex(): LibraryEntry[] {
+    this.ensureConfig();
+    if (this.env === null) return [];
+    return buildLibraryIndex(join(this.dir, ".abfc", "stubs", this.env.profile.id));
   }
 
   /** abfc's own diagnostics (the subset checker's, the lowering's, the moved-class check) located in `sf`, without TypeScript's. */

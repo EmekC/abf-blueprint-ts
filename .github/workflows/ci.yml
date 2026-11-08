@@ -112,6 +112,9 @@ jobs:
       - name: Build abfc.exe, runtime and zip
         run: node scripts/release/build-exe.mjs --version ${{ steps.pins.outputs.version }} --backend-repo build/backend-src
 
+      - name: Smoke-test the bundled backend
+        run: node scripts/release/smoke-backend.mjs
+
       - name: Build the VS Code extension
         run: npm run vsix
 

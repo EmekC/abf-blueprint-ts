@@ -37,11 +37,19 @@ export interface BpApplyAssetSpec {
   create?: { class: "Blueprint" | "WidgetBlueprint"; parent: string; if_missing: true } | { class: "UserDefinedStruct"; if_missing: true };
   /** Fields of a UserDefinedStruct (valid only with `create.class` UserDefinedStruct): `name` is `<friendly>_<index>_<guid>`. */
   struct_fields?: Array<{ name: string; friendly: string; guid: string; type: string }>;
-  variables?: Array<{ name: string; type: string; flags: number }>;
+  variables?: Array<{ name: string; type: string; flags: number; default?: string }>;
+  /** Backend bp_apply feature `variable_defaults`: change (text) or drop (null) the default of an existing variable in place. */
+  variable_defaults?: Record<string, string | null>;
+  /** Member variables to delete (TS wins: hand-made ones of a non-hybrid class, and own fields gone from the TS). */
+  remove_variables?: string[];
+  /** Function graphs to delete (TS wins: hand-made functions of a non-hybrid class). */
+  remove_functions?: string[];
+  /** Backend bp_apply feature `function_graphs`: own function graphs to create (signature only; the body comes in `graphs`). A name also in `remove_functions` is replaced. */
+  functions?: Array<{ name: string; inputs: IrParam[]; outputs: IrParam[]; access?: "public" | "protected" | "private" }>;
   graphs?: BpGraphSpec[];
   raw?: Array<{ kind: "graph"; graph: string; text: string } | { kind: "python"; code: string }>;
   /** Backend 2.5.0 (bp_apply feature `class_manager_row`): write the class-manager row of a `@director` class after the Blueprints are saved. */
-  class_manager_row?: { asset_path: string; class_path: string };
+  class_manager_row?: { asset_path: string; class_path: string; /** Backend 2.6.0 (bp_apply feature `class_manager_row_tag`): the gameplay tag the row holds; a missing tag is added to the mod's tag ini. */ gameplay_tag?: string };
 }
 
 function refused(n: IrNode, what: string): AbfcError {
@@ -156,6 +164,7 @@ export function renderMainSpec(a: AssetPlan, caps: BackendCapabilities, profile:
       name: v.name,
       type: v.type,
       flags: profile.variableFlags.base | (v.flags.includes("transient") ? profile.variableFlags.transient : 0),
+      ...(v.default !== undefined ? { default: v.default } : {}),
     }));
   }
   const graphs = new Map<string, BpGraphSpec>();
@@ -167,6 +176,8 @@ export function renderMainSpec(a: AssetPlan, caps: BackendCapabilities, profile:
     for (const [from, to] of u.unit.wires) {
       const conv = (end: string): string => {
         const dot = end.indexOf(".");
+        // the reserved ends of a function graph (entry, result) are the backend's own ids: no unit prefix
+        if (u.unit.kind === "function" && (end.slice(0, dot) === "entry" || end.slice(0, dot) === "result")) return end;
         return `${specNodeId(u.unit, end.slice(0, dot))}${end.slice(dot)}`;
       };
       g.wires!.push([conv(from), conv(to)]);
@@ -201,6 +212,28 @@ export function renderMainSpec(a: AssetPlan, caps: BackendCapabilities, profile:
     graphs.set(r.graph, g);
     for (const name of r.nodes) if (!g.remove!.includes(name)) g.remove!.push(name);
   }
+  // TS wins: hand-made nodes of a non-hybrid class go with the same apply.
+  for (const r of a.removeGraphNodes ?? []) {
+    const g = graphs.get(r.graph) ?? { graph: r.graph, remove: [], add: [], wires: [] };
+    graphs.set(r.graph, g);
+    for (const name of r.nodes) if (!g.remove!.includes(name)) g.remove!.push(name);
+  }
+  if ((a.removeVariables?.length ?? 0) > 0) spec.remove_variables = [...a.removeVariables!];
+  if ((a.removeFunctions?.length ?? 0) > 0) spec.remove_functions = [...a.removeFunctions!];
+  if ((a.functions?.length ?? 0) > 0) spec.functions = a.functions!.map((f) => ({ name: f.name, inputs: f.inputs, outputs: f.outputs, access: f.access }));
+  // A removed function graph is gone before the graphs are edited (nothing to edit); a replaced one is created fresh (nothing to remove).
+  // A function graph without any node or wire to add needs no edit at all.
+  for (const graph of a.removeFunctions ?? []) {
+    if (a.functions?.some((f) => f.name === graph) === true) {
+      const g = graphs.get(graph);
+      if (g !== undefined) g.remove = [];
+    } else graphs.delete(graph);
+  }
+  for (const f of a.functions ?? []) {
+    const g = graphs.get(f.name);
+    if (g !== undefined && (g.remove?.length ?? 0) === 0 && g.add.length === 0 && (g.wires?.length ?? 0) === 0) graphs.delete(f.name);
+  }
+  if (a.variableDefaults !== undefined && Object.keys(a.variableDefaults).length > 0) spec.variable_defaults = { ...a.variableDefaults };
   spec.graphs = [...graphs.values()];
   return spec;
 }
@@ -250,12 +283,14 @@ export interface AssetApplyOutcome {
   /** Warnings of pass 5: ABFC2070 (class manager row), ABFC5102 (the pass failed; it is repeated by the next build). */
   defaultsWarnings: Diagnostic[];
   /** The class-manager row the backend wrote for the asset's `@director` in pass 5 (`created`/`changed` as reported); absent without the capability. */
-  directorRow?: { asset: string; created: boolean; changed: boolean };
+  directorRow?: { asset: string; created: boolean; changed: boolean; /** The gameplay tag the row holds after the pass (backend 2.6.0), when the spec asked for one. */ tag?: string };
 }
 
 export interface ApplyOutcome {
   ok: boolean;
   perAsset: AssetApplyOutcome[];
+  /** Gameplay tags the backend added to the stage's tag ini during the class-defaults pass (backend 2.6.0); absent when none. They are published with the mod's tag ini. */
+  tagsAdded?: string[];
 }
 
 function entryFor(r: BpApplyResult, asset: string, i: number): NonNullable<BpApplyResult["assets"]>[number] | undefined {
@@ -288,14 +323,17 @@ export function renderDefaultsSpec(a: AssetPlan, caps: BackendCapabilities): BpA
   const writes = d.director !== undefined && caps.classManagerRows;
   const verify = d.director !== undefined ? (writes ? undefined : d.director.asset) : d.classManagerRow;
   const spec: BpApplyAssetSpec = { asset: a.asset, raw: [{ kind: "python", code: renderDefaultsCode(d.classPath, d.values, verify) }] };
-  if (writes) spec.class_manager_row = { asset_path: d.director!.asset, class_path: d.director!.classPath };
+  if (writes) {
+    spec.class_manager_row = { asset_path: d.director!.asset, class_path: d.director!.classPath };
+    if (d.director!.tag !== undefined && caps.classManagerRowTag) spec.class_manager_row.gameplay_tag = d.director!.tag;
+  }
   return spec;
 }
 
 /** Pass 5: class defaults of every asset whose plan has a `defaults` item. A failure is a warning (the next build repeats it). */
-async function applyDefaultsPass(backend: Backend, plan: ApplyPlan, perAsset: AssetApplyOutcome[], caps: BackendCapabilities, o: ApplyOptions): Promise<void> {
+async function applyDefaultsPass(backend: Backend, plan: ApplyPlan, perAsset: AssetApplyOutcome[], caps: BackendCapabilities, o: ApplyOptions): Promise<string[]> {
   const targets = plan.assets.map((a, i) => ({ a, i })).filter((x) => x.a.defaults !== undefined);
-  if (targets.length === 0) return;
+  if (targets.length === 0) return [];
   const specs = targets.map((x) => renderDefaultsSpec(x.a, caps));
   // Without the backend capability a @director row is only verified: say so once per asset.
   if (!caps.classManagerRows) {
@@ -307,6 +345,20 @@ async function applyDefaultsPass(backend: Backend, plan: ApplyPlan, perAsset: As
         asset: a.asset,
         message: `the backend cannot write class-manager rows; update abf-mod-editor-mcp to 2.5.0 or newer. The row ${a.defaults!.director.asset} is only checked, not written.`,
         fix: "update abf-mod-editor-mcp to 2.5.0 or newer, or create the row in the Mod Editor.",
+      });
+    }
+  }
+  // A tag the backend cannot write (before 2.6.0) is ignored: say so once per asset.
+  if (!caps.classManagerRowTag) {
+    for (const { a, i } of targets) {
+      const tag = a.defaults!.director?.tag;
+      if (tag === undefined) continue;
+      perAsset[i]!.defaultsWarnings.push({
+        severity: "warning",
+        code: "ABFC2082",
+        asset: a.asset,
+        message: `the backend cannot write gameplay tags; update abf-mod-editor-mcp to 2.6.0 or newer. The tag ${tag} of ${a.defaults!.director!.asset} is ignored.`,
+        fix: "update abf-mod-editor-mcp to 2.6.0 or newer, or set the tag in the Mod Editor.",
       });
     }
   }
@@ -337,7 +389,7 @@ async function applyDefaultsPass(backend: Backend, plan: ApplyPlan, perAsset: As
         });
         continue;
       }
-      out.directorRow = { asset: want.asset, created: row.created, changed: row.changed };
+      out.directorRow = { asset: want.asset, created: row.created, changed: row.changed, ...(typeof row.tag === "string" ? { tag: row.tag } : {}) };
     }
     out.defaultsApplied = true;
     const text = [r.logTail ?? "", ...r.compile.warnings.map((w) => w.message)].join("\n");
@@ -346,6 +398,32 @@ async function applyDefaultsPass(backend: Backend, plan: ApplyPlan, perAsset: As
       if (at >= 0) out.defaultsWarnings.push({ severity: "warning", code: "ABFC2070", asset: a.asset, message: line.slice(at + "ABFC2070".length).trim() });
     }
   }
+  return r.ok ? r.tagsAdded ?? [] : [];
+}
+
+/**
+ * Stable dependency order of specs: an asset comes after every other asset of the call whose path its spec mentions
+ * (`/Mod/Dir/Name.Name_C` in a variable type or node class, `/Mod/Dir/Name` as a parent). Assets in a cycle keep their relative order.
+ */
+export function dependencyOrder(items: Array<{ path: string; text: string }>): number[] {
+  const lower = items.map((x) => x.text.toLowerCase());
+  const mentions = (i: number, j: number): boolean => {
+    const p = items[j]!.path.toLowerCase();
+    for (const end of ['.', '"']) {
+      if (lower[i]!.includes(p + end)) return true;
+    }
+    return false;
+  };
+  const deps = items.map((_, i) => new Set(items.map((_, j) => j).filter((j) => j !== i && mentions(i, j))));
+  const out: number[] = [];
+  const done = new Set<number>();
+  while (out.length < items.length) {
+    let pick = items.findIndex((_, i) => !done.has(i) && [...deps[i]!].every((j) => done.has(j)));
+    if (pick < 0) pick = items.findIndex((_, i) => !done.has(i));
+    done.add(pick);
+    out.push(pick);
+  }
+  return out;
 }
 
 /** Applies the plan: one main pass (native pin types, or the two-phase fallback), then the tag pass, then the class-defaults pass (pass 5). */
@@ -358,13 +436,18 @@ export async function applyPlan(
 ): Promise<ApplyOutcome> {
   if (plan.assets.length === 0) return { ok: true, perAsset: [] };
   // Assets that only carry class defaults have no graph work: they take part in pass 5 only (new own fields still go through the main spec).
-  const unitAssets = plan.assets.filter((a) => a.create !== undefined || a.struct !== undefined || a.units.length > 0 || a.variables.length > 0 || (a.removeUnits?.length ?? 0) > 0 || (a.removeTags?.length ?? 0) > 0);
-  if (unitAssets.length === 0) {
+  const planned = plan.assets.filter((a) => a.create !== undefined || a.struct !== undefined || a.units.length > 0 || a.variables.length > 0 || (a.removeUnits?.length ?? 0) > 0 || (a.removeTags?.length ?? 0) > 0 || (a.removeGraphNodes?.length ?? 0) > 0 || (a.removeVariables?.length ?? 0) > 0 || (a.removeFunctions?.length ?? 0) > 0 || (a.functions?.length ?? 0) > 0 || Object.keys(a.variableDefaults ?? {}).length > 0);
+  if (planned.length === 0) {
     const only: AssetApplyOutcome[] = plan.assets.map((a) => ({ asset: a.asset, nodeIds: {}, finalText: null, compile: [], tagName: null, tagNames: {}, defaultsApplied: false, defaultsWarnings: [] }));
-    await applyDefaultsPass(backend, plan, only, caps, o);
-    return { ok: true, perAsset: only };
+    const added = await applyDefaultsPass(backend, plan, only, caps, o);
+    return { ok: true, perAsset: only, ...(added.length > 0 ? { tagsAdded: added } : {}) };
   }
-  const specs =unitAssets.map((a) => renderMainSpec(a, caps, profile));
+  // The backend applies the specs in order and an asset names the classes it uses (variable types, call and cast nodes, the parent) by path:
+  // a class that is created in this very call must come before every asset that uses it.
+  const rendered = planned.map((a) => renderMainSpec(a, caps, profile));
+  const order = dependencyOrder(rendered.map((spec) => ({ path: spec.asset, text: JSON.stringify(spec) })));
+  const unitAssets = order.map((i) => planned[i]!);
+  const specs = order.map((i) => rendered[i]!);
   const refs = unitAssets.map((a, i) => patchRefs(a, specs[i]!, caps, profile));
   const needsFallback = !caps.pinTypes && refs.some((r) => r.length > 0);
 
@@ -441,6 +524,6 @@ export async function applyPlan(
       out.finalText = readFinal(tag.run, ti) ?? out.finalText;
     });
   }
-  await applyDefaultsPass(backend, plan, perAsset, caps, o);
-  return { ok: true, perAsset };
+  const added = await applyDefaultsPass(backend, plan, perAsset, caps, o);
+  return { ok: true, perAsset, ...(added.length > 0 ? { tagsAdded: added } : {}) };
 }

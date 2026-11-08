@@ -2,6 +2,7 @@
 import { spawnSync } from "node:child_process";
 import { selectAllowed } from "./allowlist.mjs";
 import { sha256Buf } from "./pins.mjs";
+import { assertNoMissingLocalImports } from "./pyimports.mjs";
 
 function git(repoDir, args, asBuffer) {
   const r = spawnSync("git", ["-C", repoDir, ...args], {
@@ -22,7 +23,10 @@ export function filesSha256Of(files) {
   return sha256Buf(Buffer.from(lines.join(""), "utf8"));
 }
 
-/** Reads the allowlisted files of `commit` from `repoDir`; returns { files: Map<path, Buffer>, filesSha256 }. */
+/**
+ * Reads the allowlisted files of `commit` from `repoDir`; returns { files: Map<path, Buffer>, filesSha256 }.
+ * Throws when a vendored .py imports a local module of the backend repository that the allowlist leaves out.
+ */
 export function vendorBackend({ repoDir, commit, version, patterns }) {
   const resolved = String(git(repoDir, ["rev-parse", "--verify", `${commit}^{commit}`], false)).trim();
   if (resolved !== commit) throw new Error(`backend commit mismatch: asked ${commit}, git resolved ${resolved}`);
@@ -37,6 +41,7 @@ export function vendorBackend({ repoDir, commit, version, patterns }) {
   for (const path of [...sel.selected].sort()) {
     files.set(path, git(repoDir, ["cat-file", "blob", `${commit}:${path}`], true));
   }
+  assertNoMissingLocalImports(files, names);
   const server = files.get("server.py");
   if (server === undefined) throw new Error("backend has no server.py");
   const m = /^SERVER_VERSION = "([^"]+)"/m.exec(server.toString("utf8"));

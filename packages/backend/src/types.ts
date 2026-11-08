@@ -15,6 +15,8 @@ export interface StageStatus {
   added: string[];
   removed: string[];
   conflicts: string[];
+  /** Files untouched in the stage but saved or deleted in the real mod since the sync (backend 2.6.0; empty on older backends). */
+  stale: string[];
 }
 
 export interface AssetSnapshot {
@@ -44,7 +46,9 @@ export interface BpApplyResult {
   assets: Array<{ asset: string; node_ids: Record<string, Record<string, string>>; final?: string }> | null;
   compile: { errors: CompileMessage[]; warnings: CompileMessage[] };
   /** Class-manager rows the backend wrote after the Blueprints were saved (backend 2.5.0); empty when the spec carried none. */
-  rows: Array<{ asset: string; created: boolean; changed: boolean }>;
+  rows: Array<{ asset: string; created: boolean; changed: boolean; /** The gameplay tag the row holds after the apply (backend 2.6.0), when the spec asked for one. */ tag?: string | null }>;
+  /** Gameplay tags the backend added to the stage's tag ini before the apply (backend 2.6.0); absent/empty when none. */
+  tagsAdded?: string[];
   /** The apply ran on the warm session. */
   warm?: boolean;
   error?: string;
@@ -65,6 +69,8 @@ export interface ReflectRequest {
   classes: string[];
   structs: string[];
   castTargets: string[];
+  /** Also list the gameplay tags the engine knows (backend 2.6.0, capability `gameplayTags`). */
+  gameplayTags?: boolean;
 }
 
 /** One pin of a reflected member (the backend's `Pin` shape of `reflect.json`). */
@@ -84,7 +90,7 @@ export interface ReflectMember {
   name: string;
   pins: ReflectPin[];
   /** Function metadata read from the engine (backends with the reflect meta pass); null/absent when unreadable. */
-  meta?: { tooltip?: string | null; displayName?: string | null } | null;
+  meta?: { tooltip?: string | null; displayName?: string | null; /** pin name -> default text from the UFunction `CPP_Default_*` metadata (backend 2.6.0); null when unreadable. */ defaults?: Record<string, string> | null } | null;
 }
 
 export interface ReflectClass {
@@ -103,6 +109,8 @@ export interface ReflectData {
   classes: Record<string, ReflectClass>;
   structs: Record<string, { fields: ReflectPin[] }>;
   errors: string[];
+  /** Gameplay tags of the engine (only when requested and the backend supports it); `sources` is the backend's per-source count or error. */
+  gameplayTags?: { tags: string[]; sources: Record<string, unknown> };
 }
 
 export interface ReflectResult {
@@ -141,6 +149,8 @@ export interface PublishResult {
   route: string | null;
   compileErrors: Array<{ asset: string | null; message: string }>;
   conflicts: string[];
+  /** Files deleted from the mod by a publish with `deleteRemoved` (backend 2.6.0); empty otherwise. */
+  deleted: string[];
   restored: boolean | null;
   editor: string | null;
   /** The open editor's refusal reason (`editor_result.reason`), when it refused. */
@@ -157,7 +167,33 @@ export interface PublishResult {
   dirtyPublished: string[];
   /** Blueprint compile errors the open editor logged for the reloaded packages while it reloaded (the files on disk are fine). */
   compileErrorsAfter: Array<{ asset: string | null; message: string }>;
+  /** Gameplay tags the backend registered in the open editor before it reloaded the published rows (`tags_registered`, capability `liveTags`); empty otherwise. */
+  tagsRegistered: string[];
+  /** Tags of the mod's tag list the open editor still does not know after the publish (`tags_unregistered`); empty when all are known or the backend is older. */
+  tagsUnregistered: string[];
+  /** How the backend registered the tags (`tags_strategy`: "refresh" or "settings"), or null. */
+  tagsStrategy: string | null;
+  /** Why the tag registration failed or was partial (`tags_error`), or null. */
+  tagsError: string | null;
   raw: unknown;
+}
+
+/** One `bp_asset_ops` operation (backend 2.6.0). Paths are package paths (`/<Mod>/...`) of the stage. */
+export type AssetOp =
+  | { op: "rename"; from: string; to: string }
+  | { op: "delete"; asset: string }
+  | { op: "reparent"; asset: string; parent: string }
+  | { op: "recreate"; asset: string };
+
+export interface AssetOpsResult {
+  ok: boolean;
+  results: Array<{ op: string; ok: boolean; detail?: string }>;
+  /** Package paths the backend saved while fixing up references (referencers of renamed assets). */
+  touched: string[];
+  error: string | null;
+  /** The backend restored the stage after a failure. */
+  rolledBack?: boolean;
+  run?: string;
 }
 
 export interface Backend {
@@ -177,6 +213,8 @@ export interface Backend {
   gameTest(mod: string, steps: unknown[], o: { timeoutSeconds: number }): Promise<GameTestReport>;
   audit(mod: string): Promise<AuditReport>;
   /** `bp_publish` for exactly `mod`, only with a {@link PublishGrant} from `grantPublish` (sent only by `abfc publish`). */
-  publish(mod: string, assets: string[], grant: PublishGrant): Promise<PublishResult>;
+  publish(mod: string, assets: string[], grant: PublishGrant, o?: { deleteRemoved?: boolean }): Promise<PublishResult>;
+  /** `bp_asset_ops` on the stage (backend 2.6.0, capability `assetOps`): rename, delete, reparent, recreate. Never touches the mod. */
+  assetOps(mod: string, ops: AssetOp[]): Promise<AssetOpsResult>;
   close(): Promise<void>;
 }

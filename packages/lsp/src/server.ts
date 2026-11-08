@@ -4,6 +4,7 @@ import { TextDocument } from "vscode-languageserver-textdocument";
 import { CodeActionKind, DidChangeWatchedFilesNotification, ProposedFeatures, TextDocumentSyncKind, TextDocuments, createConnection } from "vscode-languageserver/node.js";
 import { AbfcError, findProjectDir } from "@abfc/env";
 import { codeActionsFor } from "./actions.js";
+import { completionItemsAt } from "./completion.js";
 import { compilerConfigOf } from "./environment.js";
 import { hoverAt } from "./hover.js";
 import { ProjectState } from "./project.js";
@@ -17,6 +18,8 @@ export const WATCHED_GLOBS = [
   "**/.abfc/stubs/**/stubs.lock.json",
   "**/.abfc/stubs/**/retired.json",
   "**/.abfc/stubs/**/*.d.ts",
+  "**/.abfc/stubs/**/gameplay-tags.json",
+  "**/.abfc/tags.d.ts",
   "**/.abfc/tsconfig.paths.json",
   "**/tsconfig*.json",
   "**/*.ts",
@@ -169,6 +172,7 @@ export function startServer(o: ServerOptions): Promise<number> {
       capabilities: {
         textDocumentSync: { openClose: true, change: TextDocumentSyncKind.Incremental },
         hoverProvider: true,
+        completionProvider: { resolveProvider: false },
         codeActionProvider: { codeActionKinds: [CodeActionKind.QuickFix] },
       },
       serverInfo: { name: "abfc", version: "0.1.0" },
@@ -211,6 +215,24 @@ export function startServer(o: ServerOptions): Promise<number> {
     } catch (e) {
       logError("hover", e);
       return null;
+    }
+  });
+
+  connection.onCompletion((params) => {
+    try {
+      const project = docProject.get(params.textDocument.uri);
+      const path = uriToPath(params.textDocument.uri);
+      if (project === undefined || project === null || path === null) return [];
+      flush(project);
+      const snap = project.snapshot();
+      if (snap === null) return [];
+      const items = completionItemsAt(project, snap, path, params.position);
+      // The compiler caps the library functions (100) and filters by the prefix on its side: the client must ask again as the word grows
+      // instead of filtering the first answer, or everything after the cap would never show.
+      return { isIncomplete: items.length > 0, items };
+    } catch (e) {
+      logError("completion", e);
+      return [];
     }
   });
 

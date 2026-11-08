@@ -58,4 +58,8 @@ test("classDefaultsHash: hashes without a director are unchanged (pinned) and a 
   assert.equal(classDefaultsHash({ A: "1" }, "/TestMod/DataTables/DT_ClassManager/Row"), "sha256:469afba57a3c37e958d32723629a0eee72e6f0bbbce3b586158934f6a919f1ad");
   assert.equal(classDefaultsHash({}), "sha256:ad206068c29722297302d4fadb11c198d45356f4a95c319d937e57a9290aa547");
   assert.notEqual(classDefaultsHash({ A: "1" }, undefined, "/TestMod/DataTables/DT_ClassManager/Row"), classDefaultsHash({ A: "1" }));
+  // a director tag changes the hash; no tag (undefined) is the old hash
+  const row = "/TestMod/DataTables/DT_ClassManager/Row";
+  assert.equal(classDefaultsHash({ A: "1" }, undefined, row, undefined), classDefaultsHash({ A: "1" }, undefined, row));
+  assert.notEqual(classDefaultsHash({ A: "1" }, undefined, row, "ClassManager.EntityDirector.Row"), classDefaultsHash({ A: "1" }, undefined, row));
 });

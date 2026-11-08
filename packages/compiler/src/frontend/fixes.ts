@@ -22,7 +22,7 @@ function innermostDivision(sf: ts.SourceFile, start: number, end: number): ts.Bi
 }
 
 /** The name the `@abfc/runtime` export `exportName` is callable under (its local alias when imported as `x as y`) and the edit that makes it available, if any. */
-function runtimeBinding(sf: ts.SourceFile, exportName: string): { name: string; edit?: TextEdit } {
+export function runtimeBinding(sf: ts.SourceFile, exportName: string): { name: string; edit?: TextEdit } {
   let appendAfter: ts.ImportSpecifier | undefined;
   let emptyBraces: ts.NamedImports | undefined;
   for (const st of sf.statements) {
@@ -290,4 +290,63 @@ export function keepPathFix(sf: ts.SourceFile, classNameStart: number, relPath: 
   const lineStart = sf.text.lastIndexOf("\n", firstProp.getStart(sf) - 1) + 1;
   const indent = sf.text.slice(lineStart, firstProp.getStart(sf));
   return [{ start: firstProp.getStart(sf), length: 0, newText: `${option},\n${indent}` }];
+}
+
+/**
+ * ABFC2078: `@event Name()` -> `@override override Name()`. Replaces the decorator covering [start, end) with `@override`, inserts the
+ * TS `override` modifier before the method name (before `async` when present) if missing, and imports `override` from `@abfc/runtime`.
+ */
+export function useOverrideFix(sf: ts.SourceFile, start: number, end: number): TextEdit[] | undefined {
+  let found: ts.MethodDeclaration | undefined;
+  let decorator: ts.Decorator | undefined;
+  const visit = (node: ts.Node): void => {
+    if (found !== undefined) return;
+    if (ts.isMethodDeclaration(node)) {
+      const d = (ts.getDecorators(node) ?? []).find((x) => x.getStart(sf) <= start && end <= x.getEnd());
+      if (d !== undefined) {
+        found = node;
+        decorator = d;
+        return;
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  if (found === undefined || decorator === undefined) return undefined;
+  const binding = runtimeBinding(sf, "override");
+  const at = decorator.getStart(sf);
+  const edits: TextEdit[] = [];
+  let decoratorEdit: TextEdit = { start: at, length: decorator.getEnd() - at, newText: `@${binding.name}` };
+  if (binding.edit !== undefined) {
+    if (binding.edit.start === at) decoratorEdit = { ...decoratorEdit, newText: binding.edit.newText + decoratorEdit.newText };
+    else edits.push(binding.edit);
+  }
+  edits.push(decoratorEdit);
+  const mods = ts.getModifiers(found) ?? [];
+  if (!mods.some((k) => k.kind === ts.SyntaxKind.OverrideKeyword)) {
+    const asyncMod = mods.find((k) => k.kind === ts.SyntaxKind.AsyncKeyword);
+    edits.push({ start: (asyncMod ?? found.name).getStart(sf), length: 0, newText: "override " });
+  }
+  return edits;
+}
+
+/**
+ * ABFC2079: `@director("Row")` -> `@director("Row", "<tag>")`. The decorator covers [start, end); the tag is inserted as the second
+ * argument. Undefined when the decorator is not a call with exactly one argument.
+ */
+export function addDirectorTagFix(sf: ts.SourceFile, start: number, end: number, tag: string): TextEdit[] | undefined {
+  let call: ts.CallExpression | undefined;
+  const visit = (node: ts.Node): void => {
+    if (call !== undefined) return;
+    if (ts.isDecorator(node) && node.getStart(sf) <= start && end <= node.getEnd() && ts.isCallExpression(node.expression)) {
+      call = node.expression;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  if (call === undefined || call.arguments.length !== 1) return undefined;
+  const close = call.getChildren(sf).find((c) => c.kind === ts.SyntaxKind.CloseParenToken);
+  if (close === undefined) return undefined;
+  return [{ start: close.getStart(sf), length: 0, newText: `, ${JSON.stringify(tag)}` }];
 }

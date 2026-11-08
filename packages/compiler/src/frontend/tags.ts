@@ -1,6 +1,6 @@
 // Reads the `@bp*` JSDoc tags of generated stubs (design 5.1) and maps TypeScript types to bp_apply type grammar.
 import ts from "typescript";
-import type { BpType } from "../hir.js";
+import { FUNCTION_RETURN_PIN, type BpType } from "../hir.js";
 import { assetPathOf } from "./assetpaths.js";
 import { udsMemberName } from "./structnames.js";
 
@@ -55,8 +55,10 @@ export interface FunctionInfo {
   name: string;
   pure: boolean;
   static: boolean;
+  /** Latent action (`@bpLatent`): finishes in a later frame, so it cannot run inside a Blueprint function. */
+  latent: boolean;
   execOutputs: string[] | null;
-  params: Array<{ tsName: string; pin: string; type: BpType }>;
+  params: Array<{ tsName: string; pin: string; type: BpType; /** `@bpDefault`: the engine has a C++ default for this pin, so the argument may be omitted. */ default?: string }>;
   outs: Array<{ pin: string; type: BpType }>;
   /** TS name -> real pin name for renamed pins (`@bpPin`). */
   pinOfTs: Map<string, string>;
@@ -77,9 +79,20 @@ export function functionInfo(sym: ts.Symbol): FunctionInfo | undefined {
       ts.isMethodDeclaration(d) || ts.isMethodSignature(d) || ts.isFunctionDeclaration(d),
   );
   const tsNames = decl ? decl.parameters.map((p) => p.name.getText()) : [];
+  const defaults = new Map<string, string>();
+  for (const t of tags.get("bpDefault") ?? []) {
+    const { head, rest } = firstWord(t);
+    try {
+      const v = JSON.parse(rest) as unknown;
+      if (typeof v === "string") defaults.set(head, v);
+    } catch {
+      // malformed tag: ignore
+    }
+  }
   const params = (tags.get("bpParam") ?? []).map((t, i) => {
     const { head, rest } = firstWord(t);
-    return { tsName: tsNames[i] ?? head, pin: head, type: rest };
+    const d = defaults.get(head);
+    return { tsName: tsNames[i] ?? head, pin: head, type: rest, ...(d === undefined ? {} : { default: d }) };
   });
   const outs = (tags.get("bpOut") ?? []).map((t) => {
     const { head, rest } = firstWord(t);
@@ -103,6 +116,7 @@ export function functionInfo(sym: ts.Symbol): FunctionInfo | undefined {
     name: mp.name,
     pure: tags.has("bpPure"),
     static: isStatic,
+    latent: tags.has("bpLatent"),
     execOutputs: exec === undefined ? null : exec.split(",").map((s) => s.trim()).filter((s) => s !== ""),
     params,
     outs,
@@ -192,7 +206,7 @@ export function tsStructMemberName(sym: ts.Symbol): string | undefined {
   return undefined;
 }
 
-/** FunctionInfo of an `@event` method of a TS `@blueprint` class: what the stub's `_C` method would have given. */
+/** FunctionInfo of an `@event` method or an undecorated method (a Blueprint function) of a TS `@blueprint` class: what the stub's `_C` method would have given. */
 export function ownEventInfo(checker: ts.TypeChecker, sym: ts.Symbol): FunctionInfo | undefined {
   const m = (sym.declarations ?? []).find((d): d is ts.MethodDeclaration => ts.isMethodDeclaration(d));
   if (!m || !ts.isIdentifier(m.name) || !ts.isClassDeclaration(m.parent)) return undefined;
@@ -200,9 +214,22 @@ export function ownEventInfo(checker: ts.TypeChecker, sym: ts.Symbol): FunctionI
     const callee = ts.isCallExpression(d.expression) ? d.expression.expression : d.expression;
     return ts.isIdentifier(callee) && callee.text === "event";
   });
-  if (!isEvent) return undefined;
   const tb = tsBlueprintOfDecl(m.parent);
   if (!tb) return undefined;
+  let outs: FunctionInfo["outs"] = [];
+  if (!isEvent) {
+    // an undecorated method with a body is a Blueprint function; any other decorator (or none with static/no body) is not callable this way
+    if ((ts.getDecorators(m) ?? []).length > 0 || m.body === undefined) return undefined;
+    if ((ts.getCombinedModifierFlags(m) & ts.ModifierFlags.Static) !== 0) return undefined;
+    const sig = checker.getSignatureFromDeclaration(m);
+    if (!sig) return undefined;
+    const rt = checker.getReturnTypeOfSignature(sig);
+    if (!(rt.flags & (ts.TypeFlags.Void | ts.TypeFlags.Undefined | ts.TypeFlags.Never))) {
+      const type = bpTypeOf(checker, rt);
+      if (type === undefined) return undefined;
+      outs = [{ pin: FUNCTION_RETURN_PIN, type }];
+    }
+  }
   const params: FunctionInfo["params"] = [];
   for (const p of m.parameters) {
     const type = bpTypeOf(checker, checker.getTypeAtLocation(p));
@@ -210,7 +237,7 @@ export function ownEventInfo(checker: ts.TypeChecker, sym: ts.Symbol): FunctionI
     const name = p.name.getText();
     params.push({ tsName: name, pin: name, type });
   }
-  return { owner: classPathOf(tb.path), name: m.name.text, pure: false, static: false, execOutputs: null, params, outs: [], pinOfTs: new Map() };
+  return { owner: classPathOf(tb.path), name: m.name.text, pure: false, static: false, latent: false, execOutputs: null, params, outs, pinOfTs: new Map() };
 }
 
 export interface ClassInfo {

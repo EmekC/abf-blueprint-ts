@@ -201,6 +201,8 @@ Typical cause: an existing `tsconfig.json` was kept by `abfc init`, or the `exte
 
 Fix: add `"extends": "./.abfc/tsconfig.paths.json"` at the top of `tsconfig.json`; the `@mod/` imports need it.
 
+The same code also reports a kept `tsconfig.json` that sets its own `"files"`. That list replaces the `"files": ["./tags.d.ts"]` of the extended `.abfc/tsconfig.paths.json`, so the generated gameplay tag constants (`.abfc/tags.d.ts`) are no longer part of the program. Add `"./.abfc/tags.d.ts"` to the `"files"` of `tsconfig.json`, or list it in `"include"`.
+
 ### ABFC1044
 
 Severity: error · Exit: 1
@@ -210,6 +212,16 @@ Meaning: the mods folder holds no mod (no folder `<name>\<name>.uplugin`).
 Typical cause: the Mod Editor has not been used to create a mod yet, or the mods folder is the wrong one.
 
 Fix: create a mod in the Mod Editor first, or change the mods folder (the init prompt offers `c`, or use `--mods-dir`).
+
+### ABFC1045
+
+Severity: warning · Exit: -
+
+Meaning: `mod.name` in `abf.config.json` differs in letter case from the mod's plugin file (for example `"testmod"` while the file is `TestMod.uplugin`). abfc uses the spelling of the plugin file for the rest of the run.
+
+Typical cause: the name was typed by hand. Windows finds the mod folder in any case, so the build would otherwise work until a second spelling of the name reached the backend's stage folder, the Unreal mount paths or the manifests.
+
+Fix: write the name as the plugin file spells it, `"mod": {"name": "<name>"}` in `abf.config.json`.
 
 ### ABFC1050
 
@@ -451,9 +463,9 @@ Severity: error · Exit: 1
 
 Meaning: the code uses a Map or Set type, or creates an asset of a kind, that the backend or abfc's current policy does not allow. It is reported before the stage is touched.
 
-Typical cause: an older backend without Map or Set support, or a kind of asset the backend cannot create.
+Typical cause: an older backend without Map or Set support, or a kind of asset the backend cannot create; also a function (an undecorated method) on a backend without the bp_apply feature `function_graphs` (`abfc doctor` shows `function graphs: no`).
 
-Fix: update the backend ([backend.md](backend.md)), or remove the Map, Set or asset kind.
+Fix: update the backend ([backend.md](backend.md)), or remove the Map, Set, asset kind or function.
 
 ### ABFC2046
 
@@ -463,17 +475,27 @@ Meaning: a class is both a `@blueprint` and a `@struct`, or the fields of a `@st
 
 Typical cause: two decorators on one class; or editing the fields of a struct after it was created.
 
-Fix: use one decorator. For a changed struct, restore the fields or give the struct a new path and update the places that use it. Changing fields of an existing struct is not supported yet.
+Fix: use one decorator. For a changed struct, restore the fields, or rename the struct class and its file (for example `F_Data` to `F_Data2`) and use the new struct where the old one was used; the build creates the new struct and re-creates the fields that use it (warning [ABFC2047](errors.md#abfc2047)). The old struct stays in the mod; delete it in the Mod Editor when nothing uses it. Changing fields of an existing struct is not supported yet.
 
 ### ABFC2047
 
+Severity: error · Exit: 1 (a field that cannot be declared as written); warning · Exit: - (the type of an existing field changed)
+
+Meaning: an own field cannot be declared as written (error), or the type of an own field the asset already has was changed (warning: the build removes the variable and creates it again with the new type, and applies every unit of the class again because their get and set nodes carry the old type).
+
+Typical cause: an initializer that is not a literal of the field type (or a default on a struct, object, array, Map, Set or text field, or an integer out of range for its type), `!` together with an initializer, a modifier other than `public`, a type without a Blueprint equivalent, a name that collides with an inherited member; or changing `Hits!: int;` to `Hits!: float;`.
+
+Fix: for the error, declare the field as `Name!: Type;` or `Name: Type = <literal>;` (a number, `true`/`false`, a string or an enum value of the field type) with a supported type and a free name. For the warning nothing is required; values set on placed instances of the class are reset, and hand-made nodes (a class that merges with a `_Manual` interface) that use the variable may fail Unreal's compile (ABFC6001 names them).
+
+### ABFC2048
+
 Severity: error · Exit: 1
 
-Meaning: an own field cannot be declared as written, or the type of an existing own field was changed.
+Meaning: the `extends` clause of a class whose asset already exists was changed, and abfc cannot apply the change. Two situations: the backend does not offer `bp_asset_ops` (older than 2.6.0), or the change crosses families (for example Actor to ActorComponent, which needs the asset to be created again) and the asset was not created by abfc, so recreating it would delete hand-made content.
 
-Typical cause: a field with an initializer or a modifier other than `public`, a type without a Blueprint equivalent, a name that collides with an inherited member; or changing the type of a field the asset already has.
+Typical cause: the parent class was changed in TypeScript after the first build.
 
-Fix: declare the field as `Name!: Type;` with a supported type and a free name. For a type change, keep the type or rename the field (the old variable stays in the asset until you delete it in the Mod Editor).
+Fix: update abf-mod-editor-mcp to 2.6.0 (a parent in the same family is then reparented by the next build, a parent in another family recreates an asset abfc created), or restore the old `extends` clause. For an asset abfc did not create, delete it in the Mod Editor and build again.
 
 ### ABFC2050
 
@@ -685,15 +707,125 @@ Typical cause: a backend older than 2.5.0 (source install).
 
 Fix: update the backend to 2.5.0 or newer ([backend.md](backend.md)), or create the row in the Mod Editor. `abfc.exe` bundles a current backend.
 
+### ABFC2078
+
+Severity: error · Exit: 1
+
+Meaning: an `@event` method has the name of an event or function of the parent class (or carries the TypeScript `override` modifier). `@event` creates a custom event, and Unreal refuses a custom event named like a native member (ABFC6001). The method is not built.
+
+Typical cause: implementing `ReceiveBeginPlay` or `ReceiveTick` of the parent with `@event` instead of `@override`.
+
+Fix: use `@override` to implement the parent's event (quick fix "Use @override" replaces the decorator, adds the `override` modifier and imports `override` from `@abfc/runtime`). Keep `@event` for new custom events with names the parent does not have.
+
+### ABFC2079
+
+Severity: warning · Exit: -
+
+Meaning: `@director("Row")` has no gameplay tag. A new class-manager row then has no tag and the director never starts; an existing row keeps the tag it has.
+
+Typical cause: the second argument of `@director` is missing.
+
+Fix: add the tag, usually `ClassManager.EntityDirector.<Row>` (quick fix "Add the gameplay tag"): `@director("MyDirector", ClassManager.EntityDirector.MyDirector)` or a string literal. A tag that is not in the mod's tag list yet is added to `Config/Tags/<Mod>Tags.ini` by the build and published with the mod. Run `abfc stubs` once to generate the `ClassManager.EntityDirector.*` constants.
+
+### ABFC2080
+
+Severity: error · Exit: 1
+
+Meaning: the gameplay tag of `@director` is not a string literal or a `GameplayTag` constant, or has characters Unreal tag names do not allow. The director is not built.
+
+Typical cause: a tag held in a variable, a tag with a space, or a `ClassManager.EntityDirector.X` constant when the tags file was not generated yet.
+
+Fix: write the tag as a string literal made of dotted segments of A-Z, a-z, 0-9, `_` and `-` (at most 200 characters), or run `abfc stubs` to generate the tag constants.
+
+### ABFC2081
+
+Severity: warning · Exit: -
+
+Meaning: the gameplay tag of `@director` does not start with `ClassManager.EntityDirector.`. Every director the game knows uses that prefix; a director with another tag may never start.
+
+Typical cause: a typo, or a tag copied from another feature.
+
+Fix: use a tag under `ClassManager.EntityDirector.`, or ignore the warning if you know the game starts directors by another tag.
+
+### ABFC2082
+
+Severity: warning · Exit: -
+
+Meaning: the backend cannot write gameplay tags, so the tag of `@director` is ignored (the row is written without it).
+
+Typical cause: a backend older than 2.6.0 (source install).
+
+Fix: update the backend to 2.6.0 or newer ([backend.md](backend.md)), or set the tag on the row in the Mod Editor. `abfc.exe` bundles a current backend.
+
+### ABFC2083
+
+Severity: error · Exit: 1
+
+Meaning: `@override UserConstructionScript()` was written. The Blueprint Construction Script is not an event Unreal lets a graph override: the compile fails with "cannot be overridden and/or placed as event" (ABFC6001). The method is not built.
+
+Typical cause: porting Blueprint logic that lived in the Construction Script.
+
+Fix: move the logic to an `@override` of `ReceiveBeginPlay` (runtime) or to a custom `@event` you call yourself. The Construction Script of a class cannot be written in TypeScript.
+
+### ABFC2084
+
+Severity: warning · Exit: -
+
+Meaning: the initializer of an own field that the asset already has was changed or removed (`Speed: float = 2.5;` to `= 4;`), but the backend cannot change the default of an existing variable (it lacks the bp_apply feature `variable_defaults`). The default in the asset stays as it is; the warning repeats on every build until the backend is updated.
+
+Typical cause: an older abf-mod-editor-mcp backend.
+
+Fix: update the backend ([backend.md](backend.md)); `abfc doctor` shows `variable defaults: yes` once it can. Or set the default in the Mod Editor.
+
+### ABFC2085
+
+Severity: error · Exit: 1
+
+Meaning: a function (an undecorated method) calls itself, directly or through other functions or events of the same class. Recursion is not supported: abfc has no function local variables in bp_apply, so the temporaries of a function are member variables of the Blueprint, and a recursive call would overwrite them.
+
+Typical cause: `f(n: int): int { return this.f(n - 1); }`, or two functions that call each other.
+
+Fix: rewrite it as a loop (`for`/`while`), or break the cycle by moving one of the calls into an `@event`.
+
+### ABFC2086
+
+Severity: error · Exit: 1
+
+Meaning: a function (an undecorated method) uses `await`, is declared `async`, or calls a latent action (a library call such as `KismetSystemLibrary.Delay`). A Blueprint function finishes in one frame and cannot wait.
+
+Typical cause: moving a body with a `Delay` or another latent call into a helper method.
+
+Fix: keep the latent call in an `@event` or `@override` and call the function from there after the wait.
+
+### ABFC2087
+
+Severity: error · Exit: 1
+
+Meaning: an undecorated method has the name of a member of the parent class (for example an engine event or function), the TypeScript `override` modifier, or a reserved name (`UserConstructionScript`, `ExecuteUbergraph*`). A Blueprint function cannot reuse such a name.
+
+Typical cause: a helper named like an inherited function, or an attempt to implement a parent event without `@override`.
+
+Fix: rename the method, or use `@override` to implement a parent event.
+
+### ABFC2089
+
+Severity: warning · Exit: -
+
+Meaning: a `@director` class does not derive from ActorComponent. The game starts directors by adding each class-manager director as a component of its AI director actor when play begins, so an Actor (or other) class is never started, although its row and tag are correct.
+
+Typical cause: `extends Actor` copied from an actor example.
+
+Fix: `extends ActorComponent` (or a component class). The build creates the asset again when abfc made it and its family changes (Actor to ActorComponent); a hand-made asset needs the reparent ([ABFC2048](#abfc2048)).
+
 ### ABFC2099
 
 Severity: error · Exit: 1
 
 Meaning: a construct is not supported (the general "outside the subset" error), with the construct named in the message; also raised when the checked IR is invalid.
 
-Typical cause: a statement, operator or class member that has no Blueprint equivalent yet.
+Typical cause: a statement, operator or class member that has no Blueprint equivalent yet; on a method: a getter or setter, a `static` method, a `#private` name, an optional, default or rest parameter, a generic method, a method without a body; a value returned from an `@event` or `@override` (put the logic in an undecorated method) or from a void function; a template literal where neither a `text` nor a `string` is expected (for example a `name` field); a tagged template.
 
-Fix: rewrite the code with supported constructs, as the message says. If you think the construct should work, report it with the message and a small example.
+Fix: rewrite the code with supported constructs, as the message says. If you think the construct should work, report it with the message and a small example. For a name, convert explicitly: ``KismetStringLibrary.Conv_StringToName(`...${x}`)`` (add `/Script/Engine.KismetStringLibrary` to `stubs.scriptClasses` and run `abfc stubs` if it is missing).
 
 ### ABFC2101
 
@@ -721,11 +853,11 @@ The stubs are the `.d.ts` files `abfc stubs` writes from the Mod Editor; the loc
 
 ### ABFC3001
 
-Severity: error in `abfc build` and `abfc publish`, warning in `abfc check` · Exit: 2 (error), - (warning)
+Severity: error in `abfc build` and `abfc publish`, warning in `abfc check` · Exit: 2 (error), - (warning). The generator-version variant is always a warning.
 
-Meaning: the stubs were generated for a different Mod Editor install than the one abfc finds now.
+Meaning: the stubs were generated for a different Mod Editor install than the one abfc finds now. Or, as a warning only: the stubs were generated by an older `abfc stubs` than the abfc that is running (the message names both versions), so they lack what newer versions add (default arguments of library functions, the gameplay tag declarations).
 
-Typical cause: the Mod Editor was updated or reinstalled after `abfc stubs` ran.
+Typical cause: the Mod Editor was updated or reinstalled after `abfc stubs` ran, or abfc was updated and `abfc stubs` was not run again.
 
 Fix: run `abfc stubs` again.
 
@@ -778,6 +910,16 @@ Meaning: an entry in `stubs.widgetMembers` names a widget class that is not in t
 Typical cause: the widget class is missing from `stubs.scriptClasses`.
 
 Fix: add the class named in the message to `stubs.scriptClasses` and run `abfc stubs`.
+
+### ABFC3012
+
+Severity: warning · Exit: -
+
+Meaning: the backend cannot list the game's gameplay tags, so `abfc stubs` could not store them. `.abfc/tags.d.ts` (the typed tag constants and the tag names the `director` decorator suggests) then holds only the tags of the mod's own `Config/Tags` files.
+
+Typical cause: abf-mod-editor-mcp older than 2.6.0.
+
+Fix: update abf-mod-editor-mcp to 2.6.0 or newer (or use the bundled backend of `abfc.exe`) and run `abfc stubs` again. Until then a tag can still be written as a string literal.
 
 ## 4xxx backend
 
@@ -881,7 +1023,7 @@ Meaning: a unit needs an event to supply a delegate, and that event is neither i
 
 Typical cause: the event belongs to a unit that was removed, or that failed to build in an earlier run.
 
-Fix: declare the event in TypeScript again, or remove the use of it, then run `abfc build`. If the event comes from a hand-made unit, adopt it first (`abfc adopt`).
+Fix: declare the event in TypeScript again, or remove the use of it, then run `abfc build`. If the event is a hand-made one in the Blueprint, declare it in TypeScript under the same name: the build replaces the hand-made event (TypeScript wins).
 
 ### ABFC4016
 
@@ -893,15 +1035,45 @@ Typical cause: the mod folder is locked, the backend stopped responding or the d
 
 Fix: run `abfc build --resync` before the next build. That discards all unpublished work in the staged copy, in every asset of the mod and not only the assets that failed to compile; the next build applies the units again. `--keep-failed-stage` keeps the failed stage for inspection instead (see [cli.md](cli.md)).
 
-### ABFC4020
+### ABFC4017
+
+Severity: warning · Exit: -
+
+Meaning: the real mod changed since abfc made its staged copy, so abfc copied the mod again before it went on (`abfc build`, `abfc test`, `abfc publish`, `abfc stubs`). The message lists up to 10 of the files. The TypeScript is applied on top of the fresh copy (TypeScript wins).
+
+Typical cause: you saved the mod in the Mod Editor, or published by hand, after the stage was made.
+
+Fix: nothing is required. The staged copy only holds abfc's own work, which the build generates again from the TypeScript. Edits you made by hand in the Mod Editor to what the TypeScript owns are replaced and reported as [ABFC5014](errors.md#abfc5014).
+
+### ABFC4018
+
+Severity: warning · Exit: - (`abfc doctor` only)
+
+Meaning: the backend is older than the version abfc recommends (2.6.0), or it does not report one of the capabilities `assetOps`, `publishDeletes`, `gameplayTags` and `reflectDefaults`. The message lists the missing ones. Everything still works: without `assetOps` a renamed or moved class stays [ABFC5012](errors.md#abfc5012); without `publishDeletes` a publish does not delete files ([ABFC7014](errors.md#abfc7014)); without `gameplayTags` the editor offers only the tags of your mod ([ABFC3012](errors.md#abfc3012)); without `reflectDefaults` the default values of function parameters are not read from the editor.
+
+Typical cause: a source install with an old abf-mod-editor-mcp checkout.
+
+Fix: update the checkout to tag `v2.6.0` or newer, or use `abfc.exe`, which bundles a current backend. See [backend.md](backend.md).
+
+### ABFC4019
 
 Severity: error · Exit: 2
 
-Meaning: the staged copy of the mod conflicts with the real mod, so abfc will not write on top of it.
+Meaning: another `abfc build`, `test`, `publish`, `status`, `stubs` or `adopt` is running in the same project, so this run stopped before it started the backend. Two runs at once would write the same staged copy and the same manifests (a test with two builds at once showed one of them failing with a file-in-use error from the backend, and the stage copy being written by both). The message names the other run's command, process id and start time. abfc keeps the lock in `.abfc/lock.json` (listed in the `.gitignore` that `abfc init` writes); `abfc check`, `abfc doctor`, `abfc init` and the language server do not use it.
 
-Typical cause: the mod's files changed after the stage was made, for example the mod was saved in the Mod Editor, or published by hand.
+Typical cause: a build started from the editor's task while a build in a terminal was still running, or two terminals.
 
-Fix: run `abfc build --resync`. It replaces the staged copy with the real mod and discards unpublished work in the stage, which the next build applies again.
+Fix: wait until the other run has finished, then run the command again. A lock left by a run that was killed is detected (its process no longer exists) and replaced by the next run, as is a lock older than 12 hours or an unreadable one older than 30 seconds. Only if abfc still reports a run that is certainly gone, delete `.abfc/lock.json`.
+
+### ABFC4020
+
+Severity: warning (`abfc status`); error · Exit: 2 (only if the conflict remains after the staged copy was made again)
+
+Meaning: `abfc status` found that the real mod changed since the staged copy was made. Status never discards anything; the next `abfc build` copies the mod again ([ABFC4017](errors.md#abfc4017)). As an error it means the conflict was still there after that copy.
+
+Typical cause: the mod's files changed after the stage was made, for example the mod was saved in the Mod Editor, or published by hand. As an error: another program is writing to the mod folder.
+
+Fix: nothing for the warning. For the error, close the programs that write to the mod folder, then run the command again.
 
 ### ABFC4090
 
@@ -925,47 +1097,47 @@ Fix: report it with the run folder named in the message. Building a smaller unit
 
 ## 5xxx ownership and drift
 
-abfc only replaces what it built itself. It records which nodes of an asset belong to which unit; when the asset no longer matches the record, abfc stops instead of overwriting. Codes 5001-5007 need your decision and exit with 3; the rest exit with 1 (errors) or do not end the command (warnings). The workflow is described in [first-mod.md](first-mod.md) and the commands in [cli.md](cli.md).
+TypeScript wins: a build (and a publish, which builds) makes the Blueprint match the `.ts` file. What was changed in the Mod Editor is replaced, and in a class without a `_Manual` interface merge the hand-made nodes, function graphs and variables are removed; one ABFC5014 warning per asset lists what went. Event dispatchers, macros, components and the widget tree are kept. Codes 5001-5004 are only warnings now (`abfc status` previews them); 5005-5007 need your decision and exit with 3; the rest exit with 1 (errors) or do not end the command (warnings). The workflow is described in [first-mod.md](first-mod.md) and the commands in [cli.md](cli.md).
 
 ### ABFC5001
 
-Severity: error · Exit: 3
+Severity: warning (`abfc status`) · Exit: -
 
-Meaning: a unit that abfc built was edited in the Mod Editor since the last build, or the staged copy differs from what abfc applied. abfc will not overwrite it. The message counts the nodes and links that changed.
+Meaning: a unit that abfc built was edited in the Mod Editor since the last build, or the staged copy differs from what abfc applied. `abfc build --drift` replaces it now, otherwise the next build that changes this class does (a plain build does not read an asset whose TypeScript did not change); either way TypeScript wins, and [ABFC5014](#abfc5014) lists it then. The message counts the nodes and links that changed.
 
 Typical cause: you changed, moved or reconnected a generated node in the Blueprint editor, or the stage was re-synced from a mod that holds a different version.
 
-Fix: undo the edit in the editor, or move the change into the `.ts` file and run `abfc adopt <asset> <unit> --yes --discard-editor-changes`. The next build then replaces the edited nodes.
+Fix: nothing is required. To keep the edit, move it into the `.ts` file before building.
 
 ### ABFC5002
 
-Severity: error · Exit: 3
+Severity: warning (`abfc status`); error · Exit 3 (`abfc adopt`)
 
-Meaning: nodes that abfc owns are missing from the asset, so the unit cannot be updated safely. The same code is used by `abfc adopt` when the unit to adopt does not exist in the asset.
+Meaning: nodes that abfc owns are missing from the asset. `abfc build --drift` applies the unit again now, otherwise the next build that changes this class does (a plain build does not read an asset whose TypeScript did not change); TypeScript wins. The same code is an error of `abfc adopt` when the unit to adopt does not exist in the asset.
 
 Typical cause: you deleted generated nodes in the editor, or the stage was re-synced from a mod that never had them.
 
-Fix: undo the deletion in the editor, or restore the stage with `abfc build --resync` after reverting the unit in the real mod. For `abfc adopt`, check the name of the event.
+Fix: nothing is required for a build. For `abfc adopt`, check the name of the event.
 
 ### ABFC5003
 
-Severity: error · Exit: 3
+Severity: warning (`abfc status`) · Exit: -
 
-Meaning: an event or override declared in TypeScript already exists in the asset as a hand-made event.
+Meaning: an event or override declared in TypeScript already exists in the asset as a hand-made event. The next build replaces it (TypeScript wins).
 
 Typical cause: the event was made in the Blueprint editor before it was written in TypeScript.
 
-Fix: run the `abfc adopt` command shown in the fix line, which takes the existing nodes over. Or rename the TypeScript method.
+Fix: nothing is required. To keep the hand-made event, rename the TypeScript method.
 
 ### ABFC5004
 
-Severity: error · Exit: 3
+Severity: warning (`abfc status`) · Exit: -
 
-Meaning: a hand-made unit that was adopted earlier changed in the real mod, so the recorded adoption no longer matches.
+Meaning: a hand-made unit that was adopted earlier changed in the real mod, so the recorded adoption no longer matches. The next build replaces it with the TypeScript unit.
 
 Typical cause: someone edited the adopted nodes in the editor after `abfc adopt` recorded them.
 
-Fix: review the change in the editor, then run `abfc adopt` again for this unit.
+Fix: nothing is required.
 
 ### ABFC5005
 
@@ -1011,7 +1183,7 @@ Fix: use the name of a comment box or of a node with no links, as listed in the 
 
 Severity: error · Exit: 1
 
-Meaning: a unit that is no longer declared in TypeScript is still called by another unit.
+Meaning: a unit that is no longer declared in TypeScript is still called by another unit, or (a class that merges with its `_Manual` interface) by a hand-made node that is kept.
 
 Typical cause: a method or event was deleted or renamed while a call to it remains.
 
@@ -1021,7 +1193,7 @@ Fix: change the call in the unit named in the message, or declare the method aga
 
 Severity: warning · Exit: -
 
-Meaning: a Blueprint class is no longer declared in TypeScript. abfc removes the units it owns, but the class defaults it set stay as they are.
+Meaning: a Blueprint class is no longer declared in TypeScript, and the asset stays in the mod for now: abfc removes the units it owns, but the class defaults it set stay as they are. With backend 2.6.0 an asset that abfc created is deleted instead (the build prints `deleted <asset>`; the file leaves the mod with the next `abfc publish`), and only an asset that was not created by abfc, or a build with an older backend, ends here (see also [ABFC5017](errors.md#abfc5017)).
 
 Typical cause: the class file was deleted.
 
@@ -1031,21 +1203,21 @@ Fix: nothing is required. Clean up the asset in the Mod Editor if you do not wan
 
 Severity: warning · Exit: -
 
-Meaning: a field that was declared in TypeScript before is gone, but the variable stays in the Blueprint.
+Meaning: a field that was declared in TypeScript before is gone, so the build removed the variable from the Blueprint.
 
 Typical cause: a property was deleted from the class.
 
-Fix: delete the variable in the Mod Editor, or declare the field again.
+Fix: nothing is required; declare the field again to get it back.
 
 ### ABFC5012
 
-Severity: error · Exit: 1
+Severity: warning (one earlier asset of a class, in `abfc check` and the language server) · error (several earlier assets, a `@struct`, or a backend without `bp_asset_ops`) · Exit: 1 for the error
 
-Meaning: a class file now gives a different asset path than the one it was built as (the file moved or the class was renamed), and the old asset is still recorded. abfc will not create a second asset or retire the first.
+Meaning: a class file now gives a different asset path than the one it was built as (the file moved or the class was renamed), and the old asset is still recorded. abfc never creates a second asset and retires the first. With one earlier asset of a class and a backend that supports it (2.6.0), the next `abfc build` renames the asset (references are fixed by Unreal), and `abfc check` only warns. Otherwise it is an error.
 
-Typical cause: a `.ts` file was moved, or a class renamed, without a `path` option in `@blueprint`.
+Typical cause: a `.ts` file was moved, or a class renamed, without a `path` option in `@blueprint`; several candidates when more than one earlier asset has the class name or file.
 
-Fix: keep the old asset with `path: "<path below the mod>"` in the class options (the editor quick fix does it), or move the file back. The language server offers the quick fix on the diagnostic.
+Fix: for the error, keep one earlier asset with `path: "<path below the mod>"` in the class options (the editor quick fix does it), move the file back, or update the backend. The language server offers the quick fix on the diagnostic.
 
 ### ABFC5013
 
@@ -1056,6 +1228,60 @@ Meaning: the class-manager row that a previous build wrote for a `@director` cla
 Typical cause: the row name in `@director` was changed or removed.
 
 Fix: delete the old row in the Mod Editor.
+
+### ABFC5014
+
+Severity: warning · Exit: -
+
+Meaning: TypeScript wins. This build replaced or removed what was changed or made by hand in the Mod Editor in one Blueprint: edited or deleted generated units (with the old ABFC5001/5002/5004 details), a hand-made event of the same name as a TypeScript event, and, in a class without a `_Manual` interface merge, every other hand-made node (the count and the first five names per graph), function graph and variable. Event dispatchers, macros, components, the widget tree, interface functions and disabled engine default events are kept.
+
+Typical cause: you changed the Blueprint in the Mod Editor and did not move the change into the `.ts` file.
+
+Fix: nothing is required. To keep a change, move it into the `.ts` file before building; `abfc status` previews what the next build replaces. `abfc build --drift` and the build inside `abfc publish --full` read every owned asset, so they replace editor changes in unchanged assets too.
+
+### ABFC5015
+
+Severity: warning · Exit: -
+
+Meaning: `abfc adopt` is not needed any more. `abfc build` replaces a hand-made event or override of the same name as a TypeScript unit on its own (TypeScript wins, [ABFC5014](errors.md#abfc5014)). The command still works and is kept for compatibility.
+
+Typical cause: you ran `abfc adopt`, as older versions of the documentation advised.
+
+Fix: declare the event in TypeScript and run `abfc build`. Use `abfc adopt` only if you want the hand-made nodes to stay as they are until the first build.
+
+### ABFC5016
+
+Severity: error · Exit: 1
+
+Meaning: the backend could not perform a stage operation that `abfc build` needs for a renamed or moved class, a class that left the TypeScript, or a changed `extends` clause (rename, delete, reparent or recreate of an asset). The backend restored the stage, so nothing was changed. The message names the operation and the backend's reason, for example an asset that still references a deleted asset, or a rename target that already exists.
+
+The backend takes at most 20 operations per call, so a build with more renames or deletes sends them in chunks of 20. A chunk is all-or-nothing, but the chunks before a failed one stay on the stage; the message then says "The N operation(s) before it were done and are kept", abfc has recorded exactly those moves, and the next build continues with the rest.
+
+A delete runs after the build applied the new specs of the classes that used the removed class, so removing a class and its last use in TypeScript in one edit works in one build. If a delete fails then, the applied changes stay on the stage (only the delete is rolled back) and the next build tries the delete again.
+
+Typical cause: another Blueprint of the mod still uses an asset whose class you removed; a hand-made asset already sits at the new path of a moved class.
+
+Fix: remove the reference or the asset in the Mod Editor, or keep a moved class where it was with `path: "<its path below the mod>"`; then run `abfc build` again.
+
+### ABFC5017
+
+Severity: warning · Exit: -
+
+Meaning: a class that was declared in TypeScript is gone, but its asset was not created by abfc (a hand-made asset that a TypeScript class took over, or a build from an older abfc that did not record this). abfc deletes only assets it created, so the build removed the units and variables it owned and left the emptied asset in the mod.
+
+Typical cause: you deleted the file of a class that took over an asset you had made in the Mod Editor.
+
+Fix: delete the asset in the Mod Editor if you no longer need it. Nothing else is required.
+
+### ABFC5018
+
+Severity: warning · Exit: -
+
+Meaning: a `@struct` that abfc created is no longer declared in TypeScript (its file was deleted, or the struct was renamed together with its file). abfc never deletes a struct, because Blueprints and saved games that use it would break, so the struct stays in the mod. The warning appears once; the next builds are silent.
+
+Typical cause: you renamed or removed the struct, as ABFC2046 suggests for a field change.
+
+Fix: delete the struct in the Mod Editor once no Blueprint uses it, or declare it in TypeScript again (nothing else is needed; if you remove it again later, abfc warns again).
 
 ### ABFC5101
 
@@ -1203,7 +1429,7 @@ Meaning: the backend refused to copy the files because the mod or the open Mod E
 
 Typical cause: you saved the mod in the Mod Editor after the stage was made, or left an asset editor tab open.
 
-Fix: the fix line names the case. Typical steps: `abfc build --resync` after the mod changed, save or revert the assets in the Mod Editor, stop Play In Editor, or close the asset tabs, then run `abfc publish` again. abfc never closes your Mod Editor.
+Fix: the fix line names the case. Typical steps: run `abfc publish` again after the mod changed (the build copies the mod again by itself), save or revert the assets in the Mod Editor, stop Play In Editor, or close the asset tabs, then run `abfc publish` again. If the editor could not unload an asset because other loaded assets or the open map still use it, update the backend or close the Mod Editor. abfc never closes your Mod Editor and never stops Play In Editor for you.
 
 ### ABFC7006
 
@@ -1254,6 +1480,26 @@ Meaning: after the publish, the open Mod Editor logged Blueprint compile errors 
 Typical cause: the editor reloaded assets that other loaded assets still referenced.
 
 Fix: open the listed Blueprints and compile them again, or restart the Mod Editor.
+
+### ABFC7014
+
+Severity: warning · Exit: -
+
+Meaning: the publish has files to delete from the mod (the asset of a deleted class and its class-manager row, the old path of a renamed or moved class, a retired class-manager row), but the backend cannot delete files (capability `publishDeletes`, backend 2.6.0 or newer). Everything else is published; the listed assets stay in the mod, and abfc keeps the deletions pending (the deleted class's tombstone and the renamed asset's `renamedFrom`), so the next publish with a newer backend deletes them.
+
+Typical cause: an older abf-mod-editor-mcp.
+
+Fix: delete the listed assets in the Mod Editor (Content Browser), or update abf-mod-editor-mcp to 2.6.0 or newer and run `abfc publish` again.
+
+### ABFC7015
+
+Severity: warning · Exit: -
+
+Meaning: the publish copied the mod's gameplay tag list (`Config/Tags/<Mod>Tags.ini`, new tags added by a `@director` tag) while the Mod Editor was open, and the editor does not know some of the tags. Backend 2.6.0 registers the mod's tags in the open editor itself before it reloads the published rows (capability `liveTags`; abfc prints `gameplay tags registered in the open Mod Editor`), so this warning means that registration failed (the message names the tags that stayed unknown and the backend's reason) or that the backend is older and cannot do it. A row that uses an unknown tag loads with an invalid tag in the editor, and its director does not start in Play In Editor. The files on disk are fine.
+
+Typical cause: the editor refused every way the backend has to refresh its tag tree, or an abf-mod-editor-mcp without `liveTags`.
+
+Fix: restart the Mod Editor before you play or open the director rows. Do not save a row the editor reports "Invalid Tags that have been removed" for; if you did, run `abfc build` and `abfc publish` again (the tag is set again). Update abf-mod-editor-mcp to get the automatic registration.
 
 ## Lint rules
 

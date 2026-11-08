@@ -34,7 +34,8 @@ abfc doctor
 - [docs/config.md](docs/config.md): `abf.config.json`, the user config and the environment variables.
 - [docs/errors.md](docs/errors.md): every error and warning code, with cause and fix.
 - [docs/troubleshooting.md](docs/troubleshooting.md): step-by-step help for common problems.
-- [docs/backend.md](docs/backend.md): the backend (bundled in `abfc.exe`; abf-mod-editor-mcp 2.4.0 or newer, 2.5.0 for `@director` rows, in a source install): settings, capabilities and diagnostics.
+- [docs/known-issues.md](docs/known-issues.md): what was fixed before 1.0.0, and the limitations that remain, with workarounds.
+- [docs/backend.md](docs/backend.md): the backend (bundled in `abfc.exe`; abf-mod-editor-mcp 2.6.0 recommended, 2.4.0 the minimum, in a source install): settings, capabilities and diagnostics.
 - [docs/language-service.md](docs/language-service.md): the editors page: `abfc lsp`, the VS Code extension, watch mode.
 - [docs/lint-rules.md](docs/lint-rules.md): the ESLint rules for tick cost, replication and RPC use.
 - [docs/releasing.md](docs/releasing.md): how a release is built and published (for maintainers).
@@ -70,7 +71,7 @@ npm test
 
 ### Backend
 
-`abfc.exe` bundles its backend. A source install needs `EmekC/abf-mod-editor-mcp` 2.4.0 or newer (tag `v2.4.0`; tag `v2.5.0` for `@director` rows). Point `ABFC_BACKEND_DIR` (or `--backend-dir`, or `backend.serverDir` in `abf.config.json`) at a checkout; abfc starts the server with `ABF_ABFC_TOOLS=1` for its opt-in tools. Install, settings, `abfc doctor`, capabilities and diagnostics are in [docs/backend.md](docs/backend.md).
+`abfc.exe` bundles its backend. A source install needs `EmekC/abf-mod-editor-mcp`; use tag `v2.6.0` (asset renames and deletions, `@director` tags, optional engine parameters, variable defaults). 2.4.0 is the minimum and still works, with a warning for each missing feature (`@director` rows need 2.5.0). Point `ABFC_BACKEND_DIR` (or `--backend-dir`, or `backend.serverDir` in `abf.config.json`) at a checkout; abfc starts the server with `ABF_ABFC_TOOLS=1` for its opt-in tools. Install, settings, `abfc doctor`, capabilities and diagnostics are in [docs/backend.md](docs/backend.md).
 
 A server older than 2.4.0 gets warning ABFC4014 (a protocol below 1 is error ABFC4001). Without `backend_info`, abfc prints warning ABFC4012 and wildcard pins use the two-phase fallback (apply, patch the rolled-back graph, apply it again as a raw block), which costs about 10-20 s more per build.
 

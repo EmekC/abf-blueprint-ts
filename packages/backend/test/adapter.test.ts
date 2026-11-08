@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { AbfcError } from "@abfc/env";
-import type { IrNode } from "@abfc/ir";
+import type { AssetPlan, IrNode, IrUnit } from "@abfc/ir";
 import { applyPlan, effectivePinTypes, renderMainSpec, renderTagSpec, specNodeId } from "../src/index.js";
 import type { BpNodeSpec } from "../src/index.js";
 import { FakeBackend, caps, ir, nodeIdsFor, planOf, profile, realName, result } from "./fixture.js";
@@ -302,4 +302,70 @@ test("a struct plan item renders create UserDefinedStruct plus struct_fields (fr
     create: { class: "UserDefinedStruct", if_missing: true },
     struct_fields: [{ name: `Count_0_${G}`, friendly: "Count", guid: G, type: "int" }],
   });
+});
+
+// ---- function graphs (bp_apply feature function_graphs) ----
+
+const fnNode: IrNode = { id: "call0", t3d: { class: profile.nodeClasses.callFunction, props: [] }, pos: [0, 0], origin: unit.origin };
+const { crossWires: _noCross, ...unitNoCross } = unit;
+const fnUnit = (name: string, wires: IrUnit["wires"]): AssetPlan["units"][number]["unit"] => ({
+  ...unitNoCross,
+  id: `function:${name}`,
+  kind: "function",
+  name,
+  graph: name,
+  signature: { inputs: [{ name: "amount", type: "int" }], outputs: [{ name: "ReturnValue", type: "int" }], access: "private" },
+  nodes: [fnNode],
+  wires,
+});
+const fnAsset = (over: Partial<AssetPlan>): AssetPlan => ({ ...asset, units: [], variables: [], ...over });
+
+test("a function unit: the entry/result wire ends keep the backend's reserved ids, the spec carries functions with access", () => {
+  const u = fnUnit("runTest", [["entry.then", "call0.execute"], ["entry.amount", "call0.A"], ["call0.then", "result.execute"], ["call0.ReturnValue", "result.ReturnValue"]]);
+  const a = fnAsset({
+    units: [{ unit: u, removeNodes: [], origin: [0, 250] }],
+    functions: [{ name: "runTest", inputs: u.signature.inputs, outputs: u.signature.outputs, access: "private" }],
+  });
+  const spec = renderMainSpec(a, caps(true, true), profile);
+  assert.deepEqual(spec.functions, [{ name: "runTest", inputs: [{ name: "amount", type: "int" }], outputs: [{ name: "ReturnValue", type: "int" }], access: "private" }]);
+  assert.equal(spec.remove_functions, undefined);
+  const g = spec.graphs!.find((x) => x.graph === "runTest")!;
+  assert.deepEqual(g.remove, []);
+  assert.deepEqual(g.wires, [
+    ["entry.then", "runTest_call0.execute"],
+    ["entry.amount", "runTest_call0.A"],
+    ["runTest_call0.then", "result.execute"],
+    ["runTest_call0.ReturnValue", "result.ReturnValue"],
+  ]);
+});
+
+test("a replaced function graph is listed in remove_functions and functions; its graph edit removes nothing", () => {
+  const u = fnUnit("runTest", [["entry.then", "call0.execute"]]);
+  const a = fnAsset({
+    units: [{ unit: u, removeNodes: [], origin: [0, 250] }],
+    functions: [{ name: "runTest", inputs: [], outputs: [], access: "public" }],
+    removeFunctions: ["runTest"],
+  });
+  const spec = renderMainSpec(a, caps(true, true), profile);
+  assert.deepEqual(spec.remove_functions, ["runTest"]);
+  assert.deepEqual(spec.functions!.map((f) => f.name), ["runTest"]);
+  assert.deepEqual(spec.graphs!.find((x) => x.graph === "runTest")!.remove, []);
+});
+
+test("a removed function graph has no graph entry; a recreated empty one has none either", () => {
+  const gone = fnAsset({ removeUnits: [{ id: "function:runTest", graph: "runTest", nodes: [] }], removeFunctions: ["runTest"] });
+  const spec = renderMainSpec(gone, caps(true, true), profile);
+  assert.deepEqual(spec.remove_functions, ["runTest"]);
+  assert.equal(spec.functions, undefined);
+  assert.deepEqual(spec.graphs, []);
+
+  const empty = { ...fnUnit("noop", []), nodes: [] };
+  const made = fnAsset({
+    units: [{ unit: empty, removeNodes: [], origin: [0, 250] }],
+    functions: [{ name: "noop", inputs: [], outputs: [], access: "public" }],
+    removeFunctions: ["noop"],
+  });
+  const spec2 = renderMainSpec(made, caps(true, true), profile);
+  assert.deepEqual(spec2.functions!.map((f) => f.name), ["noop"]);
+  assert.deepEqual(spec2.graphs, []);
 });

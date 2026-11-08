@@ -166,7 +166,15 @@ export const ALL_TOOLS = [
 
 /** `backend_info` in the shape of the wildcard-pins branch. */
 export function fixInfo(
-  over: { protocol?: number; serverVersion?: string; headlessDir?: string; documentsDir?: string; pinTypes?: boolean } = {},
+  over: {
+    protocol?: number;
+    serverVersion?: string;
+    headlessDir?: string;
+    documentsDir?: string;
+    pinTypes?: boolean;
+    /** Extra raw `capabilities` keys (e.g. the 2.6.0 ones). */
+    capabilities?: Record<string, unknown>;
+  } = {},
 ): Record<string, unknown> {
   return {
     protocol: over.protocol ?? 1,
@@ -174,8 +182,8 @@ export function fixInfo(
     editorRoot: null,
     headlessDir: over.headlessDir ?? "C:\\abfc-headless",
     documentsDir: over.documentsDir ?? "C:\\Users\\Jane\\Documents",
-    capabilities: { pinTypes: over.pinTypes ?? true, containerTypes: { array: true, map: true, set: false } },
-    bpApply: { features: ["cast_object_pin", "map_types", "pin_types", "self_event_calls"], nodeKinds: ["call", "cast"] },
+    capabilities: { pinTypes: over.pinTypes ?? true, containerTypes: { array: true, map: true, set: false }, liveTags: true, ...over.capabilities },
+    bpApply: { features: ["cast_object_pin", "function_graphs", "map_types", "pin_types", "self_event_calls", "variable_defaults"], nodeKinds: ["call", "cast"] },
   };
 }
 

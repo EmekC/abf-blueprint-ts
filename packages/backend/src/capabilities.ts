@@ -3,6 +3,9 @@ import type { BackendCapabilities } from "@abfc/ir";
 /** The minimum abf-mod-editor-mcp server version abfc is built for; an older (parseable) version gets warning ABFC4014. */
 export const MIN_BACKEND_VERSION = "2.4.0";
 
+/** The backend version with every feature abfc uses (asset ops, publish deletions, gameplay tags, reflect defaults); an older one still works, abfc doctor warns. */
+export const RECOMMENDED_BACKEND_VERSION = "2.6.0";
+
 /**
  * Compares two `major.minor.patch` versions (an optional leading `v`, anything after the patch number is ignored):
  * -1 when `version` is older than `min`, 0 when equal, 1 when newer, null when either does not parse (e.g. `fake-1`).
@@ -38,6 +41,11 @@ export interface RawBackendInfo {
     functionLocals?: unknown;
     createKinds?: unknown;
     classManagerRows?: unknown;
+    assetOps?: unknown;
+    publishDeletes?: unknown;
+    gameplayTags?: unknown;
+    liveTags?: unknown;
+    reflectDefaults?: unknown;
   } | null;
   bpApply?: { features?: unknown; nodeKinds?: unknown } | null;
 }
@@ -70,6 +78,14 @@ export const BP_APPLY_P1_BASE: BackendCapabilities = {
   selfEventCalls: false,
   eventMeta: false,
   classManagerRows: false,
+  assetOps: [],
+  publishDeletes: false,
+  gameplayTags: false,
+  liveTags: false,
+  reflectDefaults: false,
+  classManagerRowTag: false,
+  variableDefaults: false,
+  functionGraphs: false,
   bpApplyFeatures: [],
   nodeKinds: [],
   backendContainerTypes: null,
@@ -124,6 +140,17 @@ export function capabilitiesFrom(
     selfEventCalls: bpApplyFeatures.includes("self_event_calls"),
     eventMeta: bpApplyFeatures.includes("event_meta"),
     classManagerRows: bool(info?.capabilities?.classManagerRows) && bpApplyFeatures.includes("class_manager_row"),
+    classManagerRowTag:
+      bool(info?.capabilities?.classManagerRows) &&
+      bpApplyFeatures.includes("class_manager_row") &&
+      bpApplyFeatures.includes("class_manager_row_tag"),
+    variableDefaults: bpApplyFeatures.includes("variable_defaults"),
+    functionGraphs: bpApplyFeatures.includes("function_graphs"),
+    assetOps: tools.includes("bp_asset_ops") ? strings(info?.capabilities?.assetOps) : [],
+    publishDeletes: bool(info?.capabilities?.publishDeletes) && tools.includes("bp_publish"),
+    gameplayTags: bool(info?.capabilities?.gameplayTags),
+    liveTags: bool(info?.capabilities?.liveTags) && tools.includes("bp_publish"),
+    reflectDefaults: bool(info?.capabilities?.reflectDefaults),
     nodeKinds: strings(info?.bpApply?.nodeKinds),
     backendContainerTypes:
       rawContainers === null

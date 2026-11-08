@@ -10,6 +10,8 @@
     "paths.py",
     "staging.py",
     "wininput.py",
+    "fscopy.py",
+    "tagsini.py",
     "editor/**",
     "LICENSE",
     "README.md",
