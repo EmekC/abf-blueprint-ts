@@ -346,7 +346,7 @@ export class BpApplyBackend implements Backend {
         message: `backend tool "reflect" returned no result file (run folder: ${str(json.run) ?? "unknown"}).`,
       });
     }
-    const parsed = JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, "")) as Partial<ReflectData> & { gameplayTags?: unknown; supers?: unknown };
+    const parsed = JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, "")) as Partial<ReflectData> & { gameplayTags?: unknown; supers?: unknown; memberSources?: unknown };
     const data: ReflectData = {
       engineVersion: parsed.engineVersion ?? null,
       classes: parsed.classes ?? {},
@@ -365,6 +365,7 @@ export class BpApplyBackend implements Backend {
         if (Array.isArray(chain) && chain.every((x) => typeof x === "string")) data.supers[p] = chain as string[];
       }
     }
+    if (Array.isArray(parsed.memberSources)) data.memberSources = parsed.memberSources.filter((x): x is string => typeof x === "string");
     const filter = isObject(json.filter) ? json.filter : {};
     const rules: Array<["Allow" | "Block", string]> = [];
     if (Array.isArray(filter.rules)) {

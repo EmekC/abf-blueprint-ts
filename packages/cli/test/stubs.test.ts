@@ -292,6 +292,8 @@ test("abfc stubs: stubs.widgetMembers are emitted on the class stub, recorded in
     assert.equal(code, 0, out);
     assert.match(out, /warning ABFC3011: stubs\.widgetMembers: \/Script\/FakeEngine\.Thing TitleText is a \/Script\/UMG\.TextBlock, which is not in the stubs/);
     assert.match(out, /stubs\.scriptClasses/);
+    assert.match(out, /warning ABFC3015: stubs\.widgetMembers is deprecated; 1 entry was not found by reflection and is still taken from the config: \/Script\/FakeEngine\.Thing:TitleText/);
+    assert.doesNotMatch(out, /ABFC3014/, "no Blueprint classes, nothing to discover");
 
     const dir = join(tmp, ".abfc", "stubs", "ue5.4.4-1050002");
     const script = readFileSync(join(dir, "Script", "FakeEngine.d.ts"), "utf8");
@@ -338,6 +340,7 @@ test("abfc stubs: parent chains are closed with members and opaque types get the
           },
           structs: {},
           supers: { [FAKE_BP]: [MID, THING, OBJ] },
+          memberSources: ["widgetTree", "scs", "cookedClass"],
           errors: [],
         };
       }
@@ -363,7 +366,7 @@ test("abfc stubs: parent chains are closed with members and opaque types get the
     assert.deepEqual(calls[1]?.classes, [MID]);
     assert.deepEqual(calls[1]?.structs, [VEC]);
     assert.deepEqual(calls[1]?.supersOf, [OPAQ]);
-    assert.doesNotMatch(out, /ABFC3013/);
+    assert.doesNotMatch(out, /ABFC3013|ABFC3014/);
 
     const dir = join(tmp, ".abfc", "stubs", "ue5.4.4-1050002");
     const bp = readFileSync(join(dir, "Game", "Fake", "BP_Fake.d.ts"), "utf8");
@@ -439,5 +442,83 @@ test("abfc stubs: a backend that reports supers but misses a class says the chai
     assert.doesNotMatch(out, /did not report the Blueprint parent classes/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+const TEXT_BLOCK = "/Script/UMG.TextBlock";
+
+function memberReflect(memberSources: string[] | undefined): (r: ReflectRequest, n: number) => ReflectData {
+  return (_r, n) =>
+    n === 1
+      ? {
+          engineVersion: "5.4.4-fake",
+          classes: {
+            ...firstData.classes,
+            [FAKE_BP]: chainClass([THING, OBJ], {
+              meta: "/Script/Engine.BlueprintGeneratedClass",
+              properties: [{ name: "TitleText", kind: "widget", pins: [pin("TitleText", "out", "object", { subCategoryObject: TEXT_BLOCK })] }],
+            }),
+          },
+          structs: {},
+          supers: { [FAKE_BP]: [THING, OBJ] },
+          ...(memberSources === undefined ? {} : { memberSources }),
+          errors: [],
+        }
+      : secondData;
+}
+
+test("abfc stubs: a discovered widget is emitted readonly with @bpWidget; widgetMembers entries warn ABFC3015 (found / still from config)", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-stubs-"));
+  try {
+    const fake = setup(tmp, []);
+    fake.files[join(tmp, "abf.config.json")] = JSON.stringify({
+      mod: { name: "TestMod" },
+      backend: { kind: "bp_apply", minProtocol: 1 },
+      stubs: { classes: [], scriptClasses: [THING], modAssets: [], widgetMembers: { [FAKE_BP]: { TitleText: TEXT_BLOCK, Missing: TEXT_BLOCK } } },
+    });
+    const calls: ReflectRequest[] = [];
+    const cap = captureDeps(fake, () => fakeBackend(true, calls, [], undefined, memberReflect(["widgetTree", "scs", "cookedClass"])));
+    cap.deps.cwd = tmp;
+    const code = await main(["stubs"], cap.deps);
+    const out = cap.text();
+    assert.equal(code, 0, out);
+    assert.match(out, /warning ABFC3015: stubs\.widgetMembers: \/Game\/Fake\/BP_Fake\.BP_Fake_C TitleText is found by abfc stubs itself now; remove the entry/);
+    assert.match(out, /warning ABFC3015: stubs\.widgetMembers is deprecated; 1 entry was not found by reflection and is still taken from the config: \/Game\/Fake\/BP_Fake\.BP_Fake_C:Missing/);
+    assert.doesNotMatch(out, /ABFC3014/);
+    assert.doesNotMatch(out, /ABFC3011: stubs\.widgetMembers: \/Game\/Fake\/BP_Fake\.BP_Fake_C TitleText/, "a discovered member needs no scriptClasses hint");
+    assert.match(out, /1 member\(s\) beyond class defaults/);
+
+    const dir = join(tmp, ".abfc", "stubs", "ue5.4.4-1050002");
+    const bp = readFileSync(join(dir, "Game", "Fake", "BP_Fake.d.ts"), "utf8");
+    assert.match(bp, /readonly TitleText: /);
+    assert.equal((bp.match(/TitleText:/g) ?? []).length, 1);
+    assert.match(bp, /@bpWidget/);
+    assert.match(bp, /readonly Missing: UObject;/);
+    const index = JSON.parse(readFileSync(join(dir, "_index.json"), "utf8")) as { discovered: string[] };
+    assert.deepEqual(index.discovered, [`${FAKE_BP}:TitleText (widget)`]);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("abfc stubs: a backend without member discovery warns ABFC3014 for Blueprint classes; widgetTree and scs alone say variables are missing", async () => {
+  const cases: Array<[string[] | undefined, RegExp]> = [
+    [undefined, /warning ABFC3014: the backend did not list the members that class defaults cannot show \(widget and component variables\) for 1 Blueprint class/],
+    [["widgetTree", "scs"], /warning ABFC3014: the backend found the designer widgets and components of 1 Blueprint class\(es\) but could not list their other variables/],
+  ];
+  for (const [sources, pattern] of cases) {
+    const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-stubs-"));
+    try {
+      const fake = setup(tmp, []);
+      const cap = captureDeps(fake, () => fakeBackend(true, [], [], undefined, memberReflect(sources)));
+      cap.deps.cwd = tmp;
+      const code = await main(["stubs"], cap.deps);
+      const out = cap.text();
+      assert.equal(code, 0, out);
+      assert.match(out, pattern);
+      assert.doesNotMatch(out, /ABFC3015/);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   }
 });

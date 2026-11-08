@@ -70,6 +70,7 @@ function merge(into: ReflectData, add: ReflectData): void {
     const sup = (into.supers ??= {});
     for (const [k, v] of Object.entries(add.supers)) if (sup[k] === undefined) sup[k] = v;
   }
+  if (add.memberSources !== undefined) into.memberSources = [...new Set([...(into.memberSources ?? []), ...add.memberSources])];
   into.errors.push(...add.errors);
 }
 
@@ -181,19 +182,6 @@ async function reflectAndRead(ctx: CliContext, backend: Backend): Promise<number
     }
   }
 
-  for (const [cls, members] of Object.entries(config.stubs.widgetMembers)) {
-    for (const [member, widget] of Object.entries(members)) {
-      if (data.classes[widget] === undefined) {
-        output.diag({
-          severity: "warning",
-          code: "ABFC3011",
-          message: `stubs.widgetMembers: ${cls} ${member} is a ${widget}, which is not in the stubs; it is typed UObject.`,
-          fix: `add "${widget}" to stubs.scriptClasses and run "abfc stubs".`,
-        });
-      }
-    }
-  }
-
   // Emit and write.
   const t2 = clock();
   const { files, index } = emitStubsWithIndex({
@@ -227,6 +215,55 @@ async function reflectAndRead(ctx: CliContext, backend: Backend): Promise<number
       code: "ABFC3013",
       message: `${index.chainGaps.length} stub class(es) inherit from a class without members: ${firstFew(index.chainGaps)}.`,
       fix: 'check the reflect warnings (ABFC4002) above and run "abfc stubs" again; report the class if the warning stays.',
+    });
+  }
+  // Members that class defaults cannot list (widgets, components, widget/component variables) come from the backend's member pass.
+  const gameClasses = Object.entries(data.classes)
+    .filter(([p, c]) => p.startsWith("/Game/") && c.castOnly !== true)
+    .map(([p]) => p);
+  const memberSources = data.memberSources ?? [];
+  if (gameClasses.length > 0 && !memberSources.includes("cookedClass")) {
+    const partial = memberSources.includes("widgetTree") && memberSources.includes("scs");
+    output.diag({
+      severity: "warning",
+      code: "ABFC3014",
+      message: partial
+        ? `the backend found the designer widgets and components of ${gameClasses.length} Blueprint class(es) but could not list their other variables; plain variables of widget or component type are missing from the stubs.`
+        : `the backend did not list the members that class defaults cannot show (widget and component variables) for ${gameClasses.length} Blueprint class(es); such members are missing from the stubs.`,
+      fix: 'update abf-mod-editor-mcp (see docs/backend.md) and check the reflect warnings (ABFC4002) above, then run "abfc stubs" again.',
+    });
+  }
+  const discovered = new Set(index.discovered.map((d) => d.slice(0, d.lastIndexOf(" (")).toLowerCase()));
+  for (const [cls, members] of Object.entries(config.stubs.widgetMembers)) {
+    for (const [member, widget] of Object.entries(members)) {
+      if (discovered.has(`${cls}:${member}`.toLowerCase())) continue;
+      if (data.classes[widget] === undefined) {
+        output.diag({
+          severity: "warning",
+          code: "ABFC3011",
+          message: `stubs.widgetMembers: ${cls} ${member} is a ${widget}, which is not in the stubs; it is typed UObject.`,
+          fix: `add "${widget}" to stubs.scriptClasses and run "abfc stubs".`,
+        });
+      }
+    }
+  }
+
+  const widgetEntries = Object.entries(config.stubs.widgetMembers).flatMap(([cls, members]) => Object.keys(members).map((m) => ({ cls, member: m })));
+  const found = widgetEntries.filter((e) => discovered.has(`${e.cls}:${e.member}`.toLowerCase()));
+  for (const e of found) {
+    output.diag({
+      severity: "warning",
+      code: "ABFC3015",
+      message: `stubs.widgetMembers: ${e.cls} ${e.member} is found by abfc stubs itself now; remove the entry (stubs.widgetMembers is deprecated).`,
+    });
+  }
+  const kept = widgetEntries.filter((e) => !found.includes(e));
+  if (kept.length > 0) {
+    output.diag({
+      severity: "warning",
+      code: "ABFC3015",
+      message: `stubs.widgetMembers is deprecated; ${kept.length} entr${kept.length === 1 ? "y was" : "ies were"} not found by reflection and ${kept.length === 1 ? "is" : "are"} still taken from the config: ${firstFew(kept.map((e) => `${e.cls}:${e.member}`))}.`,
+      fix: "report these members; the setting will be removed.",
     });
   }
   const profileDir = win32.join(paths.stubsDir, env.profile.id);
@@ -265,6 +302,7 @@ async function reflectAndRead(ctx: CliContext, backend: Backend): Promise<number
 
   output.info(`stubs written to ${profileDir}`);
   output.info(`  ${files.size} file(s), ${index.members} member(s), ${index.deprecated.length} blocked, ${index.overridden.length} overridden, ${index.opaque.length} opaque`);
+  output.info(`  ${index.discovered.length} member(s) beyond class defaults (widgets, components, widget/component variables)`);
   output.info(`  hand-made assets: ${manual.length}`);
   output.json({ dir: profileDir, files: index.files, members: index.members, opaque: index.opaque, modAssets: manual.map((m) => m.asset) });
   return 0;

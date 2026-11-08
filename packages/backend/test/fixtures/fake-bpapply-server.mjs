@@ -149,6 +149,7 @@ function callTool(name, args) {
             classes: { "/Script/Fake.Widget": { meta: "/Script/CoreUObject.Class", ancestors: [], functions: [], properties: [], castPin: "AsWidget" } },
             structs: {},
             errors: ["one member failed"],
+            memberSources: ["widgetTree", "scs", "cookedClass", 7],
             ...(args.gameplay_tags === true ? { gameplayTags: { tags: ["ClassManager.EntityDirector.Fake"], sources: { settings: 1 } } } : {}),
             ...(Array.isArray(args.supers_of) ? { supers: { "/Script/Fake.Widget": ["/Script/Fake.Base", "/Script/CoreUObject.Object"], "/Script/Fake.Bad": [1] } } : {}),
           }),

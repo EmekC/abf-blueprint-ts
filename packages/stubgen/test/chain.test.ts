@@ -355,3 +355,60 @@ test("castOnly entries are not audited; an old backend's far native ancestors th
   assert.deepEqual(index.noSupers, [BPCHILD]);
   assert.match(files.get("Script/FakeGame.d.ts") ?? "", /export declare class GamePlayerController extends FakeActor \{\}/);
 });
+
+test("discovered widget, component and plain members: declared once, readonly where designer-owned, no TS2416/TS2417 on the chain", () => {
+  const HUD = "/Game/Fake/W_Hud.W_Hud_C";
+  const TEXT = "/Script/FakeUMG.TextBlock";
+  const MESH = "/Script/FakeEngine.FakeMeshComponent";
+  const member = (name: string, kind: "widget" | "component" | "member", type: string): ReflectClass["properties"][number] => ({ name, kind, pins: [objectPin(name, type)] });
+  const data: ReflectData = {
+    engineVersion: "5.4.4-fake",
+    classes: {
+      [ACTOR]: cls([OBJ], [getter("GetOwner", ACTOR)]),
+      [BPBASE]: cls([ACTOR, OBJ], [], [member("Shared", "member", HUD), member("Arms", "component", MESH), { name: "Count", pins: [pin("Count", "out", "int")] }], true),
+      [BPCHILD]: cls(
+        [ACTOR, OBJ],
+        [],
+        [member("shared", "member", HUD), member("TitleText", "widget", TEXT), member("HudRef", "member", HUD), member("Arms", "component", MESH), { name: "Count", pins: [pin("Count", "out", "int")] }],
+        true,
+      ),
+    },
+    structs: {},
+    supers: { [BPCHILD]: [BPBASE, ACTOR, OBJ], [BPBASE]: [ACTOR, OBJ] },
+    errors: [],
+  };
+  const { files, index } = emitStubsWithIndex(input(data));
+  const base = files.get("Game/Fake/BP_Base.d.ts") ?? "";
+  const child = files.get("Game/Fake/BP_Child.d.ts") ?? "";
+  assert.match(base, /^ {2}Shared: W_Hud_C \| null;$/m);
+  assert.doesNotMatch(base, /readonly Shared/);
+  assert.match(base, /^ {2}readonly Arms: FakeMeshComponent \| null;$/m);
+  assert.match(base, / \* @bpComponent/);
+  assert.doesNotMatch(base, /@bpWidget|@bpHandMade/);
+  assert.match(child, /^ {2}readonly TitleText: TextBlock \| null;$/m);
+  assert.match(child, / \* @bpWidget/);
+  assert.match(child, /^ {2}HudRef: W_Hud_C \| null;$/m);
+  assert.doesNotMatch(child, /@bpHandMade|@bpComponent/);
+  // Inherited members (any case) are not repeated on the subclass; ordinary properties keep today's behavior.
+  assert.doesNotMatch(child, /Shared|Arms/i);
+  assert.match(child, /^ {2}Count: int;$/m);
+  assert.deepEqual(index.discovered, [`${BPBASE}:Arms (component)`, `${BPBASE}:Shared (member)`, `${BPCHILD}:HudRef (member)`, `${BPCHILD}:TitleText (widget)`]);
+  assert.deepEqual(index.chainGaps, []);
+  const consumer = `
+import type { BP_Child_C } from "/Game/Fake/BP_Child";
+import type { W_Hud_C } from "/Game/Fake/W_Hud";
+declare const c: BP_Child_C;
+declare const hud: W_Hud_C;
+const a = c.Shared;
+const b = c.Arms;
+const t = c.TitleText;
+c.HudRef = hud;
+c.Shared = hud;
+// @ts-expect-error designer widgets are read-only
+c.TitleText = t;
+// @ts-expect-error components are read-only
+c.Arms = b;
+void [a, b, t];
+`;
+  assert.deepEqual(checkProgram(files, consumer), []);
+});

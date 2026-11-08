@@ -254,6 +254,7 @@ test("reflect reads the result file (BOM tolerated) and maps the filter", async 
     assert.equal(res.data.classes["/Script/Fake.Widget"]?.castPin, "AsWidget");
     assert.deepEqual(res.data.structs, {});
     assert.deepEqual(res.data.errors, ["one member failed"]);
+    assert.deepEqual(res.data.memberSources, ["widgetTree", "scs", "cookedClass"]);
     assert.deepEqual(res.filter, { contentVersion: "v1", rules: [["Allow", "Fake.Widget"], ["Block", "Fake.Widget.Secret"]] });
     assert.deepEqual(calls()[0]?.args, {
       mod: "TestMod",

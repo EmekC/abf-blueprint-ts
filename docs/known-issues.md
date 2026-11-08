@@ -145,6 +145,8 @@ These are known and documented; work around them as described.
 
 - **Stubs from a backend without `supers` skip Blueprint parents (ABFC3013).** Members declared on a parent Blueprint are missing from the stub of a class that inherits from it; the class extends its nearest native ancestor instead. Update the backend (a version whose `reflect` reports `supers`) and run `abfc stubs`. A class that fails to load stays a members-less placeholder in the chain (ABFC3013 names it).
 
+- **Member discovery needs the backend's member pass (ABFC3014).** Widgets, components and widget/component variables of game Blueprints are found from the widget tree, the SCS templates and the class package's cooked name map; native classes' component and widget properties (a character's mesh or movement component) come from the class's Python documentation. The cooked reader needs the editor's uncompressed, unencrypted IoStore content; otherwise `cookedClass` is missing and the warning appears. Members that none of these sources names are still missing, and only single object references are recovered (arrays and other types are listed by the class defaults anyway).
+
 ### Engine defaults
 
 - **Optional parameters come from engine metadata.** Functions whose default is not stored as metadata keep their parameters required, except the short curated list. If an argument you expect to be optional is required, pass it explicitly.

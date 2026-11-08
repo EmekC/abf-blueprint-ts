@@ -41,6 +41,8 @@ export interface StubIndex {
   noSupers: string[];
   /** Opaque classes that extend UObject because no chain or `supers` entry names their parent. */
   opaqueNoParent: string[];
+  /** `<class>:<member> (<kind>)` members found beyond the class defaults (widgets, components, widget/component variables). */
+  discovered: string[];
 }
 
 const EMPTY_CLASS: ReflectClass = {
@@ -118,6 +120,7 @@ interface Counters {
   deprecated: string[];
   overridden: string[];
   missing: string[];
+  discovered: string[];
 }
 
 function pickProperty(m: ReflectMember): ReflectPin | undefined {
@@ -135,6 +138,7 @@ function renderClass(
   counters: Counters,
   opaque: boolean,
   fb: FileBuilder,
+  inherited: ReadonlySet<string>,
 ): string {
   const { profile, filter } = input;
   const name = tsIdent(path);
@@ -152,6 +156,8 @@ function renderClass(
   const callArrayShort = profile.nodeClasses.callArrayFunction.slice(profile.nodeClasses.callArrayFunction.lastIndexOf(".") + 1);
 
   for (const p of c.properties) {
+    // A member beyond the class defaults is listed once, on the class that declares it.
+    if (p.kind !== undefined && inherited.has(p.name.toLowerCase())) continue;
     const pin = pickProperty(p);
     if (!pin || seen.has(`i:${p.name}`)) {
       counters.missing.push(`${path}:${p.name}`);
@@ -172,7 +178,11 @@ function renderClass(
     }
     mt.push(`@bpType ${g}`);
     if (isUnsupported(g)) mt.push(`@bpUnsupported ${unsupportedLabel(g)}`);
-    instance.push(jsdoc(mt, "  ") + `  ${memberKey(p.name)}: ${tsOfGrammar(g, fb)};\n`);
+    if (p.kind === "widget") mt.push("@bpWidget");
+    else if (p.kind === "component") mt.push("@bpComponent");
+    if (p.kind !== undefined) counters.discovered.push(`${path}:${p.name} (${p.kind})`);
+    const ro = p.kind === "widget" || p.kind === "component" ? "readonly " : "";
+    instance.push(jsdoc(mt, "  ") + `  ${ro}${memberKey(p.name)}: ${tsOfGrammar(g, fb)};\n`);
   }
 
   if (!opaque) {
@@ -317,7 +327,18 @@ export function emitStubsWithIndex(input: EmitInput): { files: Map<string, strin
   for (const p of chained) for (const a of classChain(reflect, p)) chainPaths.add(a);
   for (const a of chainPaths) if (!defined.has(a) && !opaqueKinds.has(a)) opaqueKinds.set(a, "class");
 
-  const counters: Counters = { members: 0, deprecated: [], overridden: [], missing: [] };
+  const counters: Counters = { members: 0, deprecated: [], overridden: [], missing: [], discovered: [] };
+  // Lower-case property names of every reflected class on a class's parent chain (discovered members are not repeated on subclasses).
+  const inheritedMemo = new Map<string, ReadonlySet<string>>();
+  const inheritedOf = (path: string): ReadonlySet<string> => {
+    let s = inheritedMemo.get(path);
+    if (s === undefined) {
+      const acc = new Set<string>();
+      for (const a of classChain(reflect, path)) for (const x of classes.get(a)?.properties ?? []) acc.add(x.name.toLowerCase());
+      inheritedMemo.set(path, (s = acc));
+    }
+    return s;
+  };
   const parentOf = (path: string): string | null => (path === UOBJECT_PATH ? null : (classChain(reflect, path)[0] ?? UOBJECT_PATH));
 
   const opaqueNoParent: string[] = [];
@@ -338,10 +359,10 @@ export function emitStubsWithIndex(input: EmitInput): { files: Map<string, strin
     if (!g) groups.set(spec, (g = []));
     g.push({ path, render });
   };
-  for (const [path, c] of classes) add(path, (fb) => renderClass(path, c, emittedParent.get(path) ?? null, input, counters, false, fb));
+  for (const [path, c] of classes) add(path, (fb) => renderClass(path, c, emittedParent.get(path) ?? null, input, counters, false, fb, inheritedOf(path)));
   for (const [path, s] of structs) add(path, (fb) => renderStruct(path, s.fields, fb));
   for (const [path, kind] of opaqueKinds) {
-    if (kind === "class") add(path, (fb) => renderClass(path, EMPTY_CLASS, emittedParent.get(path) ?? UOBJECT_PATH, input, counters, true, fb));
+    if (kind === "class") add(path, (fb) => renderClass(path, EMPTY_CLASS, emittedParent.get(path) ?? UOBJECT_PATH, input, counters, true, fb, new Set()));
     else if (kind === "struct") add(path, (fb) => renderStruct(path, null, fb));
     else add(path, (fb) => renderEnum(path, fb));
   }
@@ -397,6 +418,7 @@ export function emitStubsWithIndex(input: EmitInput): { files: Map<string, strin
       chainGaps: chainGaps.sort(),
       noSupers: noSupers.sort(),
       opaqueNoParent: opaqueNoParent.sort(),
+      discovered: counters.discovered.sort(),
     },
   };
 }
