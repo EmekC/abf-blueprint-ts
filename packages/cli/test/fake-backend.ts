@@ -23,7 +23,7 @@ import type {
 } from "@abfc/backend";
 import { loadProfile } from "@abfc/env";
 import { parseBpType, parseExport, pinObjectText, sha256 } from "@abfc/ir";
-import type { BackendInfo, T3dNode } from "@abfc/ir";
+import type { BackendInfo, IrParam, T3dNode } from "@abfc/ir";
 import { ALL_TOOLS, fixInfo } from "./helpers.js";
 
 const profile = loadProfile();
@@ -96,6 +96,7 @@ interface Spec {
   variable_defaults?: Record<string, string | null>;
   remove_variables?: string[];
   remove_functions?: string[];
+  functions?: Array<{ name: string; inputs?: IrParam[]; outputs?: IrParam[]; access?: string }>;
   struct_fields?: Array<{ name: string; friendly: string; guid: string; type: string }>;
   graphs?: SpecGraph[];
   raw?: Array<{ kind: "graph"; graph: string; text: string } | { kind: "python"; code: string }>;
@@ -150,6 +151,8 @@ export interface FakeBackendOptions {
   classManagerRowTag?: boolean;
   /** The backend has the bp_apply feature `variable_defaults` (`variableDefaults` capability; default false). */
   variableDefaults?: boolean;
+  /** The backend has the bp_apply feature `function_graphs` (`functionGraphs` capability; default true). */
+  functionGraphs?: boolean;
 }
 
 const ALL_ASSET_OPS = ["rename", "delete", "reparent", "recreate"];
@@ -452,6 +455,8 @@ export class FakeBackend implements Backend {
     capabilities.reflectDefaults = o.reflectDefaults === true;
     capabilities.classManagerRowTag = o.classManagerRowTag === true && o.classManagerRows === true;
     capabilities.variableDefaults = o.variableDefaults === true;
+    capabilities.functionGraphs = o.functionGraphs !== false;
+    if (o.functionGraphs === false) capabilities.bpApplyFeatures = capabilities.bpApplyFeatures.filter((x) => x !== "function_graphs");
     if (o.structs === true) capabilities.createKinds = [...capabilities.createKinds, "UserDefinedStruct"];
     if (o.structs === true) capabilities.createKinds = [...capabilities.createKinds, "UserDefinedStruct"];
     this.infoValue = {
@@ -775,6 +780,18 @@ export class FakeBackend implements Backend {
         if (!a.nodes.some((n) => n.graph === name)) scripted.push({ asset: spec.asset, message: `cannot remove function ${name}: no such function graph` });
         a.nodes = a.nodes.filter((n) => n.graph !== name);
       }
+      // like the backend's step 5: the signature creates the graph with its entry (and result) node; the body comes in `graphs`
+      for (const fn of spec.functions ?? []) {
+        if (a.nodes.some((n) => n.graph === fn.name)) {
+          scripted.push({ asset: spec.asset, message: `function graph ${fn.name} already exists` });
+          continue;
+        }
+        const flags = fn.access === "private" ? 201588736 : fn.access === "protected" ? 201850880 : 201457664;
+        a.nodes.push({ name: `K2Node_FunctionEntry_${++this.counter}`, cls: "/Script/BlueprintGraph.K2Node_FunctionEntry", graph: fn.name, head: ["NodePosX=0", "NodePosY=0", `ExtraFlags=${flags}`], pins: [] });
+        if ((fn.outputs ?? []).length > 0) {
+          a.nodes.push({ name: `K2Node_FunctionResult_${++this.counter}`, cls: "/Script/BlueprintGraph.K2Node_FunctionResult", graph: fn.name, head: ["NodePosX=900", "NodePosY=0"], pins: [] });
+        }
+      }
       const nodeIds: Record<string, Record<string, string>> = {};
       if (this.options.selfEventCalls === false && specError === null) specError = this.zeroPinSelfCall(a, spec);
       (spec.graphs ?? []).forEach((g, k) => {
@@ -1090,7 +1107,15 @@ export class FakeBackend implements Backend {
     }
     const find = (end: string): { node: FNode; pin: string } => {
       const dot = end.indexOf(".");
-      const name = ids[end.slice(0, dot)];
+      const id = end.slice(0, dot);
+      // the reserved ends of a function graph: its own entry and result node
+      const reserved = id === "entry" ? "K2Node_FunctionEntry" : id === "result" ? "K2Node_FunctionResult" : null;
+      if (reserved !== null && ids[id] === undefined) {
+        const own = a.nodes.find((n) => n.graph === g.graph && n.cls.endsWith(reserved));
+        if (own === undefined) throw new Error(`fake stage: wire end ${end} names no ${reserved} in graph ${g.graph}`);
+        return { node: own, pin: end.slice(dot + 1) };
+      }
+      const name = ids[id];
       const node = a.nodes.find((n) => n.name === name);
       if (node === undefined) throw new Error(`fake stage: wire end ${end} names no node of this spec`);
       return { node, pin: end.slice(dot + 1) };

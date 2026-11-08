@@ -44,6 +44,8 @@ export interface BpApplyAssetSpec {
   remove_variables?: string[];
   /** Function graphs to delete (TS wins: hand-made functions of a non-hybrid class). */
   remove_functions?: string[];
+  /** Backend bp_apply feature `function_graphs`: own function graphs to create (signature only; the body comes in `graphs`). A name also in `remove_functions` is replaced. */
+  functions?: Array<{ name: string; inputs: IrParam[]; outputs: IrParam[]; access?: "public" | "protected" | "private" }>;
   graphs?: BpGraphSpec[];
   raw?: Array<{ kind: "graph"; graph: string; text: string } | { kind: "python"; code: string }>;
   /** Backend 2.5.0 (bp_apply feature `class_manager_row`): write the class-manager row of a `@director` class after the Blueprints are saved. */
@@ -174,6 +176,8 @@ export function renderMainSpec(a: AssetPlan, caps: BackendCapabilities, profile:
     for (const [from, to] of u.unit.wires) {
       const conv = (end: string): string => {
         const dot = end.indexOf(".");
+        // the reserved ends of a function graph (entry, result) are the backend's own ids: no unit prefix
+        if (u.unit.kind === "function" && (end.slice(0, dot) === "entry" || end.slice(0, dot) === "result")) return end;
         return `${specNodeId(u.unit, end.slice(0, dot))}${end.slice(dot)}`;
       };
       g.wires!.push([conv(from), conv(to)]);
@@ -216,6 +220,19 @@ export function renderMainSpec(a: AssetPlan, caps: BackendCapabilities, profile:
   }
   if ((a.removeVariables?.length ?? 0) > 0) spec.remove_variables = [...a.removeVariables!];
   if ((a.removeFunctions?.length ?? 0) > 0) spec.remove_functions = [...a.removeFunctions!];
+  if ((a.functions?.length ?? 0) > 0) spec.functions = a.functions!.map((f) => ({ name: f.name, inputs: f.inputs, outputs: f.outputs, access: f.access }));
+  // A removed function graph is gone before the graphs are edited (nothing to edit); a replaced one is created fresh (nothing to remove).
+  // A function graph without any node or wire to add needs no edit at all.
+  for (const graph of a.removeFunctions ?? []) {
+    if (a.functions?.some((f) => f.name === graph) === true) {
+      const g = graphs.get(graph);
+      if (g !== undefined) g.remove = [];
+    } else graphs.delete(graph);
+  }
+  for (const f of a.functions ?? []) {
+    const g = graphs.get(f.name);
+    if (g !== undefined && (g.remove?.length ?? 0) === 0 && g.add.length === 0 && (g.wires?.length ?? 0) === 0) graphs.delete(f.name);
+  }
   if (a.variableDefaults !== undefined && Object.keys(a.variableDefaults).length > 0) spec.variable_defaults = { ...a.variableDefaults };
   spec.graphs = [...graphs.values()];
   return spec;
@@ -419,7 +436,7 @@ export async function applyPlan(
 ): Promise<ApplyOutcome> {
   if (plan.assets.length === 0) return { ok: true, perAsset: [] };
   // Assets that only carry class defaults have no graph work: they take part in pass 5 only (new own fields still go through the main spec).
-  const planned = plan.assets.filter((a) => a.create !== undefined || a.struct !== undefined || a.units.length > 0 || a.variables.length > 0 || (a.removeUnits?.length ?? 0) > 0 || (a.removeTags?.length ?? 0) > 0 || (a.removeGraphNodes?.length ?? 0) > 0 || (a.removeVariables?.length ?? 0) > 0 || (a.removeFunctions?.length ?? 0) > 0 || Object.keys(a.variableDefaults ?? {}).length > 0);
+  const planned = plan.assets.filter((a) => a.create !== undefined || a.struct !== undefined || a.units.length > 0 || a.variables.length > 0 || (a.removeUnits?.length ?? 0) > 0 || (a.removeTags?.length ?? 0) > 0 || (a.removeGraphNodes?.length ?? 0) > 0 || (a.removeVariables?.length ?? 0) > 0 || (a.removeFunctions?.length ?? 0) > 0 || (a.functions?.length ?? 0) > 0 || Object.keys(a.variableDefaults ?? {}).length > 0);
   if (planned.length === 0) {
     const only: AssetApplyOutcome[] = plan.assets.map((a) => ({ asset: a.asset, nodeIds: {}, finalText: null, compile: [], tagName: null, tagNames: {}, defaultsApplied: false, defaultsWarnings: [] }));
     const added = await applyDefaultsPass(backend, plan, only, caps, o);

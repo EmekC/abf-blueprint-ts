@@ -186,3 +186,10 @@ test("variableDefaults follows the bp_apply feature variable_defaults", () => {
   assert.equal(capabilitiesFrom([], info(["class_manager_row"]), null).variableDefaults, false);
   assert.equal(capabilitiesFrom([], null, null).variableDefaults, false);
 });
+
+test("functionGraphs follows the bp_apply feature function_graphs", () => {
+  const info = (features: string[]): RawBackendInfo => ({ protocol: 1, bpApply: { features } }) as RawBackendInfo;
+  assert.equal(capabilitiesFrom([], info(["function_graphs"]), null).functionGraphs, true);
+  assert.equal(capabilitiesFrom([], info(["class_manager_row"]), null).functionGraphs, false);
+  assert.equal(capabilitiesFrom([], null, null).functionGraphs, false);
+});

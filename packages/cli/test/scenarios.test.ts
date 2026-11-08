@@ -1025,3 +1025,88 @@ test("(S29) a second run while the lock is held is ABFC4019; a stale lock is rep
     assert.ok(!existsSync(lockPath(r.dir)), "the lock stays after a failed run");
   });
 });
+
+// ---- (S32) undecorated methods are Blueprint function graphs ----
+
+const withFunction = (name: string, expr: string, call = name): string =>
+  tally("BP_Tally")
+    .replace("this.Total = by;", `this.Total = this.${call}(by);`)
+    .replace(/\n\}\n$/, `\n\n  ${name}(x: int): int {\n    return ${expr};\n  }\n}\n`);
+
+test("(S32) a function is created, recreated on a change (its caller applied again), renamed and removed; the next build is up to date", async () => {
+  await withRig({ ...OPS }, async (r) => {
+    tallyOnly(r.dir, withFunction("twice", "x + x"));
+    let x = await r.run(["doctor"]);
+    assert.match(x.out, /function graphs: yes/);
+
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    let specs = appliedSpecs(r).filter((s) => s.asset === TA);
+    assert.deepEqual(specs.flatMap((s) => (s.functions ?? []).map((f: any) => f.name)), ["twice"]);
+    assert.equal(specs.some((s) => s.remove_functions !== undefined), false);
+    const fn = specs.flatMap((s) => s.functions ?? [])[0];
+    assert.deepEqual(fn.outputs, [{ name: "ReturnValue", type: "int" }]);
+    assert.equal(fn.access, "public");
+    assert.deepEqual(r.backend.functionNames(TA), ["twice"]);
+    x = await r.run(["build"]);
+    assert.match(x.out, /up to date/);
+
+    // a changed body: the graph is recreated whole and the caller is applied again
+    let before = appliedSpecs(r).length;
+    writeFileSync(join(r.dir, "src", "Tally.ts"), withFunction("twice", "x * 2"), "utf8");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    specs = appliedSpecs(r).slice(before).filter((s) => s.asset === TA);
+    assert.deepEqual(specs.flatMap((s) => s.remove_functions ?? []), ["twice"]);
+    assert.deepEqual(specs.flatMap((s) => (s.functions ?? []).map((f: any) => f.name)), ["twice"]);
+    const graphs = specs.flatMap((s) => s.graphs ?? []);
+    assert.equal(graphs.find((g: any) => g.graph === "twice").remove.length, 0);
+    assert.ok(graphs.some((g: any) => g.graph === "EventGraph" && g.remove.length > 0), "the caller of the recreated function is applied again");
+    assert.deepEqual(r.backend.functionNames(TA), ["twice"]);
+    x = await r.run(["build"]);
+    assert.match(x.out, /up to date/);
+
+    // a renamed function: the old graph goes, the new one is created
+    before = appliedSpecs(r).length;
+    writeFileSync(join(r.dir, "src", "Tally.ts"), withFunction("thrice", "x * 3"), "utf8");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    specs = appliedSpecs(r).slice(before).filter((s) => s.asset === TA);
+    assert.deepEqual(specs.flatMap((s) => s.remove_functions ?? []), ["twice"]);
+    assert.deepEqual(specs.flatMap((s) => (s.functions ?? []).map((f: any) => f.name)), ["thrice"]);
+    assert.deepEqual(r.backend.functionNames(TA), ["thrice"]);
+    x = await r.run(["build"]);
+    assert.match(x.out, /up to date/);
+
+    // the method is gone from the TS: the graph is removed
+    before = appliedSpecs(r).length;
+    writeFileSync(join(r.dir, "src", "Tally.ts"), tally("BP_Tally"), "utf8");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    specs = appliedSpecs(r).slice(before).filter((s) => s.asset === TA);
+    assert.deepEqual(specs.flatMap((s) => s.remove_functions ?? []), ["thrice"]);
+    assert.equal(specs.some((s) => s.functions !== undefined), false);
+    assert.deepEqual(r.backend.functionNames(TA), []);
+    x = await r.run(["build"]);
+    assert.match(x.out, /up to date/);
+    assert.doesNotMatch(x.out, /ABFC5014/);
+  });
+});
+
+test("(S32b) a backend without the function_graphs feature: a function is ABFC2044 and nothing is applied", async () => {
+  await withRig({ ...OPS, functionGraphs: false }, async (r) => {
+    tallyOnly(r.dir, withFunction("twice", "x + x"));
+    let x = await r.run(["doctor"]);
+    assert.match(x.out, /function graphs: no/);
+    x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, /ABFC2044/);
+    assert.match(x.out, /function twice needs a backend with bp_apply feature function_graphs/);
+    assert.equal(appliedSpecs(r).length, 0);
+
+    // a class without functions still builds on that backend
+    writeFileSync(join(r.dir, "src", "Tally.ts"), tally("BP_Tally"), "utf8");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+  });
+});
