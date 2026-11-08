@@ -169,6 +169,8 @@ export interface Profile {
   };
   functions: {
     isValid: ProfileFunctionRef; arrayLength: ProfileFunctionRef; lessInt: ProfileFunctionRef; addInt: ProfileFunctionRef;
+    /** Converts a Format Text result to a string (template literal where a string is expected). */
+    textToString: ProfileFunctionRef;
     equal: Record<ProfileEqualKey, ProfileFunctionRef>;
     notEqual: Record<ProfileEqualKey, ProfileFunctionRef>;
   };

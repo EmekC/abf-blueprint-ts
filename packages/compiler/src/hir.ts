@@ -122,7 +122,7 @@ export type HirExpr = (
   | { k: "arrayFind"; array: HirExpr; value: HirExpr; elem: BpType }
   /** Pure query of an own map/set: `has` (Map_Contains/Set_Contains, bool), `get` (Map_Find `Value`, the value type), `size` (Map_Length/Set_Length, int). `key` is the key or element. */
   | { k: "containerQuery"; container: "map" | "set"; op: "has" | "get" | "size"; target: HirExpr; targetType: BpType; key?: HirExpr }
-  /** Template literal where a `text` is expected: FormatText. `format` already has `{`, `}` and backticks escaped. */
+  /** Template literal: FormatText. `type` "text" = the Format Text result; "string" = followed by Conv_TextToString (a string is expected, or no type is expected, e.g. a const). `format` already has `{`, `}` and backticks escaped. */
   | { k: "formatText"; format: string; args: Array<{ name: string; value: HirExpr }> }
   /** Object literal of a stub struct (`@bpKind struct`): MakeStruct. `struct` is the struct path. */
   | { k: "makeStruct"; struct: string; fields: Array<{ name: string; value: HirExpr }> }

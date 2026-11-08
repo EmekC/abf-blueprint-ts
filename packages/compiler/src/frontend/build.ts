@@ -1143,10 +1143,14 @@ class HirBuilder {
     if (ci && ci.kind === "class") this.classMeta[ci.path] = ci.meta;
   }
 
-  /** `` `Hunger ${hunger}` `` where a text is expected: FormatText. Arg names come from the substitutions. */
+  /**
+   * `` `Hunger ${hunger}` ``: FormatText where a text is expected; FormatText then Conv_TextToString where a string is
+   * expected or nothing is expected (a const). Arg names come from the substitutions.
+   */
   private formatText(node: ts.TemplateExpression, expected: BpType | undefined): HirExpr {
     const f: DiagSink = this.sink;
-    if (expected !== "text") return f.fail("ABFC2099", "a template literal is only supported where a text value is expected", node);
+    if (expected === "name") return f.fail("ABFC2099", "a template literal cannot be a name; build a string and convert it, e.g. KismetStringLibrary.Conv_StringToName(`...`)", node);
+    if (expected !== undefined && expected !== "text" && expected !== "string") return f.fail("ABFC2099", `a template literal is only supported where a text or string value is expected, not ${expected}`, node);
     const esc = (s: string): string => s.replace(/`/g, "``").replace(/[{}]/g, (c) => "`" + c);
     const allowed = new Set(["text", "string", "name", "int", "int64", "float", "double", "real", "bool"]);
     const used = new Set<string>();
@@ -1165,7 +1169,7 @@ class HirBuilder {
       args.push({ name, value });
       format += `{${name}}` + esc(span.literal.text);
     });
-    return { k: "formatText", format, args, type: "text", span: this.sp(node) };
+    return { k: "formatText", format, args, type: expected === "text" ? "text" : "string", span: this.sp(node) };
   }
 
   /** `{ A: 1, B }` where the contextual type is a stub struct: MakeStruct (full literals, property assignments only). */
@@ -1287,9 +1291,10 @@ class HirBuilder {
         return this.formatText(node as ts.TemplateExpression, expected);
       case ts.SyntaxKind.ObjectLiteralExpression:
         return this.makeStruct(node as ts.ObjectLiteralExpression, expected);
+      case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
       case ts.SyntaxKind.StringLiteral:
-        if (expected !== undefined && expected.startsWith("enum:")) return this.enumLit(node as ts.StringLiteral, expected);
-        return this.lit(node, (node as ts.StringLiteral).text, expected !== undefined && STRINGY.has(expected) ? expected : "string");
+        if (expected !== undefined && expected.startsWith("enum:")) return this.enumLit(node as ts.StringLiteral | ts.NoSubstitutionTemplateLiteral, expected);
+        return this.lit(node, (node as ts.StringLiteral | ts.NoSubstitutionTemplateLiteral).text, expected !== undefined && STRINGY.has(expected) ? expected : "string");
       case ts.SyntaxKind.Identifier: {
         if (expected !== undefined && expected.startsWith("class:")) {
           const ci = this.classArg(node as ts.Identifier);
@@ -1341,16 +1346,14 @@ class HirBuilder {
         return f.fail("ABFC2099", "await is not supported", node);
       case ts.SyntaxKind.ConditionalExpression:
         return f.fail("ABFC2099", "the conditional operator `?:` is only supported as the whole right-hand side of this.X = c ? a : b", node);
-      case ts.SyntaxKind.TemplateExpression:
-      case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
       case ts.SyntaxKind.TaggedTemplateExpression:
-        return f.fail("ABFC2099", "template strings are not supported", node);
+        return f.fail("ABFC2099", "tagged template strings are not supported", node);
       default:
         return f.fail("ABFC2099", `expression of kind ${ts.SyntaxKind[node.kind]} is not supported`, node);
     }
   }
 
-  private enumLit(node: ts.StringLiteral, expected: BpType): HirExpr {
+  private enumLit(node: ts.StringLiteral | ts.NoSubstitutionTemplateLiteral, expected: BpType): HirExpr {
     const ctx = this.checker.getContextualType(node);
     if (ctx) {
       const members = ctx.isUnion() ? ctx.types : [ctx];

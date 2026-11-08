@@ -122,6 +122,7 @@ These are known and documented; work around them as described.
 ### TypeScript language
 
 - **TypeScript enums are not supported.** A Blueprint enum has no TypeScript equivalent here; a bare `enum` compiles as plain TypeScript but cannot be a field or event parameter type. Use a string-literal union or an enum from the engine stubs.
+- **Template literals** become a Format Text node; where a string is expected (for example `PrintString`) or in a `const`, abfc adds To String (Text). Numbers are formatted as Format Text formats them (culture rules), not as JavaScript does. A template literal cannot be a `name` (ABFC2099); convert a string with `KismetStringLibrary.Conv_StringToName`.
 - **Own field initializers** accept literals of the field type only (number, boolean, string, name, enum text). Struct, object, array and text defaults are set in the editor.
 - **ABFC2084 repeats on every build** on a backend without the `variable_defaults` feature, as long as an initializer of an existing field is changed. Update the backend (`abfc doctor` shows `variable defaults: yes`).
 

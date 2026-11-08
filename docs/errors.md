@@ -783,9 +783,9 @@ Severity: error · Exit: 1
 
 Meaning: a construct is not supported (the general "outside the subset" error), with the construct named in the message; also raised when the checked IR is invalid.
 
-Typical cause: a statement, operator or class member that has no Blueprint equivalent yet.
+Typical cause: a statement, operator or class member that has no Blueprint equivalent yet; a template literal where neither a `text` nor a `string` is expected (for example a `name` field); a tagged template.
 
-Fix: rewrite the code with supported constructs, as the message says. If you think the construct should work, report it with the message and a small example.
+Fix: rewrite the code with supported constructs, as the message says. If you think the construct should work, report it with the message and a small example. For a name, convert explicitly: ``KismetStringLibrary.Conv_StringToName(`...${x}`)`` (add `/Script/Engine.KismetStringLibrary` to `stubs.scriptClasses` and run `abfc stubs` if it is missing).
 
 ### ABFC2101
 

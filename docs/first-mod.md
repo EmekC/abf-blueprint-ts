@@ -96,6 +96,17 @@ const player = GameplayStatics.GetPlayerCharacter();   // PlayerIndex is 0
 
 Only a trailing run of parameters can be left out, as in TypeScript. Run `abfc stubs` once (and again after updating abfc) so the stubs carry the defaults.
 
+### Text from values: template literals
+
+A template literal becomes a Format Text node. Where a `string` is expected (such as `PrintString`) or in a `const`, abfc adds `To String (Text)` (`Conv_TextToString`) after it:
+
+```ts
+KismetSystemLibrary.PrintString(`Hello World From Typescript ${this.Count}`);
+const line = `Score: ${this.Score}`;   // a string
+```
+
+Numbers are formatted the way Format Text formats them (culture rules, so large numbers can get grouping separators). A template literal cannot be a `name` ([ABFC2099](errors.md#abfc2099)).
+
 ### Overriding an engine event
 
 To run code when the actor begins play, override the parent's event. `@override` is for events and functions the parent class already has; `@event` is only for new custom events (using `@event` on a name the parent has is [ABFC2078](errors.md#abfc2078)):

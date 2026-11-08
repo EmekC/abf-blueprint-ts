@@ -63,6 +63,7 @@
     "arrayLength": { "class": "/Script/Engine.KismetArrayLibrary", "name": "Array_Length" },
     "lessInt": { "class": "/Script/Engine.KismetMathLibrary", "name": "Less_IntInt" },
     "addInt": { "class": "/Script/Engine.KismetMathLibrary", "name": "Add_IntInt" },
+    "textToString": { "class": "/Script/Engine.KismetTextLibrary", "name": "Conv_TextToString" },
     "equal": {
       "object": { "class": "/Script/Engine.KismetMathLibrary", "name": "EqualEqual_ObjectObject" },
       "name": { "class": "/Script/Engine.KismetMathLibrary", "name": "EqualEqual_NameName" },

@@ -484,6 +484,13 @@ export class UnitBuilder {
         const defaults: Record<string, string> = {};
         for (const x of ops) this.feed(x.o, id, x.a.name, defaults);
         this.settle(id, defaults);
+        if (e.type === "string") {
+          // `string` expected: Format Text -> Conv_TextToString (its input pin is InText).
+          const fn = this.profile.functions.textToString;
+          const conv = this.pureCall(fn.class, fn.name, e.span);
+          this.link(`${id}.Result`, `${conv}.InText`);
+          return { pin: `${conv}.${P.returnValue}`, nulls };
+        }
         return { pin: `${id}.Result`, nulls };
       }
       case "makeStruct": {

@@ -9,7 +9,7 @@ export type double = number & { readonly __bpNumber?: "double" };
 
 export type name = string & { readonly __bpString?: "name" };
 /**
- * Localizable text. A template literal where a `text` is expected (`` `Hunger ${hunger}` ``) becomes a Format Text node: each
+ * Localizable text. A template literal where a `text` is expected (`` `Hunger ${hunger}` ``) becomes a Format Text node (where a `string` is expected, or in a `const`, it is converted with To String (Text)): each
  * substitution is an argument named after its identifier or property, and literal `{`, `}` are escaped for you. An object literal
  * where a stub struct is expected (`{ Size: 12 }`) becomes a Make Struct node; spreads and computed names are not supported.
  */
