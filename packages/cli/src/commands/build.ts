@@ -22,6 +22,7 @@ import type { AssetPlan, Diagnostic, IrAsset, IrModule, IrUnit, Span, T3dNode } 
 import { readLock } from "@abfc/stubgen";
 import { win32 } from "node:path";
 import type { CliContext } from "../context.js";
+import { SLOW_BACKEND_HINT } from "../progress.js";
 import { readUnitCache, stubLockHashOf, writeUnitCache } from "../unitcache.js";
 import type { UnitCache } from "../unitcache.js";
 import {
@@ -98,29 +99,59 @@ function errorDiagnostics(
  * so editor drift in an unchanged asset is found); by default assets with nothing to plan are not read.
  */
 export async function runBuild(ctx: CliContext, session: BackendSession, rec: Recorder, opts: { readAll?: boolean } = {}): Promise<boolean> {
+  return (await runBuildWithSummary(ctx, session, rec, opts)).ok;
+}
+
+/** What a build did, for the summary line. */
+export interface BuildSummary {
+  ok: boolean;
+  upToDate: boolean;
+  units: number;
+  assets: number;
+  unchanged: number;
+}
+
+const FAILED_BUILD: BuildSummary = { ok: false, upToDate: false, units: 0, assets: 0, unchanged: 0 };
+
+/** {@link runBuild} that also says how many units and assets were built. */
+export async function runBuildWithSummary(
+  ctx: CliContext,
+  session: BackendSession,
+  rec: Recorder,
+  opts: { readAll?: boolean } = {},
+): Promise<BuildSummary> {
   const t0 = performance.now();
   let ok = false;
   try {
-    ok = await buildInner(ctx, session, rec, opts.readAll === true);
-    return ok;
+    const summary = await buildInner(ctx, session, rec, opts.readAll === true);
+    ok = summary.ok;
+    return summary;
   } finally {
     rec.record("build.total", since(t0), ok);
   }
 }
 
-async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorder, readAll: boolean): Promise<boolean> {
+async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorder, readAll: boolean): Promise<BuildSummary> {
   const { output, config, env, args, projectDir, paths } = ctx;
   const mod = config.mod.name;
   const profile = env.profile;
 
   await ensureStubsForBuild(ctx, session, rec);
-  if (emitAll(ctx, lockDiagnostics(ctx, "build"))) return false;
+  if (emitAll(ctx, lockDiagnostics(ctx, "build"))) return FAILED_BUILD;
   const loaded = await ensureUsedStubsForBuild(ctx, session, rec);
 
   const tFront = performance.now();
-  const fe = compileFrontend(ctx, loaded);
+  const fe = await ctx.progress.run(
+    "Checking TypeScript",
+    (s) => {
+      const r = compileFrontend(ctx, loaded);
+      if (r.ir === null) s.fail("TypeScript has errors");
+      return r;
+    },
+    { done: (r) => `Checked ${countUnits(r.ir!)} unit(s) in ${r.ir!.assets.length} asset(s)` },
+  );
   rec.record("build.frontend", since(tFront), fe.ir !== null, fe.ir === null ? 0 : countUnits(fe.ir));
-  if (fe.ir === null) return false;
+  if (fe.ir === null) return FAILED_BUILD;
   let ir = fe.ir;
   const { backend, info } = await session.open();
   const caps = info.capabilities;
@@ -128,7 +159,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   if (!caps.stdMacros && ir.assets.some((a) => a.units.some((u) => u.nodes.some((n) => n.sem?.k === "std_macro")))) {
     const re = lowerChecked(fe.hir, profile, { loopMacros: false });
     for (const d of re.diagnostics) ctx.output.diag(d);
-    if (re.ir === null) return false;
+    if (re.ir === null) return FAILED_BUILD;
     ir = re.ir;
     ctx.output.diag({
       severity: "warning",
@@ -150,14 +181,18 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   };
   const owned = ir.assets.filter((a) => a.units.length > 0 || a.classDefaults !== undefined || a.classManagerRow !== undefined || a.director !== undefined || a.variables.some((v) => v.temp !== true) || (a.director === undefined && liveManifest(a.path)?.directorRow !== undefined));
   // Feature gates: Map/Set types and creatable kinds the backend (or abfc's native policy) lacks fail here, before the stage is touched.
-  if (emitAll(ctx, featureGates({ ...ir, assets: [...structAssets, ...owned] }, caps))) return false;
+  if (emitAll(ctx, featureGates({ ...ir, assets: [...structAssets, ...owned] }, caps))) return FAILED_BUILD;
 
   // Renames of moved classes and deletes of assets abfc created are decided before the stage is touched (ABFC5012 errors stop here).
   const opsPlan = planAssetOps(fe.hir, listManifests(projectDir), mod, { assetOps: caps.assetOps });
-  if (emitAll(ctx, opsPlan.diagnostics)) return false;
+  if (emitAll(ctx, opsPlan.diagnostics)) return FAILED_BUILD;
 
   const tStage = performance.now();
-  const { status: stage, resynced, changedInMod } = await ensureStage(backend, env, config, { resync: args.flags.resync, warn: (d) => output.diag(d) });
+  const { status: stage, resynced, changedInMod } = await ensureStage(backend, env, config, {
+    resync: args.flags.resync,
+    warn: (d) => output.diag(d),
+    progress: ctx.progress,
+  });
   // The assets the Mod Editor saved (their files caused the re-sync): their class defaults are applied again, TypeScript wins.
   const editedInMod = new Set<string>();
   for (const rel of changedInMod) {
@@ -183,7 +218,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     directorRows: owned.flatMap((a) => (a.director !== undefined ? [a.director.asset] : [])),
   });
   rec.record("build.assetOps", since(tOps), assetOpsOutcome.ok);
-  if (!assetOpsOutcome.ok) return false;
+  if (!assetOpsOutcome.ok) return FAILED_BUILD;
   const opsJson: { renamed?: Array<{ from: string; to: string }>; deleted?: string[] } = {
     ...(assetOpsOutcome.renamed.length > 0 ? { renamed: assetOpsOutcome.renamed } : {}),
     ...(assetOpsOutcome.deleted.length > 0 ? { deleted: assetOpsOutcome.deleted } : {}),
@@ -296,7 +331,22 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     snapshotVariableTypes.set(path, new Map(parsed.variables.map((v) => [v.name, v.type])));
     snapshotParents.set(path, parsed.parentClass);
   };
-  for (const a of readAssets) keepSnapshot(a.path, (await readAsset(ctx, backend, a.path)).parsed);
+  if (readAssets.length > 0) {
+    await ctx.progress.run(
+      "Reading owned assets",
+      async (s) => {
+        for (const [i, a] of readAssets.entries()) {
+          keepSnapshot(a.path, (await readAsset(ctx, backend, a.path)).parsed);
+          s.tick(i + 1, readAssets.length);
+        }
+      },
+      {
+        total: readAssets.length,
+        slowHint: SLOW_BACKEND_HINT,
+        done: () => `Read ${readAssets.length} asset(s)${skipped.length > 0 ? `, ${skipped.length} unchanged not read` : ""}`,
+      },
+    );
+  }
 
   // A changed `extends`: the same family is reparented on the stage (every unit is applied again), another family recreates the asset
   // (it is planned as missing, its manifest ignored). Assets read here without a recorded parent learn it (backfill).
@@ -307,7 +357,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     const m = manifests.get(a.path) ?? null;
     if (cls === undefined || m === null) continue;
     const res = await runParentChange(ctx, backend, { asset: a.path, manifest: m, snapshotParent: snapshotParents.get(a.path) ?? null, cls, assetOps: caps.assetOps });
-    if (emitAll(ctx, res.diagnostics)) return false;
+    if (emitAll(ctx, res.diagnostics)) return FAILED_BUILD;
     if (res.action === "reparent") {
       keepSnapshot(a.path, (await readAsset(ctx, backend, a.path)).parsed);
       for (const u of a.units) forceReplan.add(`${a.path} ${u.id}`);
@@ -353,7 +403,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     directorRows: caps.classManagerRows,
     variableDefaults: caps.variableDefaults,
   });
-  if (emitAll(ctx, planned.diagnostics)) return false;
+  if (emitAll(ctx, planned.diagnostics)) return FAILED_BUILD;
   for (const a of skipped) for (const u of a.units) planned.upToDate.push(`${a.path} ${u.id}`);
   // A parent change or backfill of an asset the plan does not apply anything to is recorded now (applied assets get it with their final manifest).
   const planAssetPaths = new Set(planned.plan.assets.map((a) => a.asset));
@@ -395,21 +445,34 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
 
   if (planned.plan.assets.length === 0) {
     refreshSources(new Set());
-    if (!(await runDeferredDeletes())) return false;
+    if (!(await runDeferredDeletes())) return FAILED_BUILD;
     writeCache(ctx, owned, cache, stubLockHash, caps.eventMeta === true);
-    output.info(`up to date (${planned.upToDate.length} unit(s) unchanged)`);
+    output.info(`up to date (${planned.upToDate.length} unit(s) unchanged)`, "ok");
     output.json({ applied: [], upToDate: planned.upToDate, ...opsJson });
-    return true;
+    return { ok: true, upToDate: true, units: 0, assets: 0, unchanged: planned.upToDate.length };
   }
 
   let route: "native" | "fallback" = "native";
-  const applied = await applyPlan(backend, planned.plan, caps, profile, {
-    cacheDir: paths.cacheDir,
-    record: (step, seconds) => {
-      if (step === "apply.phaseA") route = "fallback";
-      rec.record(step, seconds);
+  const unitCount = planned.plan.assets.reduce((n, a) => n + a.units.length, 0);
+  const applied = await ctx.progress.run(
+    `Applying ${unitCount} unit(s) to ${planned.plan.assets.length} asset(s)`,
+    (s) =>
+      applyPlan(backend, planned.plan, caps, profile, {
+        cacheDir: paths.cacheDir,
+        record: (step, seconds) => {
+          if (step === "apply.phaseA") route = "fallback";
+          s.detail(`${step.replace(/^apply\./, "")} pass done`);
+          rec.record(step, seconds);
+        },
+      }).then((r) => {
+        if (!r.ok) s.fail("bp_apply failed; the staged copy was rolled back");
+        return r;
+      }),
+    {
+      slowHint: SLOW_BACKEND_HINT,
+      done: () => (route === "fallback" ? "Applied to the staged copy (two-phase fallback)" : "Applied to the staged copy"),
     },
-  });
+  );
 
   const irByPath = new Map(owned.map((a) => [a.path, a]));
   if (!applied.ok) {
@@ -438,7 +501,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
         fix: "run abfc build --verbose, or check the run folder named in the backend log.",
       });
     }
-    return false;
+    return FAILED_BUILD;
   }
 
   // Success: record the manifest and the source map of every touched asset. The manifest keeps what is on the stage (nodes, hashes)
@@ -596,8 +659,27 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   // Unreal's own compile of the changed assets.
   const tCompile = performance.now();
   // A struct was compiled by the backend when it was created; a build that only created structs has nothing else to compile.
-  const report = appliedAssets.length > 0 ? await backend.compile(mod, appliedAssets) : ({ clean: true, messages: [] } as unknown as Awaited<ReturnType<typeof backend.compile>>);
-  const compileOk = report.clean || !report.messages.some((m) => m.severity === "error");
+  type CompileReport = Awaited<ReturnType<typeof backend.compile>>;
+  const compileClean = (r: CompileReport): boolean => r.clean || !r.messages.some((m) => m.severity === "error");
+  const report: CompileReport =
+    appliedAssets.length > 0
+      ? await ctx.progress.run(
+          `Compiling ${appliedAssets.length} asset(s) in Unreal`,
+          async (s) => {
+            const r = await backend.compile(mod, appliedAssets);
+            if (!compileClean(r)) s.fail("Unreal compile reported errors");
+            return r;
+          },
+          {
+            slowHint: SLOW_BACKEND_HINT,
+            done: (r) => {
+              const w = r.messages.filter((m) => m.severity === "warning").length;
+              return w > 0 ? `Unreal compile clean (${w} warning(s))` : "Unreal compile clean";
+            },
+          },
+        )
+      : ({ clean: true, messages: [] } as unknown as CompileReport);
+  const compileOk = compileClean(report);
   rec.record("build.compile", since(tCompile), compileOk);
   if (!compileOk) {
     for (const asset of appliedAssets) {
@@ -647,7 +729,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
       output.info("the stage keeps the graphs that failed to compile (--keep-failed-stage); abfc build --resync discards them");
     }
     output.json({ applied: [], compileFailed: true, stageResynced, ...opsJson });
-    return false;
+    return FAILED_BUILD;
   }
   if (retireRows.length > 0) {
     // A row another class still uses is never deleted.
@@ -677,14 +759,14 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   refreshSources(new Set(planned.plan.assets.map((a) => a.asset)));
   if (!(await runDeferredDeletes())) {
     output.json({ applied: stagedUnits, assets: appliedAssets, deleteFailed: true, ...opsJson });
-    return false;
+    return FAILED_BUILD;
   }
-  for (const m of report.messages) if (m.severity === "warning" && args.flags.verbose) output.info(`[Unreal warning] ${m.message}`);
+  for (const m of report.messages) if (m.severity === "warning" && args.flags.verbose) output.info(`[Unreal warning] ${m.message}`, "warn");
 
   writeCache(ctx, owned, cache, stubLockHash, caps.eventMeta === true);
-  output.info(`applied ${stagedUnits.length > 0 ? stagedUnits.join(", ") : "no units"} in ${appliedAssets.join(", ")} (route: ${route})${createdStructs.length > 0 ? `, created struct ${createdStructs.join(", ")}` : ""}${removedUnits.length > 0 ? `, removed ${removedUnits.join(", ")}` : ""}${removedOrphanTags > 0 ? `, removed ${removedOrphanTags} orphan tag comment(s)` : ""}`);
+  output.info(`applied ${stagedUnits.length > 0 ? stagedUnits.join(", ") : "no units"} in ${appliedAssets.join(", ")} (route: ${route})${createdStructs.length > 0 ? `, created struct ${createdStructs.join(", ")}` : ""}${removedUnits.length > 0 ? `, removed ${removedUnits.join(", ")}` : ""}${removedOrphanTags > 0 ? `, removed ${removedOrphanTags} orphan tag comment(s)` : ""}`, "ok");
   output.json({ applied: stagedUnits, assets: appliedAssets, ...(createdStructs.length > 0 ? { structs: createdStructs } : {}), route, upToDate: planned.upToDate, ...(removedUnits.length > 0 ? { removed: removedUnits } : {}), ...(removedOrphanTags > 0 ? { removedOrphanTags } : {}), ...opsJson });
-  return true;
+  return { ok: true, upToDate: false, units: stagedUnits.length, assets: appliedAssets.length, unchanged: planned.upToDate.length };
 }
 
 /** `abfc build`. */
@@ -692,7 +774,10 @@ export async function build(ctx: CliContext): Promise<number> {
   const rec = new Recorder(ctx);
   const session = new BackendSession(ctx, rec);
   try {
-    await runBuild(ctx, session, rec, { readAll: ctx.args.flags.drift });
+    const s = await runBuildWithSummary(ctx, session, rec, { readAll: ctx.args.flags.drift });
+    if (s.ok && s.upToDate) ctx.progress.summary(true, "Nothing to build", `${s.unchanged} unit(s) unchanged`);
+    else if (s.ok) ctx.progress.summary(true, "Built", `${s.units} unit(s) in ${s.assets} asset(s)`);
+    else ctx.progress.summary(false, "Build failed", "see the errors above");
   } finally {
     await session.close();
     rec.print();

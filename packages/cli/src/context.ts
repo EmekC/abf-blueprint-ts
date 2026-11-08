@@ -3,12 +3,23 @@ import type { Backend } from "@abfc/backend";
 import { assertNotInModFolder, cleanBundledRuntimes, findProjectDir, installInfo, resolveEnvironment, verifyBundledRuntime } from "@abfc/env";
 import type { Environment, Host, InstallInfo, ProjectConfig } from "@abfc/env";
 import type { ParsedArgs } from "./args.js";
+import type { CliFlags } from "./args.js";
 import { Output } from "./output.js";
+import { Progress, lineTerminal, progressMode, realClock } from "./progress.js";
+import type { ProgressClock, Terminal } from "./progress.js";
+import { colorEnabled, makeStyler } from "./style.js";
+import type { Styler } from "./style.js";
+
+export interface BackendStartOptions {
+  cold?: boolean | undefined;
+  /** Receives every line the backend server writes to stderr. */
+  onStderr?: ((line: string) => void) | undefined;
+}
 
 /** Everything with side effects that tests replace. */
 export interface CliDeps {
   host: Host;
-  startBackend: (env: Environment, o?: { cold: boolean }) => Promise<Backend>;
+  startBackend: (env: Environment, o?: BackendStartOptions) => Promise<Backend>;
   now: () => Date;
   /** Lists the files below a mod folder for the publish file check (default: a read-only walk of the real file system). */
   listFiles?: ((root: string) => Array<{ rel: string; size: number }>) | undefined;
@@ -39,11 +50,35 @@ export interface CliDeps {
         clean(): ReturnType<typeof cleanBundledRuntimes>;
       }
     | undefined;
+  /** Where progress is drawn (default: stderr, or a plain line terminal over `stderr` when that is injected). */
+  term?: Terminal | undefined;
+  /** Timer source for progress (default: real timers). */
+  clock?: ProgressClock | undefined;
 }
 
 /** The install functions of `deps`, or the real ones. */
 export function installOf(deps: CliDeps): NonNullable<CliDeps["install"]> {
   return deps.install ?? { info: installInfo, verify: verifyBundledRuntime, clean: cleanBundledRuntimes };
+}
+
+/** Progress and color settings for one run. */
+export interface Ui {
+  progress: Progress;
+  stdoutStyle: Styler;
+  stderrStyle: Styler;
+}
+
+export function createUi(flags: CliFlags, term: Terminal, clock: ProgressClock): Ui {
+  const stderrStyle = makeStyler(!flags.json && colorEnabled(term.env, term.isTTY));
+  const stdoutStyle = makeStyler(!flags.json && colorEnabled(term.env, term.stdoutIsTTY));
+  const progress = new Progress({
+    mode: progressMode(flags, term),
+    term,
+    style: stderrStyle,
+    clock,
+    notes: flags.verbose && !flags.json,
+  });
+  return { progress, stdoutStyle, stderrStyle };
 }
 
 export interface CliPaths {
@@ -62,6 +97,7 @@ export interface CliContext {
   config: ProjectConfig;
   env: Environment;
   output: Output;
+  progress: Progress;
   paths: CliPaths;
 }
 
@@ -81,7 +117,7 @@ export function pathsFor(projectDir: string): CliPaths {
  * Finds the project (`--project` or the working folder, walking up to `abf.config.json`), refuses a project inside a mod
  * folder (ABFC1020) and resolves the environment. Throws AbfcError only for ABFC1020 and ABFC1021.
  */
-export function loadContext(args: ParsedArgs, deps: CliDeps): CliContext {
+export function loadContext(args: ParsedArgs, deps: CliDeps, ui?: Ui): CliContext {
   const start = args.flags.project ?? deps.cwd ?? process.cwd();
   const projectDir = findProjectDir(start, (p) => deps.host.exists(p));
   assertNotInModFolder(deps.host, projectDir);
@@ -94,14 +130,18 @@ export function loadContext(args: ParsedArgs, deps: CliDeps): CliContext {
   if (f.python !== undefined) flags.python = f.python;
   if (f.headlessDir !== undefined) flags.headlessDir = f.headlessDir;
   const env = resolveEnvironment(deps.host, { projectDir, flags });
+  const { progress, stdoutStyle, stderrStyle } = ui ?? createUi({ ...f, quiet: true }, lineTerminal(() => {}), realClock());
   const output = new Output({
     command: args.command ?? "",
     json: f.json,
     projectDir,
     stdout: deps.stdout,
     stderr: deps.stderr,
+    progress,
+    stdoutStyle,
+    stderrStyle,
   });
   // The environment's other diagnostics are shown by `abfc doctor`; a mod name in the wrong case is corrected silently otherwise.
   if (args.command !== "doctor") for (const d of env.diagnostics) if (d.code === "ABFC1045") output.diag(d);
-  return { args, deps, projectDir, config: env.config, env, output, paths: pathsFor(projectDir) };
+  return { args, deps, projectDir, config: env.config, env, output, progress, paths: pathsFor(projectDir) };
 }

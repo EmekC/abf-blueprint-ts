@@ -35,12 +35,13 @@ import {
 } from "@abfc/stubgen";
 import type { Catalog, ManualAsset, StubCache } from "@abfc/stubgen";
 import type { CliContext } from "../context.js";
+import { SLOW_BACKEND_HINT } from "../progress.js";
 import { reflectAll } from "../reflectchunks.js";
 import { recordRun } from "../runs.js";
 import { backendIdOf, resolveStubRequest, shortName, stubsNeedWork, usedPlaceholdersToGenerate } from "../stubsauto.js";
 import type { StubMode } from "../stubsauto.js";
 import { refreshTagsFile } from "../tags.js";
-import { BackendSession, Recorder, pruneManifestsToStage, since } from "./common.js";
+import { BackendSession, Recorder, backendStartOptions, pruneManifestsToStage, since } from "./common.js";
 import { ensureStage } from "./stage.js";
 
 /** Folders of the mod's Content that are never stubbed. */
@@ -125,6 +126,13 @@ const sortedUnique = (xs: Iterable<string>): string[] => [...new Set(xs)].sort()
 /** How many `reflect:` messages of the backend are printed one by one. */
 const REFLECT_MESSAGES_SHOWN = 20;
 
+/** What the code that runs inside a progress step needs of it (a no-op when the work needs no step). */
+interface StepHandle {
+  tick(count: number, total?: number): void;
+  detail(text: string): void;
+}
+const NO_STEP: StepHandle = { tick: () => undefined, detail: () => undefined };
+
 /** Merged reflect results that had a round without the cooked-class member source. */
 const cookedMissing = new WeakSet<ReflectData>();
 
@@ -153,76 +161,108 @@ async function reflectAndRead(ctx: CliContext, backend: Backend, run: StubRun): 
   if (!run.readModAssets) {
     manual.push(...run.seed!.manual);
   } else if (assetList.length > 0) {
-    for (const asset of assetList) {
-      try {
-        const snap = await backend.read(mod, asset);
-        const text = deps.host.readFile(snap.exportPath);
-        manual.push(manualFromExport(asset, text, snap.structure, owned[asset] ?? { units: [], variables: [] }));
-      } catch (e) {
-        if (e instanceof AbfcError && e.diagnostic.code !== "ABFC4002" && e.diagnostic.code !== "ABFC4100") throw e;
-        // The mod also holds assets that are not Blueprints (mod config, class-manager rows, structs, metadata): the backend says so, and they have no stub to make.
-        if (e instanceof AbfcError && e.diagnostic.code === "ABFC4002" && NOT_A_BLUEPRINT.test(e.diagnostic.message)) continue;
-        output.diag({
-          severity: "warning",
-          code: "ABFC4002",
-          message: `could not read ${asset} for stubs, skipped: ${e instanceof Error ? e.message : String(e)}`,
-        });
-      }
-    }
+    let skipped = 0;
+    await ctx.progress.run(
+      "Reading mod assets",
+      async (s) => {
+        for (const [i, asset] of assetList.entries()) {
+          try {
+            const snap = await backend.read(mod, asset);
+            const text = deps.host.readFile(snap.exportPath);
+            manual.push(manualFromExport(asset, text, snap.structure, owned[asset] ?? { units: [], variables: [] }));
+          } catch (e) {
+            if (e instanceof AbfcError && e.diagnostic.code !== "ABFC4002" && e.diagnostic.code !== "ABFC4100") throw e;
+            skipped++;
+            // The mod also holds assets that are not Blueprints (mod config, class-manager rows, structs, metadata): the backend says so, and they have no stub to make.
+            if (e instanceof AbfcError && e.diagnostic.code === "ABFC4002" && NOT_A_BLUEPRINT.test(e.diagnostic.message)) continue;
+            output.diag({
+              severity: "warning",
+              code: "ABFC4002",
+              message: `could not read ${asset} for stubs, skipped: ${e instanceof Error ? e.message : String(e)}`,
+            });
+          } finally {
+            s.tick(i + 1, assetList.length);
+          }
+        }
+      },
+      {
+        total: assetList.length,
+        slowHint: SLOW_BACKEND_HINT,
+        done: () => `Read ${manual.length} mod asset(s)${skipped > 0 ? `, ${skipped} skipped` : ""}`,
+      },
+    );
   }
   recordRun(paths.runsFile, { at: at(), step: "stubs.read", seconds: (clock() - t0) / 1000, ok: true, units: manual.length, mode: "cold" });
 
   // Reflection: the configured classes, then every ancestor on their parent chains with members, the struct closure (depth 2) and the parent chains of the opaque types.
   const t1 = clock();
   const profileDir = win32.join(paths.stubsDir, env.profile.id);
-  const first =
-    run.classes.length + run.structs.length > 0
-      ? await reflectAll(
-          backend,
-          {
-            mod,
-            classes: run.classes,
-            structs: run.structs,
-            castTargets: run.castTargets,
-            ...(info.capabilities.gameplayTags ? { gameplayTags: true } : {}),
-          },
-          (l) => output.info(l),
-        )
-      : null;
-  // Nothing to reflect: the game's tags and the filter of the last run stay.
-  const filter = first !== null ? first.result.filter : (run.seed?.filter ?? { contentVersion: null, rules: [] });
-  const gameTags = first !== null ? (info.capabilities.gameplayTags ? (first.result.data.gameplayTags?.tags ?? []) : null) : readGameTags(profileDir);
-  if (first !== null && gameTags === null) {
-    output.diag({
-      severity: "warning",
-      code: "ABFC3012",
-      message: "the backend cannot list the game's gameplay tags; .abfc/tags.d.ts holds only the mod's own tags.",
-      fix: "update abf-mod-editor-mcp to 2.6.0 or newer, then run abfc generate again.",
-    });
-  }
-  const data: ReflectData = { engineVersion: null, classes: {}, structs: {}, errors: [] };
-  if (first !== null) merge(data, first.result.data);
-  // The seed's old messages stay with the run that produced them: data.errors holds this run's messages only.
-  if (run.seed !== null) merge(data, { ...run.seed.reflect, errors: [] });
-  const manualRefs = manual.flatMap((m) => manualReferences(m));
-  const manualParents = manual.map((m) => m.parent).filter((p): p is string => p !== null);
-  const manualPaths = new Set(manual.map((m) => m.classPath));
-  // Backends that report `supers` do so on every reflect call; with everything from the cache (nothing reflected now) the seed tells.
-  const supersSupported = (first !== null ? first.result.data.supers : run.seed?.reflect.supers) !== undefined;
-  const askedClasses = new Set<string>(run.classes);
-  const askedSupers = new Set<string>();
-  let structRounds = 0;
-  for (let round = 0; round < MAX_REFLECT_ROUNDS; round++) {
-    const needClasses = missingAncestors(data, manualParents, manualPaths).filter((p) => !askedClasses.has(p));
-    const needStructs = structRounds < 2 ? missingStructs(data, manualRefs) : [];
-    const needSupers = supersSupported ? classesWithoutSupers(data, manualRefs).filter((p) => !askedSupers.has(p) && !needClasses.includes(p)) : [];
-    if (needClasses.length + needStructs.length + needSupers.length === 0) break;
-    if (needStructs.length > 0) structRounds++;
-    for (const p of needClasses) askedClasses.add(p);
-    for (const p of needSupers) askedSupers.add(p);
-    const more = await backend.reflect({ mod, classes: needClasses, structs: needStructs, castTargets: [], ...(needSupers.length > 0 ? { supersOf: needSupers } : {}) });
-    merge(data, more.data);
-  }
+  const reflectCount = run.classes.length + run.structs.length;
+  const reflectBody = async (s: StepHandle) => {
+    // (runs inside the "Reflecting" step when there is something to reflect)
+    const first =
+      reflectCount > 0
+        ? await reflectAll(
+            backend,
+            {
+              mod,
+              classes: run.classes,
+              structs: run.structs,
+              castTargets: run.castTargets,
+              ...(info.capabilities.gameplayTags ? { gameplayTags: true } : {}),
+            },
+            (l) => {
+              output.info(l);
+              // The fallback reflects in chunks ("stubs: reflect chunk 2/5 (500 classes)"): the finished chunks are the counter.
+              const m = /reflect chunk (\d+)\/(\d+)/.exec(l);
+              if (m !== null) s.tick(Number(m[1]) - 1, Number(m[2]));
+            },
+          )
+        : null;
+    // Nothing to reflect: the game's tags and the filter of the last run stay.
+    const filter = first !== null ? first.result.filter : (run.seed?.filter ?? { contentVersion: null, rules: [] });
+    const gameTags = first !== null ? (info.capabilities.gameplayTags ? (first.result.data.gameplayTags?.tags ?? []) : null) : readGameTags(profileDir);
+    if (first !== null && gameTags === null) {
+      output.diag({
+        severity: "warning",
+        code: "ABFC3012",
+        message: "the backend cannot list the game's gameplay tags; .abfc/tags.d.ts holds only the mod's own tags.",
+        fix: "update abf-mod-editor-mcp to 2.6.0 or newer, then run abfc generate again.",
+      });
+    }
+    const data: ReflectData = { engineVersion: null, classes: {}, structs: {}, errors: [] };
+    if (first !== null) merge(data, first.result.data);
+    // The seed's old messages stay with the run that produced them: data.errors holds this run's messages only.
+    if (run.seed !== null) merge(data, { ...run.seed.reflect, errors: [] });
+    const manualRefs = manual.flatMap((m) => manualReferences(m));
+    const manualParents = manual.map((m) => m.parent).filter((p): p is string => p !== null);
+    const manualPaths = new Set(manual.map((m) => m.classPath));
+    // Backends that report `supers` do so on every reflect call; with everything from the cache (nothing reflected now) the seed tells.
+    const supersSupported = (first !== null ? first.result.data.supers : run.seed?.reflect.supers) !== undefined;
+    const askedClasses = new Set<string>(run.classes);
+    const askedSupers = new Set<string>();
+    let structRounds = 0;
+    for (let round = 0; round < MAX_REFLECT_ROUNDS; round++) {
+      const needClasses = missingAncestors(data, manualParents, manualPaths).filter((p) => !askedClasses.has(p));
+      const needStructs = structRounds < 2 ? missingStructs(data, manualRefs) : [];
+      const needSupers = supersSupported ? classesWithoutSupers(data, manualRefs).filter((p) => !askedSupers.has(p) && !needClasses.includes(p)) : [];
+      if (needClasses.length + needStructs.length + needSupers.length === 0) break;
+      if (needStructs.length > 0) structRounds++;
+      for (const p of needClasses) askedClasses.add(p);
+      for (const p of needSupers) askedSupers.add(p);
+      s.detail(`parents and structs, round ${round + 1}`);
+      const more = await backend.reflect({ mod, classes: needClasses, structs: needStructs, castTargets: [], ...(needSupers.length > 0 ? { supersOf: needSupers } : {}) });
+      merge(data, more.data);
+    }
+    return { first, filter, gameTags, data, supersSupported };
+  };
+  const { first, filter, gameTags, data, supersSupported } =
+    reflectCount > 0
+      ? await ctx.progress.run(`Reflecting ${reflectCount} class(es)`, reflectBody, {
+          slowHint: SLOW_BACKEND_HINT,
+          done: (r) => `Reflected ${Object.keys(r.data.classes).length} class(es), ${Object.keys(r.data.structs).length} struct(s)`,
+        })
+      : await reflectBody(NO_STEP);
   recordRun(paths.runsFile, {
     at: at(),
     step: "stubs.reflect",
@@ -260,16 +300,21 @@ async function reflectAndRead(ctx: CliContext, backend: Backend, run: StubRun): 
 
   // Emit and write.
   const t2 = clock();
-  const { files, index } = emitStubsWithIndex({
-    profile: env.profile,
-    reflect: data,
-    filter: { rules: rulesFromPairs(filter.rules), contentVersion: filter.contentVersion },
-    manual,
-    widgetMembers: config.stubs.widgetMembers,
-    mod,
-    opaque: [],
-    opaqueEnums: run.opaqueEnums,
-  });
+  const { files, index } = await ctx.progress.run(
+    "Generating stub declarations",
+    () =>
+      emitStubsWithIndex({
+        profile: env.profile,
+        reflect: data,
+        filter: { rules: rulesFromPairs(filter.rules), contentVersion: filter.contentVersion },
+        manual,
+        widgetMembers: config.stubs.widgetMembers,
+        mod,
+        opaque: [],
+        opaqueEnums: run.opaqueEnums,
+      }),
+    { done: (r) => `Generated ${r.files.size} stub file(s)` },
+  );
   const firstFew = (list: string[]): string => `${list.slice(0, 5).join(", ")}${list.length > 5 ? ", ..." : ""}`;
   if (index.noSupers.length > 0 && supersSupported) {
     output.diag({
@@ -361,40 +406,46 @@ async function reflectAndRead(ctx: CliContext, backend: Backend, run: StubRun): 
           { catalogSha256: "", gameClasses: 0, failed: failedFinal, added: run.added, noCatalog: backendIdOf(env) },
     createdAt: deps.now().toISOString(),
   });
-  writeStubSet(profileDir, {
-    files,
-    index,
-    lock,
-    coverage: coverageOf(data, index.opaque, data.errors),
-    cache: {
-      version: 1,
-      generator: STUBGEN_VERSION,
-      editorFingerprint: env.fingerprint ?? "",
-      reflect: data,
-      filter: { contentVersion: filter.contentVersion, rules: filter.rules },
-      manual,
+  await ctx.progress.run(
+    "Writing stub files",
+    async () => {
+    writeStubSet(profileDir, {
+      files,
+      index,
+      lock,
+      coverage: coverageOf(data, index.opaque, data.errors),
+      cache: {
+        version: 1,
+        generator: STUBGEN_VERSION,
+        editorFingerprint: env.fingerprint ?? "",
+        reflect: data,
+        filter: { contentVersion: filter.contentVersion, rules: filter.rules },
+        manual,
+      },
+      library: { version: 1, entries: libraryEntriesOf(files) },
+      names: run.catalog !== null ? completionNamesOf(run.catalog.catalog) : null,
+      clearRetired: run.readModAssets,
+    });
+    if (first !== null && gameTags !== null) writeGameTags(profileDir, gameTags);
+    mkdirSync(paths.abfcDir, { recursive: true });
+    const layout = runtimeLayout();
+    writeTsconfigPaths(
+      paths.abfcDir,
+      env.profile.id,
+      mod,
+      layout?.runtimeDts ?? declarationOf("@abfc/runtime"),
+      layout?.testkitDts ?? declarationOf("@abfc/testkit"),
+      layout?.irDts,
+    );
+    // The stage's own ini tags replace the old file's tags: a tag removed from the stage and the mod leaves tags.d.ts.
+    const stageNow = await backend.stageStatus(mod).catch(() => null);
+    refreshTagsFile(ctx, [], { stagingPath: stageNow?.stagingPath ?? null });
     },
-    library: { version: 1, entries: libraryEntriesOf(files) },
-    names: run.catalog !== null ? completionNamesOf(run.catalog.catalog) : null,
-    clearRetired: run.readModAssets,
-  });
-  if (first !== null && gameTags !== null) writeGameTags(profileDir, gameTags);
-  mkdirSync(paths.abfcDir, { recursive: true });
-  const layout = runtimeLayout();
-  writeTsconfigPaths(
-    paths.abfcDir,
-    env.profile.id,
-    mod,
-    layout?.runtimeDts ?? declarationOf("@abfc/runtime"),
-    layout?.testkitDts ?? declarationOf("@abfc/testkit"),
-    layout?.irDts,
+    { done: () => `Wrote ${files.size} stub file(s)` },
   );
-  // The stage's own ini tags replace the old file's tags: a tag removed from the stage and the mod leaves tags.d.ts.
-  const stageNow = await backend.stageStatus(mod).catch(() => null);
-  refreshTagsFile(ctx, [], { stagingPath: stageNow?.stagingPath ?? null });
   recordRun(paths.runsFile, { at: at(), step: "stubs.emit", seconds: (clock() - t2) / 1000, ok: true, units: files.size, mode: "cold" });
 
-  output.info(`stubs written to ${profileDir}`);
+  output.info(`stubs written to ${profileDir}`, "ok");
   output.info(`  ${files.size} file(s), ${index.members} member(s), ${index.deprecated.length} blocked, ${index.overridden.length} overridden, ${index.opaque.length} opaque`);
   output.info(`  ${index.discovered.length} member(s) beyond class defaults (widgets, components, widget/component variables)`);
   output.info(`  hand-made assets: ${manual.length}`);
@@ -411,6 +462,8 @@ async function reflectAndRead(ctx: CliContext, backend: Backend, run: StubRun): 
     failed: failedFinal,
     notFound: run.notFound,
   });
+  // A build that generates its stubs first ends with its own summary.
+  if (run.mode !== "build") ctx.progress.summary(true, "Stubs generated", profileDir);
   return 0;
 }
 
@@ -436,7 +489,11 @@ export async function generateStubs(ctx: CliContext, backend: Backend, mode: Stu
       fix: "point ABFC_BACKEND_DIR at a checkout that provides reflect (see docs/backend.md).",
     });
   }
-  const { resynced } = await ensureStage(backend, env, config, { resync: mode === "explicit" ? flags.resync : false, warn: (d) => output.diag(d) });
+  const { resynced } = await ensureStage(backend, env, config, {
+    resync: mode === "explicit" ? flags.resync : false,
+    warn: (d) => output.diag(d),
+    progress: ctx.progress,
+  });
   if (resynced) await pruneManifestsToStage(ctx, backend, mod);
 
   // The class catalog of this editor build: the file when it is current, else from the backend.
@@ -445,7 +502,10 @@ export async function generateStubs(ctx: CliContext, backend: Backend, mode: Stu
   if (catalog === null) {
     if (info.capabilities.catalog) {
       const tc = clock();
-      const res = await backend.catalog(mod);
+      const res = await ctx.progress.run("Reading the class catalog", () => backend.catalog(mod), {
+        slowHint: SLOW_BACKEND_HINT,
+        done: () => "Class catalog read",
+      });
       const c = catalogFromBackend(res.data, fingerprint, at());
       catalog = { catalog: c, sha256: writeCatalog(profileDir, c) };
       const seconds = (clock() - tc) / 1000;
@@ -514,6 +574,7 @@ export async function generateStubs(ctx: CliContext, backend: Backend, mode: Stu
       failed,
       notFound: req.notFound,
     });
+    if (mode !== "build") ctx.progress.summary(true, "Nothing to generate", profileDir);
     return 0;
   }
   if (full) {
@@ -543,7 +604,10 @@ export async function generateStubs(ctx: CliContext, backend: Backend, mode: Stu
 
 /** `abfc generate`: reflects the game's classes and mod assets through the backend and writes `.abfc/stubs/<profile>/`. */
 export async function generate(ctx: CliContext): Promise<number> {
-  const backend = await ctx.deps.startBackend(ctx.env);
+  const backend = await ctx.progress.run("Starting backend", () => ctx.deps.startBackend(ctx.env, backendStartOptions(ctx)), {
+    slowHint: SLOW_BACKEND_HINT,
+    done: () => "Backend started",
+  });
   try {
     const code = await generateStubs(ctx, backend, ctx.args.flags.add.length > 0 ? "add" : "explicit");
     if (code !== 0) return code;

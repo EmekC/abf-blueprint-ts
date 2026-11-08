@@ -3,6 +3,8 @@ import { parseArgs } from "node:util";
 export interface CliFlags {
   json: boolean;
   verbose: boolean;
+  /** `-q`/`--quiet`: hide the header, steps, summary and `done in` (results and diagnostics still print). */
+  quiet: boolean;
   project: string | undefined;
   editorRoot: string | undefined;
   modsDir: string | undefined;
@@ -72,6 +74,7 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
       options: {
         json: { type: "boolean" },
         verbose: { type: "boolean" },
+        quiet: { type: "boolean", short: "q" },
         project: { type: "string" },
         "editor-root": { type: "string" },
         "mods-dir": { type: "string" },
@@ -121,6 +124,7 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
     flags: {
       json: v.json === true,
       verbose: v.verbose === true,
+      quiet: v.quiet === true,
       project: v.project,
       editorRoot: v["editor-root"],
       modsDir: v["mods-dir"],

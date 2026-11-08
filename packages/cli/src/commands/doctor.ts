@@ -8,7 +8,9 @@ import type { ParsedArgs } from "../args.js";
 import { installOf } from "../context.js";
 import type { CliContext, CliDeps } from "../context.js";
 import { Output } from "../output.js";
+import { SLOW_BACKEND_HINT } from "../progress.js";
 import { backendInfoDiagnostics, recommendedBackendDiagnostics } from "./backend-version.js";
+import { backendStartOptions } from "./common.js";
 
 function show(label: string, r: Resolved<string>, extra = ""): string {
   const value = r.value === null ? "(not found)" : r.value;
@@ -30,9 +32,15 @@ function asDiagnostic(e: unknown, what: string): Diagnostic {
 
 /** `abfc doctor`: every discovered setting with its source, then the backend and its capabilities. Returns the exit code. */
 export async function doctor(ctx: CliContext): Promise<number> {
+  const code = await doctorInner(ctx);
+  ctx.progress.summary(code === 0, code === 0 ? "Environment OK" : "Environment has errors");
+  return code;
+}
+
+async function doctorInner(ctx: CliContext): Promise<number> {
   const { env, output, config, deps } = ctx;
 
-  output.info("abfc doctor");
+  output.info("abfc doctor", "bold");
   output.info(`  project          ${ctx.projectDir}`);
   output.info(`  mod              ${config.mod.name}`);
   output.info(`  profile          ${env.profile.id} (editor build tag ${env.profile.buildTag})`);
@@ -54,7 +62,7 @@ export async function doctor(ctx: CliContext): Promise<number> {
     }
   }
   const extra = ctx.args.flags.deep ? { install: installJson, runtimeCheck } : { install: installJson };
-  output.info("settings (winner and source: flag > env > abf.config.json > user config > auto):");
+  output.info("settings (winner and source: flag > env > abf.config.json > user config > auto):", "bold");
   output.info(show("editor root", env.editorRoot, env.appVersion ? `  (build ${env.appVersion})` : ""));
   output.info(show("documents", env.documents));
   output.info(show("mods folder", env.modsDir));
@@ -124,17 +132,20 @@ export async function doctor(ctx: CliContext): Promise<number> {
   else if (headlessDir === null) skip = "headless folder unknown";
   else if (headlessBlocked) skip = "the headless folder is not usable (see ABFC1012)";
   if (skip !== null) {
-    output.info(`backend: not checked (${skip})`);
+    output.info(`backend: not checked (${skip})`, "warn");
     output.json({ settings: settingsJson(ctx), backend: null, ...extra });
     return output.exitCode();
   }
 
   let backend: Backend | null = null;
   let info: BackendInfo | null = null;
+  const step = ctx.progress.start("Querying backend", { slowHint: SLOW_BACKEND_HINT });
   try {
-    backend = await deps.startBackend(env);
+    backend = await deps.startBackend(env, backendStartOptions(ctx));
     info = await backend.info();
+    step.succeed(`Backend answered (server ${info.serverVersion})`);
   } catch (e) {
+    step.fail("Backend did not answer");
     output.diag(asDiagnostic(e, "could not query the backend"));
   } finally {
     if (backend !== null) {

@@ -88,7 +88,9 @@ The full key list, validation, the schema-1 migration and the per-machine user c
 | `abfc adopt <asset> <event\|function>` | yes | One-time takeover of an existing hand-made unit (section 8.4). Deprecated since the TypeScript-wins model (warning ABFC5015): a build replaces a hand-made unit of the same name anyway. |
 | `abfc status` | yes | Drift report: owned units, their hashes, manual edits found. |
 
-Global flags: `--json` (machine-readable output for scripts and AI front ends), `--editor-root`, `--mod-dir`, `--backend-dir`, `--python`, `--headless-dir`, `--verbose`. Exit codes: 0 ok, 1 diagnostics (user errors), 2 environment or backend failure, 3 refused by a safety rule.
+Global flags: `--json` (machine-readable output for scripts and AI front ends), `--editor-root`, `--mod-dir`, `--backend-dir`, `--python`, `--headless-dir`, `--verbose`, `--quiet`/`-q`, `--timings`. Exit codes: 0 ok, 1 diagnostics (user errors), 2 environment or backend failure, 3 refused by a safety rule.
+
+Output contract: stdout carries results (and, with `--json`, the single JSON document); stderr carries diagnostics, progress and, with `--verbose`, the backend's own log (dimmed and indented while a step runs). Progress is a header (`abfc <command> · profile … · mod …`, except for `doctor`, whose stdout already says the same), one step per slow phase, a summary and `done in <time>`. A live spinner with counters (`Reading mod assets 12/40`) is drawn only when stderr is a terminal; otherwise (pipe, CI, tests) each finished step prints one plain line, `✔ <step> (<time>)` (`✖` on failure), with no `\r` and no ANSI. In plain mode, result lines that belong to a step (such as the status unit lines or the publish `would publish:` list) print before that step's `✔` line, and a `--timings` report prints after the summary. `--quiet` hides the header, steps, summary and `done in`; results and diagnostics still print. `--json` has no progress, no notes and no colors. Colors follow `FORCE_COLOR`, then `NO_COLOR`, then `TERM=dumb`, then whether the stream is a terminal; stdout results are colored only when stdout itself is a terminal. Colors are ANSI only: the text of results and diagnostics is identical with or without them.
 
 ### 2.4 VS Code
 
@@ -97,6 +99,7 @@ Global flags: `--json` (machine-readable output for scripts and AI front ends), 
 - Hover on a statement shows the Blueprint nodes it lowers to. Quick fixes: `/` on integers (`idiv(a, b)`, ABFC2010), TypeScript's "possibly null" errors on a property access (`?.`, lowers to IsValid plus Branch), and the project-model fixes of section 18 (ABFC2005, ABFC2006, ABFC2008, ABFC2076, ABFC5012). Setup and limits: [language-service.md](language-service.md).
 - `@abfc/eslint-plugin` adds five lint rules (heavy calls, loops and unbounded array growth in tick, replicated writes without authority, RPC misuse), documented with examples in [lint-rules.md](lint-rules.md).
 - `abfc init` writes tasks `abfc: check` (watch), `abfc: build` and `abfc: test`, with a problem matcher for `^(.*\.ts):(\d+):(\d+): (error|warning) (ABFC\d+): (.*)$`.
+- Problem-matcher lines are always printed at column 0 (never indented), and tasks should pass `--quiet` so the live progress line never shares a terminal line with a diagnostic.
 - Unreal compile errors and test failures show up in the Problems panel at the TS line that produced the failing node (section 8.6).
 
 ## 3. Architecture and packages
@@ -281,7 +284,7 @@ Nobody has to list classes any more. The backend's read-only `catalog` tool (abf
 - The full `/Game` set: every catalog game class (widgets, animation Blueprints and interfaces included) gets a stub, minus the classes recorded in `lock.auto.failed`. It is generated once per Mod Editor build in one `reflect` call (about 3-4 minutes, about 195 s for 3098 game classes, about 17 MB, about 3200 files); if that call fails, abfc splits it into chunks of 500 and bisects failing chunks down to single classes, and a class that cannot be reflected lands in `failed` (ABFC3023) instead of failing the run.
 - `/Script` names are generated per package on demand: the profile's default engine classes always, plus the names your source imports (`sourceStubImports`), the `--add` paths and the config extras. Enums that nothing references are emitted as opaque types.
 - Files in the profile folder: `_catalog.json` (the catalog), `_names.json` (catalog names with module and TypeScript identifier, read by completion), `_cache.json.gz` (merged reflection data, filter pairs and mod assets, valid while editor fingerprint and generator version match, so a later run reflects only the small fresh set), `_coverage.json` (what is reflected and declared, so a build can tell offline whether a name is present), `_library.json` (library functions, so completion does not walk every `.d.ts`).
-- Writes are atomic per file (temporary file and rename, retried on Windows sharing errors), unchanged files are not touched, stale ones are pruned, `stubs.lock.json` is removed first and written last, so a crash leaves "no lock" (ABFC3003), which the next build repairs. The single writer lock is the project lock `.abfc/lock.json` that `stubs` and `build` already take; the language server only spawns `abfc generate`.
+- Writes are atomic per file (temporary file and rename, retried on Windows sharing errors), unchanged files are not touched, stale ones are pruned, `stubs.lock.json` is removed first and written last, so a crash leaves "no lock" (ABFC3003), which the next build repairs. The single writer lock is the project lock `.abfc/lock.json` that `generate` and `build` already take; the language server only spawns `abfc generate`.
 - `stubs.lock.json` gained `auto` (`catalogSha256`, `gameClasses`, `failed`, `added`, and `noCatalog` for backends without the tool). `stubLockHash` (unit cache) hashes only generator, profile, engine version, editor version, fingerprint and filter version, so the longer class lists and `auto` never re-plan units.
 - Triggers: `abfc generate`, `abfc init` (runs generate), the start of `abfc build`/`test`/`publish` (decided offline from the lock, catalog, coverage and source imports; the backend is started only when something is missing, never for complete stubs; a failure is ABFC3020 and the build goes on), and the explicit editor quick fix "Generate stubs" (`abfc generate --add`). Keystrokes, `abfc check` and the language server's checks never start the editor.
 
@@ -599,6 +602,8 @@ abfc: error ABFC1001: Abiotic Factor Mod Editor not found.
     Program Files wildcard  nothing matches C:\Program Files\Epic Games\AbioticFactorModEdit*
   fix: install the Mod Editor from the Epic Games Launcher, or set "editor": {"root": "<folder>"} in %APPDATA%\abfc\config.json.
 ```
+
+On a terminal the severity word and code are colored and the `tried`/`fix` lines are dimmed; the text is otherwise identical.
 
 Code ranges: 1xxx environment, 2xxx TS subset and lowering, 3xxx stubs and profiles, 4xxx backend, 5xxx ownership and drift, 6xxx Unreal compile and tests, 7xxx release gate.
 

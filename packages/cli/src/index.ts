@@ -1,5 +1,7 @@
 export * from "./args.js";
 export * from "./output.js";
+export * from "./style.js";
+export * from "./progress.js";
 export * from "./context.js";
 export * from "./runs.js";
 export * from "./main.js";

@@ -9,7 +9,8 @@ import type { ProjectConfig } from "@abfc/env";
 import { parseExport } from "@abfc/ir";
 import type { BackendInfo, Diagnostic, IrAsset, IrModule, T3dExport } from "@abfc/ir";
 import { checkLock, readLock } from "@abfc/stubgen";
-import type { CliContext } from "../context.js";
+import type { BackendStartOptions, CliContext } from "../context.js";
+import { SLOW_BACKEND_HINT } from "../progress.js";
 import { backendInfoDiagnostics } from "./backend-version.js";
 import { formatTimings, recordRun } from "../runs.js";
 import type { RunEntry } from "../runs.js";
@@ -107,6 +108,14 @@ function checkProtocol(ctx: CliContext, info: BackendInfo): void {
   }
 }
 
+/** Options for `startBackend`: `cold` when given, and the backend's stderr lines as progress notes when `--verbose`. */
+export function backendStartOptions(ctx: CliContext, cold?: boolean): BackendStartOptions {
+  return {
+    ...(cold !== undefined ? { cold } : {}),
+    ...(ctx.progress.notes ? { onStderr: (l: string) => ctx.progress.note(l) } : {}),
+  };
+}
+
 /** One backend per command run, started on first use. */
 export class BackendSession {
   private opened: { backend: Backend; info: BackendInfo } | null = null;
@@ -117,24 +126,32 @@ export class BackendSession {
 
   async open(step = "build.backendStart"): Promise<{ backend: Backend; info: BackendInfo }> {
     if (this.opened !== null) return this.opened;
-    const t0 = performance.now();
-    const backend = await this.ctx.deps.startBackend(this.ctx.env, { cold: this.ctx.args.flags.cold });
-    this.rec.warmSource = () => backend.lastWarm === true;
-    try {
-      const info = await backend.info();
-      checkProtocol(this.ctx, info);
-      this.opened = { backend, info };
-    } catch (e) {
-      this.rec.record(step, since(t0), false);
-      try {
-        await backend.close();
-      } catch {
-        // the backend is gone already
-      }
-      throw e;
-    }
-    this.rec.record(step, since(t0));
-    return this.opened;
+    return this.ctx.progress.run(
+      "Starting backend",
+      async () => {
+        const t0 = performance.now();
+        const backend = await this.ctx.deps.startBackend(this.ctx.env, backendStartOptions(this.ctx, this.ctx.args.flags.cold));
+        this.rec.warmSource = () => backend.lastWarm === true;
+        let opened: { backend: Backend; info: BackendInfo };
+        try {
+          const info = await backend.info();
+          checkProtocol(this.ctx, info);
+          opened = { backend, info };
+          this.opened = opened;
+        } catch (e) {
+          this.rec.record(step, since(t0), false);
+          try {
+            await backend.close();
+          } catch {
+            // the backend is gone already
+          }
+          throw e;
+        }
+        this.rec.record(step, since(t0));
+        return opened;
+      },
+      { slowHint: SLOW_BACKEND_HINT, done: (o) => `Backend ready (server ${o.info.serverVersion})` },
+    );
   }
 
   async close(): Promise<void> {

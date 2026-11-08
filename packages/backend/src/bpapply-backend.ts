@@ -553,7 +553,10 @@ export class BpApplyBackend implements Backend {
 }
 
 /** Spawns the backend server for `env` and wraps it. Needs python, backend dir and headless dir to be resolved. */
-export async function startBackend(env: Environment, o?: { cold: boolean }): Promise<BpApplyBackend> {
+export async function startBackend(
+  env: Environment,
+  o?: { cold?: boolean | undefined; onStderr?: ((line: string) => void) | undefined },
+): Promise<BpApplyBackend> {
   const python = env.python.value;
   const backendDir = env.backendDir.value;
   const headlessDir = env.headlessDir.value;
@@ -567,6 +570,9 @@ export async function startBackend(env: Environment, o?: { cold: boolean }): Pro
     );
   }
   const warm = o?.cold !== true;
-  const client = await spawnBackendServer({ python, backendDir, headlessDir, editorRoot: env.editorRoot.value, warm });
+  const client = await spawnBackendServer(
+    { python, backendDir, headlessDir, editorRoot: env.editorRoot.value, warm },
+    o?.onStderr !== undefined ? { onStderr: o.onStderr } : undefined,
+  );
   return new BpApplyBackend(client, { serverDir: backendDir, warm });
 }

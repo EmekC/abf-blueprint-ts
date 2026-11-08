@@ -18,16 +18,24 @@ export async function runCheck(ctx: CliContext, rec: Recorder, state?: { oldProg
     rec.record("check.frontend", since(t0), false);
     return false;
   }
-  const loaded = loadProgram(ctx.projectDir, state?.oldProgram);
-  if (state) state.oldProgram = loaded.program;
-  emitAll(ctx, loaded.diagnostics);
-  const result = checkProject(loaded, compilerConfigOf(ctx.config), ctx.env.profile);
-  emitAll(ctx, result.diagnostics);
-  const ok = result.ir !== null && !hasErrors(ctx);
+  const { result, ok } = await ctx.progress.run(
+    "Checking TypeScript",
+    (s) => {
+      const loaded = loadProgram(ctx.projectDir, state?.oldProgram);
+      if (state) state.oldProgram = loaded.program;
+      emitAll(ctx, loaded.diagnostics);
+      const result = checkProject(loaded, compilerConfigOf(ctx.config), ctx.env.profile);
+      emitAll(ctx, result.diagnostics);
+      const ok = result.ir !== null && !hasErrors(ctx);
+      if (!ok) s.fail("TypeScript has errors");
+      return { result, ok };
+    },
+    { done: (r) => `Checked ${r.result.ir === null ? 0 : countUnits(r.result.ir)} unit(s), ${r.result.tests} test(s)` },
+  );
   rec.record("check.frontend", since(t0), ok, result.ir === null ? 0 : countUnits(result.ir));
   if (ok && result.ir !== null) {
     const units = countUnits(result.ir);
-    ctx.output.info(`checked ${units} unit(s) in ${result.ir.assets.length} asset(s), ${result.tests} test(s): no errors`);
+    ctx.output.info(`checked ${units} unit(s) in ${result.ir.assets.length} asset(s), ${result.tests} test(s): no errors`, "ok");
     ctx.output.json({ assets: result.ir.assets.map((a) => ({ asset: a.path, units: a.units.map((u) => u.id) })), tests: result.tests });
   }
   return ok;
@@ -143,5 +151,7 @@ export async function check(ctx: CliContext): Promise<number> {
   const rec = new Recorder(ctx);
   await runCheck(ctx, rec);
   rec.print();
-  return ctx.output.exitCode();
+  const code = ctx.output.exitCode();
+  ctx.progress.summary(code === 0, code === 0 ? "Check passed" : "Check failed");
+  return code;
 }
