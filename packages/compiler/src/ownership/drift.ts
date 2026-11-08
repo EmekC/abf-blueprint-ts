@@ -1,5 +1,5 @@
 // Drift detection (design 8.3): is an owned unit in the stage still what abfc applied?
-import { unitStateHash } from "@abfc/ir";
+import { t3dNodeKey, unitStateHash } from "@abfc/ir";
 import type { Diagnostic, Span, T3dNode } from "@abfc/ir";
 import type { ManifestUnit } from "./manifest.js";
 
@@ -32,10 +32,12 @@ export function fingerprintUnit(snapshot: Map<string, T3dNode>, names: string[])
     if (!n) continue;
     for (const p of n.pins) {
       for (const l of p.links) {
-        const other = `${l.node}.${pinNameOf(snapshot, l.node, l.pinId)}`;
+        // a pin link never leaves its graph: the target is the node of that name in the linking node's graph
+        const target = t3dNodeKey(n.graph, l.node);
+        const other = `${target}.${pinNameOf(snapshot, target, l.pinId)}`;
         const mine = `${name}.${p.name}`;
         if (p.dir === "out") links.push(`${mine} > ${other}`);
-        else if (!owned.has(l.node)) links.push(`${other} > ${mine}`);
+        else if (!owned.has(target)) links.push(`${other} > ${mine}`);
       }
     }
   }

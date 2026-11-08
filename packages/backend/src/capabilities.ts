@@ -85,6 +85,7 @@ export const BP_APPLY_P1_BASE: BackendCapabilities = {
   reflectDefaults: false,
   classManagerRowTag: false,
   variableDefaults: false,
+  functionGraphs: false,
   bpApplyFeatures: [],
   nodeKinds: [],
   backendContainerTypes: null,
@@ -144,6 +145,7 @@ export function capabilitiesFrom(
       bpApplyFeatures.includes("class_manager_row") &&
       bpApplyFeatures.includes("class_manager_row_tag"),
     variableDefaults: bpApplyFeatures.includes("variable_defaults"),
+    functionGraphs: bpApplyFeatures.includes("function_graphs"),
     assetOps: tools.includes("bp_asset_ops") ? strings(info?.capabilities?.assetOps) : [],
     publishDeletes: bool(info?.capabilities?.publishDeletes) && tools.includes("bp_publish"),
     gameplayTags: bool(info?.capabilities?.gameplayTags),

@@ -131,3 +131,24 @@ test("native pin types never take the fallback route", async () => {
   assert.equal(out.ok, false);
   assert.deepEqual(backend.calls.map((x) => x.label), ["main"]);
 });
+
+test("phase B copies functions and remove_functions next to create and variables", async () => {
+  const c = caps(false, false);
+  const fn = { name: "extra", inputs: [], outputs: [{ name: "ReturnValue", type: "int" }], access: "protected" as const };
+  const withFns = { ...plan, assets: [{ ...plan.assets[0]!, functions: [fn], removeFunctions: ["extra", "old"] }] };
+  const run = writeFinal(withFns, c);
+  const backend = new FakeBackend((call) => {
+    if (call.label === "main-a") return result({ ok: false, rolledBack: true, run, assets: [{ asset, node_ids: nodeIdsFor(withFns, c) }], compile: { errors: undetermined(5), warnings: [] } });
+    if (call.label === "main-b") return result({ run });
+    return result({ run: tmpRun(), assets: [{ asset, node_ids: { "graph:0": { cmt_UpdateTarget: "EdGraphNode_Comment_0" } } }] });
+  });
+  const out = await applyPlan(backend, withFns, c, profile, { cacheDir: "cache", record: () => {} });
+  assert.equal(out.ok, true);
+  const a = backend.calls[0]!.specs[0]!;
+  assert.deepEqual(a.functions, [fn]);
+  assert.deepEqual(a.remove_functions, ["extra", "old"]);
+  const b = backend.calls[1]!.specs[0]!;
+  assert.deepEqual(b.functions, [fn]);
+  assert.deepEqual(b.remove_functions, ["extra", "old"]);
+  assert.equal(b.graphs, undefined);
+});

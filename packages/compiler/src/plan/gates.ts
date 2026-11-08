@@ -7,6 +7,8 @@ export interface GateCapabilities {
   createKinds: string[];
   /** bp_apply feature `event_meta`; absent counts as false. */
   eventMeta?: boolean;
+  /** bp_apply feature `function_graphs`; absent counts as false. */
+  functionGraphs?: boolean;
 }
 
 /**
@@ -55,6 +57,16 @@ export function featureGates(ir: IrModule, caps: GateCapabilities): Diagnostic[]
             }
           }
         }
+      }
+      if (u.kind === "function" && caps.functionGraphs !== true) {
+        out.push({
+          severity: "error",
+          code: "ABFC2044",
+          asset: a.path,
+          span: u.origin,
+          message: `function ${u.name} needs a backend with bp_apply feature function_graphs; update abf-mod-editor-mcp`,
+          fix: "update abf-mod-editor-mcp (see docs/backend.md)",
+        });
       }
       if (u.kind === "event" && caps.eventMeta !== true) {
         const entry = u.nodes.find((n) => n.sem?.k === "event");

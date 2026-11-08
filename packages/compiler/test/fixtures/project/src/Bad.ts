@@ -17,7 +17,7 @@ export interface BP_Bad extends BP_Relay_Manual {}
 export class BP_Bad extends Actor {
   Score = 1; // ABFC2099 @Score = 1;
 
-  helper(): void {} // ABFC2099 @helper
+  static helper(): void {} // ABFC2099 @helper
 
   @event
   Numbers(a: int, b: int, f: float, n: number): void { // ABFC2014 @n: number

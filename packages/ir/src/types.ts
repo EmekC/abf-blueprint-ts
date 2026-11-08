@@ -32,7 +32,7 @@ export interface IrUnit {
   kind: "function" | "event" | "override";
   name: string;
   graph: string; // "EventGraph" for events, the function name for functions
-  signature: { inputs: IrParam[]; outputs: IrParam[]; net?: "server" | "client" | "multicast"; reliable?: boolean };
+  signature: { inputs: IrParam[]; outputs: IrParam[]; net?: "server" | "client" | "multicast"; reliable?: boolean; /** Functions only: the Blueprint access specifier. */ access?: "public" | "protected" | "private" };
   locals: IrVariable[]; // honored when the backend has functionLocals; else hoisted by the lowering
   nodes: IrNode[];
   wires: IrWire[];
@@ -121,6 +121,8 @@ export interface BackendCapabilities {
   classManagerRowTag: boolean;
   /** bp_apply feature `variable_defaults`: the spec may carry `variable_defaults` to change or drop the default of an existing variable in place. */
   variableDefaults: boolean;
+  /** bp_apply feature `function_graphs`: own functions with access flags and same-name replace. */
+  functionGraphs: boolean;
   bpApplyFeatures: string[];
   nodeKinds: string[];
   /** `mod_audit` can audit the stage (false in Phase 1: it audits the real mod). */
@@ -206,6 +208,8 @@ export interface AssetPlan {
   removeVariables?: string[];
   /** Own fields declared in the asset whose TS default differs from the manifest: the new text, or null to drop the default. */
   variableDefaults?: Record<string, string | null>;
+  /** Function graphs to create (signature only; the body comes in graphs). A name also in removeFunctions is replaced. */
+  functions?: Array<{ name: string; inputs: IrParam[]; outputs: IrParam[]; access: "public" | "protected" | "private" }>;
   /** TS wins: hand-made function graphs removed from a non-hybrid class. */
   removeFunctions?: string[];
   /** Own fields gone from the TS that were not in the asset any more: only the manifest record is dropped. */

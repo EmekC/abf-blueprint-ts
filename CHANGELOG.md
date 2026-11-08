@@ -10,6 +10,7 @@ abfc uses semantic versioning for its command-line surface: the commands, their 
 
 ### Added
 
+- Undecorated methods of a `@blueprint` class compile to Blueprint function graphs (parameters as inputs, a non-void return as `ReturnValue`, `private`/`protected` as access), callable as `this.fn(...)` or `other.fn(...)`. The graph is owned whole and recreated on any change; needs the backend feature `function_graphs` (ABFC2044). New errors ABFC2085 (recursion), ABFC2086 (`await` or latent call in a function), ABFC2087 (name of a parent member).
 - Own fields may have a literal initializer (`Speed: float = 2.5`); it becomes the Blueprint variable's default and changing it updates the default in place (backend feature `variable_defaults`, else warning ABFC2084).
 - Derived asset paths: a class gets its Blueprint asset path from its file and class name, with the `path:` keep-path quick fix (ABFC5012) for a moved file.
 - `@mod/` imports for classes of the mod being built.

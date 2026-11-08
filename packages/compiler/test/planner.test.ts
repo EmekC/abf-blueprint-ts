@@ -2,10 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { parseExport, structFieldsHash, unitStateHash } from "@abfc/ir";
+import { parseExport, structFieldsHash, t3dNodeKey, unitStateHash } from "@abfc/ir";
 import type { IrModule, IrUnit, Profile, T3dNode } from "@abfc/ir";
 import { assetsNeedingRead, buildHir, loadProgram, lower, planBuild } from "../src/index.js";
 import type { Manifest, ManifestUnit } from "../src/index.js";
+import { irOf } from "./fn-harness.js";
 
 const projectDir = fileURLToPath(new URL("../../test/fixtures/project", import.meta.url));
 const profilePath = fileURLToPath(new URL("../../../env/profiles/ue5.4.4-1050002.json", import.meta.url));
@@ -35,8 +36,9 @@ function tagNode(name: string, unitId: string, ir = "0a1b2c3d"): T3dNode {
 }
 const CALL = "/Script/BlueprintGraph.K2Node_CallFunction";
 
+/** A stage snapshot: every node keyed like the parser keys it (nodes outside the EventGraph are `<graph>/<name>`). */
 function snapshotOf(...nodes: T3dNode[]): Map<string, T3dNode> {
-  return new Map(nodes.map((n) => [n.name, n]));
+  return new Map(nodes.map((n) => [t3dNodeKey(n.graph, n.name), n]));
 }
 
 function manifestOf(...units: ManifestUnit[]): Manifest {
@@ -875,9 +877,9 @@ test("TS wins, non-hybrid: the compiler's intermediate event stub graphs and nod
   const snapshot = new Map<string, T3dNode>([
     ["N1", n1],
     ["CMT_cur", tagNode("CMT_cur", unit.id)],
-    // two stub graphs holding a node of the same name: the second is keyed <graph>/<name> by the parser
-    ["K2Node_FunctionEntry_0", stubEntry("ReceiveBeginPlay", [`FunctionReference=(MemberParent=/Script/CoreUObject.Class'/Script/Engine.ActorComponent',MemberName="ReceiveBeginPlay")`])],
-    ["K2Node_CallFunction_0", stubCall("ReceiveBeginPlay")],
+    // stub graphs holding nodes of the same name: nodes outside the EventGraph are keyed <graph>/<name> by the parser
+    ["ReceiveBeginPlay/K2Node_FunctionEntry_0", stubEntry("ReceiveBeginPlay", [`FunctionReference=(MemberParent=/Script/CoreUObject.Class'/Script/Engine.ActorComponent',MemberName="ReceiveBeginPlay")`])],
+    ["ReceiveBeginPlay/K2Node_CallFunction_0", stubCall("ReceiveBeginPlay")],
     ["Bump/K2Node_FunctionEntry_0", stubEntry("Bump")],
     ["Bump/K2Node_CallFunction_0", stubCall("Bump")],
   ]);
@@ -893,7 +895,7 @@ test("TS wins, non-hybrid: the compiler's intermediate event stub graphs and nod
   assert.deepEqual(r.plan.assets, []);
   // a genuinely hand-made function graph next to them is still swept, and only it
   const hand: T3dNode = { name: "FE_Hand", cls: "/Script/BlueprintGraph.K2Node_FunctionEntry", graph: "HandFunc", head: [], pins: [] };
-  const withHand = planBuild(ir, { ...input, snapshots: new Map([[asset, new Map([...snapshot, ["FE_Hand", hand]])]]) });
+  const withHand = planBuild(ir, { ...input, snapshots: new Map([[asset, new Map([...snapshot, ["HandFunc/FE_Hand", hand]])]]) });
   assert.deepEqual(withHand.plan.assets[0]!.removeFunctions, ["HandFunc"]);
   assert.match(withHand.diagnostics[0]!.message, /removed the hand-made function HandFunc/);
   assert.doesNotMatch(withHand.diagnostics[0]!.message, /Bump|ReceiveBeginPlay/);
@@ -951,4 +953,187 @@ test("TS wins, non-hybrid: components (SimpleConstructionScript), designer widge
   });
   assert.equal(only.plan.assets[0]?.removeGraphNodes, undefined);
   assert.ok(only.diagnostics.every((d) => !/SCS_Node_0|NameText|CurveFloat_0|SimpleConstructionScript|WidgetTree|Fade_Template/.test(d.message)));
+});
+
+// ---- Function graphs (undecorated methods): owned whole, recreated on any change ----
+
+const fnMembers = (body: string, withCall = true): string => `
+  @event Go(): void {
+    ${withCall ? "this.Last = this.runTest(5);" : "this.Last = 1;"}
+  }
+  ${body}`;
+const RUN_TEST = `private runTest(amount: int): int { this.Count = this.Count + amount; return this.Count; }`;
+const irFn = irOf(fnMembers(RUN_TEST));
+const fa = irFn.assets[0]!.path;
+const fnU = irFn.assets[0]!.units.find((u) => u.id === "function:runTest")!;
+const goU = irFn.assets[0]!.units.find((u) => u.id === "event:Go")!;
+const FUNCTION_ENTRY = "/Script/BlueprintGraph.K2Node_FunctionEntry";
+const fnVars = new Map([[fa, ["Count", "Last", "Label", ...irFn.assets[0]!.variables.map((v) => v.name)]]]);
+
+const entryOf = (graph: string, extra: string[] = []): T3dNode => ({ name: `FE_${graph}`, cls: FUNCTION_ENTRY, graph, head: extra, pins: [] });
+const inGraph = (n: T3dNode, graph: string): T3dNode => ({ ...n, graph });
+const callsRunTest = [`FunctionReference=(MemberName="runTest",bSelfContext=True)`];
+
+/** A stage holding the applied Go event (GO_1, GO_2) and the applied runTest graph (entry FE_runTest + FN_1). */
+function fnSnapshot(): Map<string, T3dNode> {
+  return snapshotOf(node("GO_1", CALL, []), node("GO_2", CALL, callsRunTest), entryOf("runTest"), inGraph(node("FN_1", CALL, []), "runTest"));
+}
+
+function fnManifest(snapshot: Map<string, T3dNode>, over: { fnHash?: string; goHash?: string; units?: ManifestUnit[] } = {}): Manifest {
+  const goNodes = ["GO_1", "GO_2"];
+  return {
+    asset: fa,
+    compiler: "test",
+    profile: profile.id,
+    variables: [],
+    units: over.units ?? [
+      { id: "event:Go", graph: "EventGraph", irHash: over.goHash ?? goU.hash, assetHash: unitStateHash(snapshot, goNodes), nodes: goNodes, nodeIds: {}, tag: null, stageSyncedAt: "T1", adopt: null },
+      { id: "function:runTest", graph: "runTest", irHash: over.fnHash ?? fnU.hash, assetHash: unitStateHash(snapshot, ["runTest/FN_1"]), nodes: ["runTest/FN_1"], nodeIds: {}, tag: null, stageSyncedAt: "T1", adopt: null },
+    ],
+  };
+}
+
+const fnInput = (manifest: Manifest | null, snapshot: Map<string, T3dNode>, over: Record<string, unknown> = {}) => ({
+  manifests: new Map([[fa, manifest]]),
+  snapshots: new Map([[fa, snapshot]]),
+  stage,
+  handMadeUnits: new Map<string, string[]>(),
+  snapshotVariables: fnVars,
+  ...over,
+});
+
+test("a new function unit is created: a functions entry, no remove_functions, no node removal, origin below the entry", () => {
+  const snapshot = snapshotOf(node("GO_1", CALL, []), node("GO_2", CALL, []));
+  const manifest = fnManifest(snapshot, { units: [] });
+  const r = planBuild(irFn, fnInput(manifest, snapshot, { hybrid: new Set([fa]) }));
+  assert.deepEqual(r.diagnostics, []);
+  const a = r.plan.assets[0]!;
+  assert.deepEqual(a.functions, [{ name: "runTest", inputs: [{ name: "amount", type: "int" }], outputs: [{ name: "ReturnValue", type: "int" }], access: "private" }]);
+  assert.equal(a.removeFunctions, undefined);
+  const u = a.units.find((x) => x.unit.id === "function:runTest")!;
+  assert.deepEqual(u.removeNodes, []);
+  assert.deepEqual(u.origin, [0, 250]);
+});
+
+test("a hand-made function of the same name is replaced (TS wins): ABFC5014 report, remove_functions + functions", () => {
+  const snapshot = snapshotOf(node("GO_1", CALL, []), entryOf("runTest"), inGraph(node("HF_1", CALL, []), "runTest"));
+  const r = planBuild(irFn, fnInput(null, snapshot, { hybrid: new Set([fa]) }));
+  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5014"]);
+  assert.match(r.diagnostics[0]!.message, /function:runTest: replaced the hand-made function of the same name/);
+  const a = r.plan.assets[0]!;
+  assert.deepEqual(a.removeFunctions, ["runTest"]);
+  assert.equal(a.functions?.length, 1);
+  assert.equal(a.removeGraphNodes, undefined); // the recreated graph is not swept node by node
+});
+
+test("a changed function is recreated (remove_functions + functions, removeNodes []); its same-asset caller is applied again", () => {
+  const snapshot = fnSnapshot();
+  const r = planBuild(irFn, fnInput(fnManifest(snapshot, { fnHash: "sha256:old" }), snapshot));
+  assert.deepEqual(r.diagnostics, []);
+  const a = r.plan.assets[0]!;
+  assert.deepEqual(a.removeFunctions, ["runTest"]);
+  assert.deepEqual(a.functions?.map((f) => f.name), ["runTest"]);
+  const byId = new Map(a.units.map((u) => [u.unit.id, u]));
+  assert.deepEqual(byId.get("function:runTest")!.removeNodes, []);
+  // the caller keeps its own node-by-node replacement, so its call node is templated against the new signature
+  assert.deepEqual(byId.get("event:Go")!.removeNodes, ["GO_1", "GO_2"]);
+  assert.equal(a.removeGraphNodes, undefined);
+  assert.equal(a.removeUnits, undefined);
+  assert.deepEqual(r.upToDate, []);
+});
+
+test("an unchanged function and caller are up to date; the non-hybrid sweep leaves the owned function graph alone", () => {
+  const snapshot = snapshotOf(...fnSnapshot().values(), entryOf("HandFunc"), inGraph(node("HF_9", CALL, []), "HandFunc"));
+  const r = planBuild(irFn, fnInput(fnManifest(snapshot), snapshot));
+  assert.deepEqual([...r.upToDate].sort(), [`${fa} event:Go`, `${fa} function:runTest`]);
+  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5014"]);
+  assert.match(r.diagnostics[0]!.message, /removed the hand-made function HandFunc/);
+  const a = r.plan.assets[0]!;
+  assert.deepEqual(a.removeFunctions, ["HandFunc"]); // only the hand-made one
+  assert.equal(a.removeGraphNodes, undefined);
+  assert.equal(a.units.length, 0);
+
+  // without the hand-made graph nothing is planned at all
+  const clean = fnSnapshot();
+  const none = planBuild(irFn, fnInput(fnManifest(clean), clean));
+  assert.deepEqual(none.diagnostics, []);
+  assert.deepEqual(none.plan.assets, []);
+});
+
+test("TS wins, non-hybrid: an up-to-date owned function graph whose node names repeat the event graph's is not swept", () => {
+  // Unreal names nodes uniquely per graph only: runTest's body node and Go's call node are both K2Node_CallFunction_9001
+  const same = "K2Node_CallFunction_9001";
+  const snapshot = snapshotOf(
+    node(same, CALL, []),
+    { ...entryOf("runTest"), name: "K2Node_FunctionEntry_0" },
+    inGraph(node(same, CALL, []), "runTest"),
+    { ...entryOf("HandFunc"), name: "K2Node_FunctionEntry_0" },
+    inGraph(node(same, CALL, []), "HandFunc"),
+  );
+  const manifest = fnManifest(snapshot, {
+    units: [
+      { id: "event:Go", graph: "EventGraph", irHash: goU.hash, assetHash: unitStateHash(snapshot, [same]), nodes: [same], nodeIds: {}, tag: null, stageSyncedAt: "T1", adopt: null },
+      { id: "function:runTest", graph: "runTest", irHash: fnU.hash, assetHash: unitStateHash(snapshot, [`runTest/${same}`]), nodes: [`runTest/${same}`], nodeIds: {}, tag: null, stageSyncedAt: "T1", adopt: null },
+    ],
+  });
+  const r = planBuild(irFn, fnInput(manifest, snapshot));
+  assert.deepEqual([...r.upToDate].sort(), [`${fa} event:Go`, `${fa} function:runTest`]);
+  const a = r.plan.assets[0]!;
+  assert.equal(a.removeGraphNodes, undefined, JSON.stringify(a.removeGraphNodes)); // neither runTest's body nor the EventGraph's call node
+  assert.deepEqual(a.removeFunctions, ["HandFunc"]);
+});
+
+test("an edited function graph (drift) is recreated whole: ABFC5014, not an error", () => {
+  const snapshot = fnSnapshot();
+  const manifest = fnManifest(snapshot);
+  manifest.units[1]!.assetHash = "sha256:stale";
+  const r = planBuild(irFn, fnInput(manifest, snapshot));
+  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5014"]);
+  assert.deepEqual(r.plan.assets[0]!.removeFunctions, ["runTest"]);
+  assert.deepEqual(r.plan.assets[0]!.units.find((u) => u.unit.id === "function:runTest")!.removeNodes, []);
+});
+
+test("a function gone from the TS is removed whole (removeUnits with no nodes + remove_functions); the record of a vanished graph is only forgotten", () => {
+  const irGone = irOf(fnMembers("", false));
+  const snapshot = fnSnapshot();
+  const manifest = fnManifest(snapshot); // the caller changed too (its call is gone), so it is planned again
+  const r = planBuild(irGone, fnInput(manifest, snapshot));
+  assert.deepEqual(r.diagnostics, []);
+  const a = r.plan.assets[0]!;
+  assert.deepEqual(a.removeUnits, [{ id: "function:runTest", graph: "runTest", nodes: [] }]);
+  assert.deepEqual(a.removeFunctions, ["runTest"]);
+  assert.equal(a.functions, undefined);
+  assert.deepEqual(a.forgetUnits ?? [], []);
+
+  // the graph is not on the stage any more: only the manifest record goes
+  const lonely = snapshotOf(node("GO_1", CALL, []), node("GO_2", CALL, []));
+  const manifest2 = fnManifest(lonely);
+  const f = planBuild(irGone, fnInput(manifest2, lonely));
+  assert.deepEqual(f.plan.assets[0]?.removeUnits ?? [], []);
+  assert.deepEqual(f.plan.assets[0]?.forgetUnits, ["function:runTest"]);
+});
+
+test("a removed function still called by a hand-made node of a hybrid class is refused (ABFC5009)", () => {
+  const irGone = irOf(fnMembers("", false));
+  const goGone = irGone.assets[0]!.units.find((u) => u.id === "event:Go")!;
+  const snapshot = snapshotOf(node("GO_1", CALL, []), node("GO_2", CALL, []), entryOf("runTest"), inGraph(node("FN_1", CALL, []), "runTest"), node("H_1", CALL, callsRunTest));
+  const manifest = fnManifest(snapshot);
+  manifest.units[0]!.irHash = goGone.hash;
+  const r = planBuild(irGone, fnInput(manifest, snapshot, { hybrid: new Set([fa]) }));
+  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5009"]);
+  assert.match(r.diagnostics[0]!.message, /runTest is no longer declared in TypeScript/);
+});
+
+test("a renamed function: the old graph goes, the new one is created, the caller is applied again", () => {
+  const irRen = irOf(`
+  @event Go(): void { this.Last = this.runTwo(5); }
+  private runTwo(amount: int): int { this.Count = this.Count + amount; return this.Count; }`);
+  const snapshot = fnSnapshot();
+  const r = planBuild(irRen, fnInput(fnManifest(snapshot), snapshot));
+  assert.deepEqual(r.diagnostics, []);
+  const a = r.plan.assets[0]!;
+  assert.deepEqual(a.removeUnits, [{ id: "function:runTest", graph: "runTest", nodes: [] }]);
+  assert.deepEqual(a.removeFunctions, ["runTest"]);
+  assert.deepEqual(a.functions?.map((f) => f.name), ["runTwo"]);
+  assert.deepEqual(a.units.map((u) => u.unit.id).sort(), ["event:Go", "function:runTwo"]);
 });
