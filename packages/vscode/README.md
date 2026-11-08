@@ -6,7 +6,7 @@ The extension starts `abfc lsp`, the abfc language server, for TypeScript files 
 
 - Diagnostics: the same findings as `abfc check`, lock problems on `abf.config.json`, and the abfc lint rules.
 - Hover: the Blueprint nodes a statement lowers to, and the description of a stub member.
-- Completion: Blueprint library functions (with their import) and the overridable events of the parent class (as `@override` stubs), next to the TypeScript completions.
+- Completion: Blueprint library functions (with their import) and the overridable events of the parent class (as `@override` stubs), next to the TypeScript completions. Library functions are found by C++ name with or without `K2_`, by any word of it, or by the Blueprint node name.
 - Quick fixes: `idiv`, `?.`, redundant or relative `path:`, `@mod/` imports, `@director`, keep the existing asset path.
 - Validation and completion for `abf.config.json` from a bundled JSON schema.
 - Tasks that run `abfc build`, `abfc test`, `abfc publish --dry-run` and `abfc doctor` with the `$abfc` problem matcher.

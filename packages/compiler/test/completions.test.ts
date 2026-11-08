@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildLibraryIndex, completionsAt, loadProgram } from "../src/index.js";
+import { buildLibraryIndex, completionsAt, displayNameFromDoc, loadProgram, matchName } from "../src/index.js";
 import type { AbfcCompletion, LibraryEntry } from "../src/index.js";
 
 // compiled to packages/compiler/dist/test/; the copy sits inside the package tree so that `@abfc/runtime` resolves.
@@ -33,6 +33,18 @@ export declare namespace KismetSystemLibrary {
    * @deprecated use PrintString
    */
   function PrintOld(): void;
+  /**
+   * Starts a timer that runs the given event after a delay (Set Timer by Event).
+   * @bpPath /Script/FakeEngine.KismetSystemLibrary:K2_SetTimerDelegate
+   * @bpParam Time double
+   * @bpParam bLooping bool
+   */
+  function K2_SetTimerDelegate(Time: double, bLooping: boolean): void;
+  /**
+   * Tells whether the array holds the item (Contains Item).
+   * @bpPath /Script/FakeEngine.KismetSystemLibrary:Array_Contains
+   */
+  function Array_Contains(): boolean;
 }
 `;
 
@@ -81,6 +93,11 @@ const EXTRA_EVENTS = `  /**
    * @bpPath /Script/FakeEngine.Actor:UserConstructionScript
    */
   UserConstructionScript(): void;
+  /**
+   * Returns the name of the current level (Get Current Level Name).
+   * @bpPath /Script/FakeEngine.Actor:K2_GetLevelName
+   */
+  K2_GetLevelName(): string;
 `;
 
 /** phase4 plus a library namespace (engine and mod), a lock file and some more Actor members; fn gets the project and its stubs profile dir. */
@@ -354,6 +371,114 @@ test("override stubs only at a member start of a class with a stub parent", () =
     assert.equal(openBrace.items.length, 4);
     const between = at(dir, profile, `${HEAD}export class A extends Actor {\n  Score!: int;\n  |\n  Other!: int;\n}\n`);
     assert.equal(between.items.length, 4);
+  });
+});
+
+test("displayNameFromDoc reads the trailing node name, nested parentheses included", () => {
+  assert.equal(displayNameFromDoc("Starts a timer (Set Timer by Event)."), "Set Timer by Event");
+  assert.equal(displayNameFromDoc("Converts (To Float (Integer))."), "To Float (Integer)");
+  assert.equal(displayNameFromDoc("Prints a string."), undefined);
+  assert.equal(displayNameFromDoc(""), undefined);
+  assert.equal(displayNameFromDoc("Bad (x."), undefined);
+});
+
+test("matchName tiers: full prefix, K2_-stripped, display prefix, word start, minimum length", () => {
+  const timer = "K2_SetTimerDelegate";
+  const display = "Set Timer by Event";
+  assert.deepEqual(matchName(timer, display, "K2_Set"), { tier: 0, filterText: timer });
+  assert.deepEqual(matchName(timer, display, "settimer"), { tier: 1, filterText: "SetTimerDelegate" });
+  assert.deepEqual(matchName(timer, display, "settimerbyev"), { tier: 2, filterText: "SetTimerbyEvent" });
+  assert.deepEqual(matchName(timer, display, "timer"), { tier: 3, filterText: "TimerDelegate" });
+  assert.deepEqual(matchName(timer, display, "byevent"), { tier: 3, filterText: "byEvent" });
+  assert.equal(matchName(timer, display, "ti"), undefined);
+  assert.deepEqual(matchName("Array_Contains", "Contains Item", "containsit"), { tier: 2, filterText: "ContainsItem" });
+  assert.deepEqual(matchName("Array_Contains", undefined, "contains"), { tier: 3, filterText: "Contains" });
+  assert.deepEqual(matchName("GetHUDClass", undefined, "class"), { tier: 3, filterText: "Class" });
+  assert.equal(matchName("GetHUDClass", undefined, "udc"), undefined);
+});
+
+test("buildLibraryIndex reads the display name from the description", () => {
+  withProject((_dir, profile) => {
+    const index = buildLibraryIndex(profile);
+    const timer = index.find((e) => e.name === "K2_SetTimerDelegate");
+    assert.equal(timer?.displayName, "Set Timer by Event");
+    const print = index.find((e) => e.name === "PrintString");
+    assert.ok(print);
+    assert.equal("displayName" in print, false);
+  });
+});
+
+test("settimer, timer and the display name find K2_SetTimerDelegate qualified with its import", () => {
+  withProject((dir, profile) => {
+    const wrap = (code: string): string => `${HEAD}@blueprint({ path: "/TestMod/Phase4/BP_Comp" })\nexport class BP_Comp extends Actor {\n  @event\n  Go(): void {\n    ${code}\n  }\n}\n`;
+    const cases: Array<[string, string]> = [
+      ["settimer", "SetTimerDelegate"],
+      ["timer", "TimerDelegate"],
+      ["timerdelegate", "TimerDelegate"],
+      ["settimerdelegate", "SetTimerDelegate"],
+      ["SetTimerByEv", "SetTimerbyEvent"],
+    ];
+    for (const [typed, filterText] of cases) {
+      const { items, text } = at(dir, profile, wrap(`${typed}|`));
+      const item = items.find((i) => i.label === "K2_SetTimerDelegate");
+      assert.ok(item, `${typed}: ${labels(items).join()}`);
+      assert.equal(item.insertText, "KismetSystemLibrary.K2_SetTimerDelegate", typed);
+      assert.equal(item.filterText, filterText, typed);
+      assert.equal(item.labelDescription, "KismetSystemLibrary · Set Timer by Event", typed);
+      assert.equal(
+        accept(text, item),
+        text.replace('import { Actor } from "/Script/FakeEngine";', 'import { Actor, KismetSystemLibrary } from "/Script/FakeEngine";').replace(`${typed}\n`, "KismetSystemLibrary.K2_SetTimerDelegate\n"),
+        typed,
+      );
+    }
+  });
+});
+
+test("ranking: full-name prefixes before stripped, display and word-start matches; short prefixes only match prefixes", () => {
+  withProject((dir, profile) => {
+    const wrap = (code: string): string => `${HEAD}@blueprint({ path: "/TestMod/Phase4/BP_Comp" })\nexport class BP_Comp extends Actor {\n  @event\n  Go(): void {\n    ${code}\n  }\n}\n`;
+    const print = at(dir, profile, wrap("Print|")).items.find((i) => i.label === "PrintString");
+    assert.equal(print?.sortText, "1APrintString");
+
+    const con = at(dir, profile, wrap("con|")).items;
+    const contains = con.find((i) => i.label === "Array_Contains");
+    assert.ok(contains, labels(con).join());
+    assert.equal(contains.sortText, "1CArray_Contains");
+    const at2 = con.indexOf(contains);
+    for (const [i, item] of con.entries()) {
+      if (item.sortText.startsWith("1A") || item.sortText.startsWith("1B")) assert.ok(i < at2, `${item.label} ranks before the display-name match`);
+    }
+
+    const timer = at(dir, profile, wrap("timer|")).items.find((i) => i.label === "K2_SetTimerDelegate");
+    assert.equal(timer?.sortText, "1DK2_SetTimerDelegate");
+
+    const co = at(dir, profile, wrap("co|")).items;
+    assert.equal(co.some((i) => i.label === "Array_Contains"), false, "two typed characters match prefixes only");
+  });
+});
+
+test("after a dot only display-name matches the C++ name misses", () => {
+  withProject((dir, profile) => {
+    const wrap = (code: string, head: string = HEAD): string => `${head}@blueprint({ path: "/TestMod/Phase4/BP_Comp" })\nexport class BP_Comp extends Actor {\n  @event\n  Go(): void {\n    ${code}\n  }\n}\n`;
+    const level = at(dir, profile, wrap("this.getcurrent|")).items;
+    assert.deepEqual(labels(level), ["K2_GetLevelName"]);
+    const item = level[0];
+    assert.ok(item);
+    assert.equal(item.insertText, "K2_GetLevelName");
+    assert.deepEqual(item.additionalEdits, []);
+    assert.equal(item.kind, "method");
+    assert.equal(item.filterText, "GetCurrentLevelName");
+
+    assert.equal(labels(at(dir, profile, wrap("this.getlev|")).items).includes("K2_GetLevelName"), false, "the C++ name matches: tsserver covers it");
+    assert.deepEqual(at(dir, profile, wrap("this.ge|")).items, []);
+    assert.deepEqual(labels(at(dir, profile, wrap("this?.getcurrent|")).items), ["K2_GetLevelName"]);
+
+    const head = `${HEAD}import { KismetSystemLibrary } from "/Script/FakeEngine";\n`;
+    const lib = at(dir, profile, wrap("KismetSystemLibrary.settimerbyev|", head)).items.find((i) => i.label === "K2_SetTimerDelegate");
+    assert.ok(lib);
+    assert.equal(lib.insertText, "K2_SetTimerDelegate");
+    assert.equal(lib.kind, "function");
+    assert.equal(at(dir, profile, wrap("KismetSystemLibrary.settimer|", head)).items.some((i) => i.label === "K2_SetTimerDelegate"), false, "tsserver covers it");
   });
 });
 

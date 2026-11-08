@@ -20,6 +20,13 @@ export declare namespace KismetSystemLibrary {
    * @bpDefault InString "Hello"
    */
   function PrintString(InString?: string): void;
+  /**
+   * Starts a timer that runs the given event after a delay (Set Timer by Event).
+   * @bpPath /Script/FakeEngine.KismetSystemLibrary:K2_SetTimerDelegate
+   * @bpParam Time double
+   * @bpParam bLooping bool
+   */
+  function K2_SetTimerDelegate(Time: double, bLooping: boolean): void;
 }
 `;
 
@@ -95,12 +102,43 @@ test("completion: PrintS in a method body offers PrintString with the import edi
     assert.equal(print.textEdit.newText, "KismetSystemLibrary.PrintString");
     assert.deepEqual(print.textEdit.range, { start: { line: 7, character: 4 }, end: { line: 7, character: 10 } });
     assert.equal(print.filterText, "PrintString");
-    assert.equal(print.sortText, "1PrintString");
+    assert.equal(print.sortText, "1APrintString");
+    assert.equal(print.labelDetails?.description, "KismetSystemLibrary");
     assert.equal(print.additionalTextEdits.length, 1);
     assert.equal(
       accept(text, print),
       text.replace('import { Actor } from "/Script/FakeEngine";', 'import { Actor, KismetSystemLibrary } from "/Script/FakeEngine";').replace("PrintS\n", "KismetSystemLibrary.PrintString\n"),
     );
+    assert.deepEqual(started.client.protocolErrors, []);
+  } finally {
+    await started.dispose();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("completion: settimer, timer, timerdelegate, settimerdelegate and Set Timer by Event offer KismetSystemLibrary.K2_SetTimerDelegate with the import", async () => {
+  const dir = copyFixture("phase4", prepared);
+  const started = await startInMemory();
+  try {
+    const cases: Array<[string, string]> = [
+      ["settimer", "SetTimerDelegate"],
+      ["timer", "TimerDelegate"],
+      ["timerdelegate", "TimerDelegate"],
+      ["settimerdelegate", "SetTimerDelegate"],
+      ["SetTimerByEv", "SetTimerbyEvent"],
+    ];
+    for (const [typed, filterText] of cases) {
+      const { items, text } = await complete(started, dir, CALL.replace("PrintS|", `${typed}|`));
+      const timer = items.find((i) => i.label === "K2_SetTimerDelegate");
+      assert.ok(timer, `${typed}: ${items.map((i) => i.label).join()}`);
+      assert.equal(timer.textEdit.newText, "KismetSystemLibrary.K2_SetTimerDelegate");
+      assert.equal(timer.filterText, filterText);
+      assert.equal(timer.labelDetails?.description, "KismetSystemLibrary · Set Timer by Event");
+      assert.equal(
+        accept(text, timer),
+        text.replace('import { Actor } from "/Script/FakeEngine";', 'import { Actor, KismetSystemLibrary } from "/Script/FakeEngine";').replace(`${typed}\n`, "KismetSystemLibrary.K2_SetTimerDelegate\n"),
+      );
+    }
     assert.deepEqual(started.client.protocolErrors, []);
   } finally {
     await started.dispose();
