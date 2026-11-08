@@ -65,13 +65,31 @@ function talk(python, backendDir, headlessDir, timeoutMs) {
     let stderr = "";
     let finished = false;
     let sentList = false;
+    let exited = false;
+    let settle = () => {};
+    // Resolve only once the child has really exited (it holds files in the temp dir open),
+    // with hard upper bounds so a stuck process cannot hang the smoke test.
     const done = (ok, detail) => {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
+      let resolved = false;
+      let killTimer;
+      let hardTimer;
+      settle = () => {
+        if (resolved) return;
+        resolved = true;
+        clearTimeout(killTimer);
+        clearTimeout(hardTimer);
+        resolveDone({ ok, detail, stderr });
+      };
+      if (exited) return settle();
       child.stdin.end();
-      setTimeout(() => child.kill(), 500).unref();
-      resolveDone({ ok, detail, stderr });
+      killTimer = setTimeout(() => {
+        child.kill();
+        hardTimer = setTimeout(settle, 3000);
+      }, 2000);
+      child.once("exit", settle);
     };
     const timer = setTimeout(() => done(false, `no answer within ${timeoutMs} ms`), timeoutMs);
     const send = (obj) => child.stdin.write(`${JSON.stringify(obj)}\n`);
@@ -79,8 +97,14 @@ function talk(python, backendDir, headlessDir, timeoutMs) {
     child.stderr.on("data", (d) => {
       stderr = (stderr + d.toString("utf8")).slice(-4000);
     });
-    child.on("error", (e) => done(false, `failed to start: ${e.message}`));
-    child.on("exit", (code, signal) => done(false, `backend process exited (code ${code ?? "none"}, signal ${signal ?? "none"}) before answering`));
+    child.on("error", (e) => {
+      exited = true;
+      done(false, `failed to start: ${e.message}`);
+    });
+    child.on("exit", (code, signal) => {
+      exited = true;
+      done(false, `backend process exited (code ${code ?? "none"}, signal ${signal ?? "none"}) before answering`);
+    });
     child.stdout.on("data", (d) => {
       stdout += d.toString("utf8");
       let nl;
@@ -139,7 +163,11 @@ async function main() {
     }
     console.log(`smoke-backend: ok: the bundled backend ${r.detail}`);
   } finally {
-    rmSync(work, { recursive: true, force: true });
+    try {
+      rmSync(work, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    } catch (e) {
+      console.warn(`smoke-backend: warning: could not remove ${work}: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 }
 
