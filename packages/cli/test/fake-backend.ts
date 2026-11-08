@@ -11,12 +11,15 @@ import type {
   AuditReport,
   Backend,
   BpApplyResult,
+  CatalogResult,
   CompileMessage,
   CompileReport,
   GameTestReport,
   PublishGrant,
   PublishResult,
   RawBackendInfo,
+  ReflectData,
+  ReflectRequest,
   ReflectResult,
   StageReport,
   StageStatus,
@@ -163,6 +166,10 @@ export interface FakeBackendOptions {
    * the EventGraph in reverse order (the real compile T3D lists graphs in another order than export.t3d). Default false.
    */
   perGraphNames?: boolean;
+  /** The raw catalog document `catalog()` returns; the `catalog` tool and capability exist only when this is set. */
+  catalog?: unknown;
+  /** The reflect data `reflect()` returns for a request (default: reflect throws, as the fake never reflects). */
+  reflectData?: (r: ReflectRequest) => ReflectData;
 }
 
 const ALL_ASSET_OPS = ["rename", "delete", "reparent", "recreate"];
@@ -458,7 +465,8 @@ export class FakeBackend implements Backend {
     this.withUpdateTarget = o.handMadeEvent !== false;
     this.options = o;
     this.root = mkdtempSync(join(tmpdir(), "abfc-fake-backend-"));
-    const tools = withInfo ? ALL_TOOLS : ALL_TOOLS.filter((t) => t !== "backend_info");
+    const baseTools = withInfo ? ALL_TOOLS : ALL_TOOLS.filter((t) => t !== "backend_info");
+    const tools = o.catalog !== undefined ? [...baseTools, "catalog"] : baseTools;
     const capabilities = capabilitiesFrom(tools, withInfo ? (fixInfo() as RawBackendInfo) : null, { features: EXT_FEATURES });
     capabilities.stdMacros = o.stdMacros ?? capabilities.stdMacros;
     capabilities.stageAudit = o.stageAudit === true;
@@ -921,8 +929,23 @@ export class FakeBackend implements Backend {
   readonly tagIni = new Set<string>();
   readonly rowTags = new Map<string, string>();
 
-  async reflect(): Promise<ReflectResult> {
-    throw new Error("the fake backend does not reflect");
+  async reflect(r?: ReflectRequest): Promise<ReflectResult> {
+    if (this.options.reflectData === undefined || r === undefined) throw new Error("the fake backend does not reflect");
+    this.calls.push({ tool: "reflect" });
+    const run = join(this.root, "runs", "reflect");
+    return {
+      run,
+      seconds: 0.1,
+      file: "",
+      data: this.options.reflectData(r),
+      filter: { contentVersion: null, rules: [] },
+    };
+  }
+
+  async catalog(_mod: string): Promise<CatalogResult> {
+    if (this.options.catalog === undefined) throw new Error("the fake backend has no catalog");
+    this.calls.push({ tool: "catalog" });
+    return { run: join(this.root, "runs", "catalog"), seconds: 0.1, file: "", data: this.options.catalog };
   }
 
   async gameTest(_mod: string, steps: unknown[], _o: { timeoutSeconds: number }): Promise<GameTestReport> {

@@ -381,7 +381,7 @@ function buildPlan(s: Session, sel: Selection): Plan {
   let machineKeys: Record<string, string> = {};
   const cfgAbs = at(PROJECT_CONFIG_FILE);
   if (existing === null) {
-    add(PROJECT_CONFIG_FILE, "written", projectConfigText(sel.mod.name, sel.profile.initScriptClasses));
+    add(PROJECT_CONFIG_FILE, "written", projectConfigText(sel.mod.name, []));
   } else {
     const raw = deps.host.readFile(cfgAbs);
     let text = raw;

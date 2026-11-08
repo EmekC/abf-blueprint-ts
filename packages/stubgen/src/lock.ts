@@ -1,10 +1,28 @@
 // stubs.lock.json: which editor build the stubs were generated for (design 5.3).
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { profileForBuild } from "@abfc/env";
 import type { Environment, ProjectConfig } from "@abfc/env";
 import type { Diagnostic } from "@abfc/ir";
 import { STUBGEN_VERSION } from "./manual.js";
+import { writeFileAtomic } from "./store.js";
+
+/** What the automatic class set covers (`abfc generate` / the first build). Not part of `stubLockHashOf`. */
+export interface AutoStubs {
+  /** sha256 of `_catalog.json` the stubs were generated from. */
+  catalogSha256: string;
+  /** Number of game classes in the catalog. */
+  gameClasses: number;
+  /** Classes the backend could not reflect; skipped until `--add`, `--refresh` or a new editor build. */
+  failed: string[];
+  /** Classes added on demand (`--add`, quick fix) that stay in every later run. */
+  added: string[];
+  /**
+   * Set when the backend that generated (or last looked at) these stubs has no `catalog` tool: the id of that backend. A build then
+   * does not start the backend again to look for the tool until the editor build or the backend changes.
+   */
+  noCatalog?: string;
+}
 
 export interface StubsLock {
   generator: string;
@@ -18,6 +36,8 @@ export interface StubsLock {
   modAssets: string[];
   /** `stubs.widgetMembers` the stubs were generated with (keys sorted). */
   widgetMembers?: Record<string, Record<string, string>>;
+  /** Absent for stubs without a catalog (legacy locks, backends without the `catalog` tool). */
+  auto?: AutoStubs;
   createdAt: string;
 }
 
@@ -51,7 +71,7 @@ export function readLock(stubsDir: string): StubsLock | null {
 
 export function writeLock(stubsDir: string, lock: StubsLock): void {
   mkdirSync(stubsDir, { recursive: true });
-  writeFileSync(lockPath(stubsDir), JSON.stringify(lock, null, 2) + "\n", "utf8");
+  writeFileAtomic(lockPath(stubsDir), JSON.stringify(lock, null, 2) + "\n");
 }
 
 export function newLock(
@@ -71,7 +91,7 @@ export function checkLock(lock: StubsLock | null, env: Environment, config: Proj
       severity: "error",
       code: "ABFC3003",
       message: "stubs are missing: no stubs.lock.json for this editor build.",
-      fix: 'run "abfc generate" to generate them.',
+      fix: 'run "abfc generate" (abfc build also generates them).',
     });
     return out;
   }

@@ -94,6 +94,8 @@ export interface BackendCapabilities {
   compileErrorNodeRefs: boolean; // compile errors name the node (needed for line-level mapping)
   nodeNameMap: boolean; // returns IR id -> real node name
   reflect: boolean;
+  /** The backend has the `catalog` tool (abf-mod-editor-mcp 2.6.0): a names-only catalog of every game and engine class. */
+  catalog: boolean;
   gameTest: boolean;
   audit: boolean;
   publish: boolean;

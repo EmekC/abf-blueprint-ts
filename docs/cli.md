@@ -84,18 +84,24 @@ Prints the project, the mod, the profile, the Node version, the install kind, th
 ## abfc generate
 
 ```
-abfc generate [--resync]
+abfc generate [--add <path>]... [--refresh] [--resync]
 ```
 
 `abfc stubs` is the old name of this command. It still works and does the same, prints a deprecation warning on standard error, and is no longer listed in the usage text.
 
-Asks the backend to describe the classes listed in `abf.config.json` (`stubs.classes`, `stubs.scriptClasses`), reads the hand-made assets of the mod and writes the TypeScript declarations into `.abfc/stubs/<profile>/` together with `stubs.lock.json`. The first run needs the network once, because the backend downloads the Blueprint filter. Besides the engine and mod-asset declarations it writes `.abfc/tags.d.ts`, which declares the gameplay tags as constants (`ClassManager.EntityDirector.<Tag>`, used by `@director`, see [first-mod.md](first-mod.md#director-with-a-gameplay-tag)) from the game's tag list and the `Config/Tags/*.ini` files of your mod; a backend that cannot list the game's tags gives [ABFC3012](errors.md#abfc3012) and the file holds only the mod's own tags. Library functions whose parameters have defaults in the engine are generated with those parameters optional (`PrintString("hi")`). Run it again when the config's `stubs` section, the mod assets or the editor build change, and after updating abfc: stubs made by an older abfc give a warning ([ABFC3001](errors.md#abfc3001)) that names both generator versions and lack the newer additions; `abfc check` and `abfc build` refuse stubs that no longer match ([ABFC3010](errors.md#abfc3010) explains the one `stubs` key that is ignored).
+Generates the stubs automatically. The backend lists the names of the whole game once (the class catalog, about 7 seconds, stored in `.abfc/stubs/<profile>/_catalog.json`); then every `/Game` Blueprint class gets a stub, together with the engine types their members use and the profile's default engine classes. This full set is generated once per Mod Editor build and takes about 3-4 minutes (measured: 3098 game classes, about 17 MB, about 3200 files in about 195 seconds); the result is cached in the profile folder (`_cache.json.gz`), so a later `abfc generate` only generates what is new (the classes you added, the engine names your source imports, the config extras) in about 15-20 seconds. Engine names (`/Script/...` classes, structs and enums) are generated on demand: import one in your source (`import { Actor } from "/Script/Engine"`) or name it with `--add`, and the next `abfc generate` or `abfc build` generates it. `stubs.classes` and `stubs.scriptClasses` in `abf.config.json` are optional extras. The command holds the project lock while it writes, so nothing else writes the stub folder at the same time. It also reads the hand-made assets of the mod and writes the TypeScript declarations into `.abfc/stubs/<profile>/` together with `stubs.lock.json`. The first run needs the network once, because the backend downloads the Blueprint filter. Besides the engine and mod-asset declarations it writes `.abfc/tags.d.ts`, which declares the gameplay tags as constants (`ClassManager.EntityDirector.<Tag>`, used by `@director`, see [first-mod.md](first-mod.md#director-with-a-gameplay-tag)) from the game's tag list and the `Config/Tags/*.ini` files of your mod; a backend that cannot list the game's tags gives [ABFC3012](errors.md#abfc3012) and the file holds only the mod's own tags. Library functions whose parameters have defaults in the engine are generated with those parameters optional (`PrintString("hi")`). Run it again when the config's `stubs` section, the mod assets or the editor build change, and after updating abfc: stubs made by an older abfc give a warning ([ABFC3001](errors.md#abfc3001)) that names both generator versions and lack the newer additions; `abfc check` and `abfc build` refuse stubs that no longer match ([ABFC3010](errors.md#abfc3010) explains the one `stubs` key that is ignored).
 
 | Option | Meaning |
 | --- | --- |
+| `--add <path>` | Generate stubs for one more name; repeat it for several. A path is `/Script/<Package>.<Name>` (a class, struct or enum), a `/Game/...` class path (`/Game/Dir/BP_X.BP_X_C`) or a `/Game/...` module (every class of that Blueprint file). Added names are remembered in `stubs.lock.json` and kept by later runs. A name that is not in the catalog gives [ABFC3022](errors.md#abfc3022); a name that failed to reflect earlier is retried. |
+| `--refresh` | Forget the cached catalog and the cached reflection and generate everything again (the 3-4 minute full run). Use it after a game update that does not change the editor build, or to retry the classes recorded as failed ([ABFC3023](errors.md#abfc3023)). |
 | `--resync` | When mod assets are read, first recreate the staging copy from the mod (see [`abfc build`](#abfc-build)). |
 
-`generate --json` result: `{dir, files, members, opaque, modAssets}` (`dir` is the profile folder; `files` and `members` count what was written; `opaque` lists types abfc could not describe; `modAssets` lists the hand-made mod assets that got stubs).
+`generate --json` result: `{dir, files, members, opaque, modAssets, full, reflected, catalog, added, failed, notFound}` (`dir` is the profile folder; `files` and `members` count what was written; `opaque` lists types abfc could not describe; `modAssets` lists the hand-made mod assets that got stubs; `full` is true when the full game set was generated; `reflected` is the number of classes sent to the backend in this run; `catalog` is `{game, scriptClasses}` counts or null without a catalog; `added`, `failed` and `notFound` are the lists described above).
+
+A backend without the `catalog` tool (older than abf-mod-editor-mcp 2.6.0) still works: only the profile defaults, the config lists and the `--add` paths get stubs, and `abfc generate` warns with [ABFC3021](errors.md#abfc3021) each run.
+
+`abfc build`, `test` and `publish` generate missing stubs by themselves at their start: when the lock is missing or stale, or your source imports an engine or game name that has no stub yet, the build starts the backend, generates just that and goes on. A build with complete, current stubs does not start the backend for this. When the backend cannot be used the build warns once with [ABFC3020](errors.md#abfc3020) and continues from the existing stubs; if those are unusable the lock check that follows stops the build. Neither the language server nor `abfc check` ever starts the editor.
 
 ## abfc check
 
@@ -215,7 +221,7 @@ The publish also carries the structural changes of the build:
 abfc lsp [--stdio]
 ```
 
-Starts the language server on stdin and stdout: diagnostics, hover, quick fixes and completion. Completion offers the engine and mod library functions (typing `PrintS` offers `KismetSystemLibrary.PrintString` and adds the import) and, at the start of a member in a class body, `@override override ReceiveBeginPlay(): void { }` stubs for the events of the parent class (typing `Rec`). It reads the stubs, so run `abfc generate` first. Standard output carries only the protocol; logs go to standard error. `--stdio` and the `--clientProcessId <pid>` that language clients add are accepted and ignored. See [language-service.md](language-service.md) for the editor setup.
+Starts the language server on stdin and stdout: diagnostics, hover, quick fixes and completion. Completion offers the classes, structs and enums of the game and the engine with their import (typing `BP_Fa` in a type position offers `BP_Fake_C` and adds `import { BP_Fake_C } from "/Game/..."`; names that have no stub yet are offered too), and the engine and mod library functions (typing `PrintS` offers `KismetSystemLibrary.PrintString` and adds the import) and, at the start of a member in a class body, `@override override ReceiveBeginPlay(): void { }` stubs for the events of the parent class (typing `Rec`). It reads the stubs, so run `abfc generate` first. A TypeScript error about an unresolved `/Script/...` or `/Game/...` import has a quick fix "Generate stubs for <names>": it runs `abfc generate --add` for those names (this starts the Mod Editor backend, takes a few seconds to minutes, and reports the result as a message); it never runs on typing. Standard output carries only the protocol; logs go to standard error. `--stdio` and the `--clientProcessId <pid>` that language clients add are accepted and ignored. See [language-service.md](language-service.md) for the editor setup.
 
 ## abfc version
 
@@ -242,6 +248,7 @@ Prints `abfc <version> (<exe|source install>, node <version>)` and exits 0. It w
 | `--timings` | check, build, test, publish |
 | `--cold` | build, test, status, adopt, publish |
 | `--resync` | generate, build, test, status, adopt, publish |
+| `--add`, `--refresh` | generate only |
 | `--drift` | build |
 | `--keep-failed-stage` | build, test, publish |
 | `--no-build` | test |
@@ -254,7 +261,7 @@ Prints `abfc <version> (<exe|source install>, node <version>)` and exits 0. It w
 | `--version` | `abfc --version` only |
 | `--stdio`, `--clientProcessId` | lsp (accepted, ignored) |
 
-A flag the command does not use is ignored, except for the three that are refused with a usage error: `--drift` outside `build`, `--keep-failed-stage` outside `build`, `test` and `publish`, and `--watch` with `--json`. An unknown option is a usage error too.
+A flag the command does not use is ignored, except for the ones that are refused with a usage error: `--drift` outside `build`, `--keep-failed-stage` outside `build`, `test` and `publish`, `--add` and `--refresh` outside `generate`, and `--watch` with `--json`. An unknown option is a usage error too.
 
 ## Running one command at a time
 

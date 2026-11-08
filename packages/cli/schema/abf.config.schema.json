@@ -65,7 +65,7 @@
         },
         "widgetMembers": {
           "type": "object",
-          "description": "Designer widgets of widget Blueprints that cannot be read from an export: class path to { member name: widget class path }.",
+          "description": "Deprecated: members are found by abfc generate. Designer widgets of widget Blueprints that cannot be read from an export: class path to { member name: widget class path }.",
           "additionalProperties": {
             "type": "object",
             "additionalProperties": { "type": "string" }

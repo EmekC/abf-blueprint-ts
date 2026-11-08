@@ -14,6 +14,7 @@ import type {
   AuditReport,
   Backend,
   BpApplyResult,
+  CatalogResult,
   CompileMessage,
   CompileReport,
   GameTestReport,
@@ -332,6 +333,7 @@ export class BpApplyBackend implements Backend {
         structs: r.structs,
         cast_targets: r.castTargets,
         ...(r.gameplayTags === true ? { gameplay_tags: true } : {}),
+        ...(r.supersOf !== undefined && r.supersOf.length > 0 ? { supers_of: r.supersOf } : {}),
         timeout_seconds: 900,
       },
       { timeoutMs: 960_000 },
@@ -345,7 +347,7 @@ export class BpApplyBackend implements Backend {
         message: `backend tool "reflect" returned no result file (run folder: ${str(json.run) ?? "unknown"}).`,
       });
     }
-    const parsed = JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, "")) as Partial<ReflectData> & { gameplayTags?: unknown };
+    const parsed = JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, "")) as Partial<ReflectData> & { gameplayTags?: unknown; supers?: unknown; memberSources?: unknown };
     const data: ReflectData = {
       engineVersion: parsed.engineVersion ?? null,
       classes: parsed.classes ?? {},
@@ -358,6 +360,13 @@ export class BpApplyBackend implements Backend {
         sources: isObject(parsed.gameplayTags.sources) ? parsed.gameplayTags.sources : {},
       };
     }
+    if (isObject(parsed.supers)) {
+      data.supers = {};
+      for (const [p, chain] of Object.entries(parsed.supers)) {
+        if (Array.isArray(chain) && chain.every((x) => typeof x === "string")) data.supers[p] = chain as string[];
+      }
+    }
+    if (Array.isArray(parsed.memberSources)) data.memberSources = parsed.memberSources.filter((x): x is string => typeof x === "string");
     const filter = isObject(json.filter) ? json.filter : {};
     const rules: Array<["Allow" | "Block", string]> = [];
     if (Array.isArray(filter.rules)) {
@@ -372,6 +381,22 @@ export class BpApplyBackend implements Backend {
       data,
       filter: { contentVersion: str(filter.content_version), rules },
     };
+  }
+
+  async catalog(mod: string): Promise<CatalogResult> {
+    await this.ensureWarm(mod);
+    const { json } = await this.call("catalog", { mod, timeout_seconds: 300 }, { timeoutMs: 360_000 });
+    this.lastWarm = json.warm === true;
+    const file = str(json.file);
+    if (file === null) {
+      throw new AbfcError({
+        severity: "error",
+        code: "ABFC4002",
+        message: `backend tool "catalog" returned no result file (run folder: ${str(json.run) ?? "unknown"}).`,
+      });
+    }
+    const data: unknown = JSON.parse(readFileSync(file, "utf8").replace(/^﻿/, ""));
+    return { run: str(json.run) ?? "", seconds: num(json.seconds), file, data, warm: this.lastWarm };
   }
 
   async gameTest(mod: string, steps: unknown[], o: { timeoutSeconds: number }): Promise<GameTestReport> {

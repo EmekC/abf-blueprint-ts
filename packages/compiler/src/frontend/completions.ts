@@ -5,12 +5,16 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import ts from "typescript";
 import { runtimeBinding } from "./fixes.js";
+import { MIN_WORD_MATCH, PrefixIndex, squash, wordStarts } from "./nameindex.js";
+import type { NameHit } from "./nameindex.js";
 import type { LoadedProgram } from "./program.js";
 import { functionInfo } from "./tags.js";
 
+export { MIN_WORD_MATCH };
+
 export interface AbfcCompletion {
   label: string;
-  kind: "function" | "method";
+  kind: "function" | "method" | "class" | "struct" | "enum";
   detail: string;
   documentation?: string;
   insertText: string;
@@ -21,6 +25,10 @@ export interface AbfcCompletion {
   /** Further edits (imports); never overlap `replace`. */
   additionalEdits: Array<{ start: number; end: number; newText: string }>;
   sortText: string;
+  /** Text the client filters on; the label when absent. */
+  filterText?: string;
+  /** Shown next to the label, e.g. `KismetSystemLibrary · Set Timer by Event`. */
+  labelDescription?: string;
 }
 
 export interface LibraryEntry {
@@ -32,9 +40,34 @@ export interface LibraryEntry {
   /** `(InString?: string): void` */
   signature: string;
   doc: string;
+  /** The Blueprint node name from the description's `(...)`, e.g. `Set Timer by Event`; absent in stubs without one. */
+  displayName?: string;
+  /** False for a function that exists in the engine catalog but has no generated stub yet (empty signature and doc). */
+  generated?: false;
+}
+
+/** A class, struct or enum from the names-only catalog (`_names.json`): offered with its import before any stub declares it. */
+export interface CatalogTypeEntry {
+  name: string;
+  /** The import specifier, e.g. `/Script/Engine` or `/Game/Fake/BP_Fake`. */
+  module: string;
+  /** The asset or script path, e.g. `/Script/Engine.Actor`. */
+  path: string;
+  kind: "class" | "struct" | "enum";
+}
+
+export type CompletionItemSource = { k: "fn"; e: LibraryEntry } | { k: "type"; t: CatalogTypeEntry };
+
+/** Everything completion offers by name: functions and catalog types behind one prefix index. */
+export interface CompletionIndex {
+  functions: LibraryEntry[];
+  types: CatalogTypeEntry[];
+  readonly prefix: PrefixIndex<CompletionItemSource>;
 }
 
 const MAX_LIBRARY_ITEMS = 100;
+const NAMES_FILE = "_names.json";
+const LIBRARY_FILE = "_library.json";
 const LOCK_FILE = "stubs.lock.json";
 const RUNTIME_MODULE = "@abfc/runtime";
 
@@ -61,6 +94,67 @@ function docOf(node: ts.Node): string {
     if (ts.isJSDoc(d) && d.comment !== undefined) parts.push(ts.getTextOfJSDocComment(d.comment) ?? "");
   }
   return parts.join("\n").trim();
+}
+
+/** `(params): ret` of a declaration, as shown in a completion's detail. */
+function signatureOf(decl: ts.SignatureDeclaration, sf: ts.SourceFile): string {
+  const params = decl.parameters.map((p) => p.getText(sf)).join(", ");
+  return `(${params}): ${decl.type === undefined ? "void" : decl.type.getText(sf)}`;
+}
+
+/**
+ * The Blueprint node name stubgen writes at the end of a function description, `Starts a timer (Set Timer by Event).` ->
+ * `Set Timer by Event`; undefined when the first line does not end in a balanced `(...)`.
+ */
+export function displayNameFromDoc(doc: string): string | undefined {
+  const first = doc.split(/\r?\n/).find((l) => l.trim() !== "");
+  if (first === undefined) return undefined;
+  let line = first.trim();
+  if (line.endsWith(".")) line = line.slice(0, -1);
+  if (!line.endsWith(")")) return undefined;
+  let depth = 0;
+  for (let i = line.length - 1; i >= 0; i--) {
+    const c = line[i];
+    if (c === ")") depth++;
+    else if (c === "(") {
+      depth--;
+      if (depth === 0) {
+        const inside = line.slice(i + 1, line.length - 1).trim();
+        return inside === "" ? undefined : inside;
+      }
+    }
+  }
+  return undefined;
+}
+
+export interface NameMatch {
+  /** 0 full-name prefix, 1 prefix of the name without `K2_`/`BP_`, 2 prefix of the node name, 3 word start inside the name or node name. */
+  tier: 0 | 1 | 2 | 3;
+  /** The matched text from the match point on (what a client should filter on). */
+  filterText: string;
+}
+
+/** How `prefix` (case-insensitive) matches a function name or its Blueprint node name, best tier first; undefined when it does not. */
+export function matchName(name: string, displayName: string | undefined, prefix: string): NameMatch | undefined {
+  const q = prefix.toLowerCase();
+  if (q === "") return undefined;
+  if (name.toLowerCase().startsWith(q)) return { tier: 0, filterText: name };
+  const stripped = name.replace(/^(K2|BP)_/, "");
+  if (stripped !== name && stripped.toLowerCase().startsWith(q)) return { tier: 1, filterText: stripped };
+  if (q.length < MIN_WORD_MATCH) return undefined;
+  const d = displayName === undefined ? "" : squash(displayName);
+  if (d !== "" && d.toLowerCase().startsWith(q)) return { tier: 2, filterText: d };
+  for (const i of wordStarts(name)) {
+    const rest = name.slice(i);
+    if (rest.toLowerCase().startsWith(q)) return { tier: 3, filterText: rest };
+  }
+  if (displayName !== undefined) {
+    for (const i of wordStarts(displayName)) {
+      const rest = squash(displayName.slice(i));
+      if (rest.toLowerCase().startsWith(q)) return { tier: 3, filterText: rest };
+    }
+  }
+  return undefined;
 }
 
 function* dtsFiles(dir: string): Generator<string> {
@@ -92,37 +186,165 @@ export function buildLibraryIndex(stubsProfileDir: string): LibraryEntry[] {
   const cached = indexCache.get(dir);
   if (mtimeMs >= 0 && cached !== undefined && cached.mtimeMs === mtimeMs) return cached.entries;
 
-  const entries: LibraryEntry[] = [];
+  const entries = readLibraryFile(dir) ?? libraryEntriesOf(declarationFiles(dir));
+  if (mtimeMs >= 0) indexCache.set(dir, { mtimeMs, entries });
+  return entries;
+}
+
+/** `[relative path, text]` of every stub file of a profile folder that declares a namespace. */
+function* declarationFiles(dir: string): Generator<[string, string]> {
   for (const file of dtsFiles(dir)) {
-    const module = moduleOfRelative(relative(dir, file));
-    if (module === undefined) continue;
     let text: string;
     try {
       text = readFileSync(file, "utf8");
     } catch {
       continue;
     }
+    yield [relative(dir, file), text];
+  }
+}
+
+/** The library entries stubgen wrote next to the stubs (`_library.json`); undefined when missing or not of the known shape. */
+function readLibraryFile(dir: string): LibraryEntry[] | undefined {
+  let doc: unknown;
+  try {
+    doc = JSON.parse(readFileSync(join(dir, LIBRARY_FILE), "utf8").replace(/^﻿/, ""));
+  } catch {
+    return undefined;
+  }
+  if (typeof doc !== "object" || doc === null) return undefined;
+  const { version, entries } = doc as { version?: unknown; entries?: unknown };
+  if (version !== 1 || !Array.isArray(entries)) return undefined;
+  const out: LibraryEntry[] = [];
+  for (const e of entries as unknown[]) {
+    if (typeof e !== "object" || e === null) return undefined;
+    const r = e as Record<string, unknown>;
+    if (typeof r.name !== "string" || typeof r.container !== "string" || typeof r.module !== "string") return undefined;
+    if (typeof r.signature !== "string" || typeof r.doc !== "string") return undefined;
+    out.push({
+      name: r.name,
+      container: r.container,
+      module: r.module,
+      signature: r.signature,
+      doc: r.doc,
+      ...(typeof r.displayName === "string" ? { displayName: r.displayName } : {}),
+    });
+  }
+  return out;
+}
+
+/**
+ * The static functions of `export declare namespace X { function F }` in stub files, given as `[path relative to the profile
+ * folder, text]`; deprecated functions and files without a namespace are left out.
+ */
+export function libraryEntriesOf(files: Iterable<[rel: string, text: string]>): LibraryEntry[] {
+  const entries: LibraryEntry[] = [];
+  for (const [rel, text] of files) {
+    const module = moduleOfRelative(rel);
+    if (module === undefined) continue;
     if (!text.includes("namespace ")) continue;
-    const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+    const sf = ts.createSourceFile(rel, text, ts.ScriptTarget.Latest, true);
     for (const st of sf.statements) {
       if (!ts.isModuleDeclaration(st) || !ts.isIdentifier(st.name) || st.body === undefined || !ts.isModuleBlock(st.body)) continue;
       if (!(ts.getCombinedModifierFlags(st) & ts.ModifierFlags.Export)) continue;
       for (const inner of st.body.statements) {
         if (!ts.isFunctionDeclaration(inner) || inner.name === undefined) continue;
         if (ts.getJSDocDeprecatedTag(inner) !== undefined) continue;
-        const params = inner.parameters.map((p) => p.getText(sf)).join(", ");
+        const doc = docOf(inner);
+        const displayName = displayNameFromDoc(doc);
         entries.push({
           name: inner.name.text,
           container: st.name.text,
           module,
-          signature: `(${params}): ${inner.type === undefined ? "void" : inner.type.getText(sf)}`,
-          doc: docOf(inner),
+          signature: signatureOf(inner, sf),
+          doc,
+          ...(displayName === undefined ? {} : { displayName }),
         });
       }
     }
   }
-  if (mtimeMs >= 0) indexCache.set(dir, { mtimeMs, entries });
   return entries;
+}
+
+function makeCompletionIndex(functions: LibraryEntry[], types: CatalogTypeEntry[]): CompletionIndex {
+  const entries: Array<{ item: CompletionItemSource; name: string; displayName?: string }> = [];
+  for (const e of functions) entries.push({ item: { k: "fn", e }, name: e.name, ...(e.displayName === undefined ? {} : { displayName: e.displayName }) });
+  for (const t of types) entries.push({ item: { k: "type", t }, name: t.name });
+  return { functions, types, prefix: new PrefixIndex(entries) };
+}
+
+const completionIndexes = new WeakMap<LibraryEntry[], CompletionIndex>();
+
+/** A completion index over library entries only (no catalog types); memoised per array. */
+export function completionIndexOf(entries: LibraryEntry[]): CompletionIndex {
+  let index = completionIndexes.get(entries);
+  if (index === undefined) {
+    index = makeCompletionIndex(entries, []);
+    completionIndexes.set(entries, index);
+  }
+  return index;
+}
+
+const KINDS = new Set(["class", "struct", "enum"]);
+
+/** `_names.json` (`{ version: 1, types, functions }`) of a profile folder; empty lists when missing or not of the known shape. */
+function readNamesFile(dir: string): { types: CatalogTypeEntry[]; functions: Array<{ name: string; container: string; module: string }> } {
+  const none = { types: [], functions: [] };
+  let doc: unknown;
+  try {
+    doc = JSON.parse(readFileSync(join(dir, NAMES_FILE), "utf8").replace(/^﻿/, ""));
+  } catch {
+    return none;
+  }
+  if (typeof doc !== "object" || doc === null) return none;
+  const { version, types, functions } = doc as { version?: unknown; types?: unknown; functions?: unknown };
+  if (version !== 1) return none;
+  const outTypes: CatalogTypeEntry[] = [];
+  if (Array.isArray(types)) {
+    for (const t of types as unknown[]) {
+      const r = (typeof t === "object" && t !== null ? t : {}) as Record<string, unknown>;
+      if (typeof r.name !== "string" || typeof r.module !== "string" || typeof r.path !== "string" || typeof r.kind !== "string" || !KINDS.has(r.kind)) continue;
+      outTypes.push({ name: r.name, module: r.module, path: r.path, kind: r.kind as CatalogTypeEntry["kind"] });
+    }
+  }
+  const outFns: Array<{ name: string; container: string; module: string }> = [];
+  if (Array.isArray(functions)) {
+    for (const f of functions as unknown[]) {
+      const r = (typeof f === "object" && f !== null ? f : {}) as Record<string, unknown>;
+      if (typeof r.name !== "string" || typeof r.container !== "string" || typeof r.module !== "string") continue;
+      outFns.push({ name: r.name, container: r.container, module: r.module });
+    }
+  }
+  return { types: outTypes, functions: outFns };
+}
+
+const completionCache = new Map<string, { lockMtimeMs: number; namesMtimeMs: number; index: CompletionIndex }>();
+
+/**
+ * Everything completion offers for a stubs profile folder (`.abfc/stubs/<profile>`): the generated library functions plus the
+ * names-only catalog (`_names.json`: classes, structs, enums and library functions that have no stub yet). Cached per folder while
+ * `stubs.lock.json` and `_names.json` keep their modification times.
+ */
+export function buildCompletionIndex(stubsProfileDir: string): CompletionIndex {
+  const dir = resolve(stubsProfileDir);
+  const lock = join(dir, LOCK_FILE);
+  const names = join(dir, NAMES_FILE);
+  const lockMtimeMs = existsSync(lock) ? statSync(lock).mtimeMs : -1;
+  const namesMtimeMs = existsSync(names) ? statSync(names).mtimeMs : -1;
+  const cached = completionCache.get(dir);
+  if (lockMtimeMs >= 0 && cached !== undefined && cached.lockMtimeMs === lockMtimeMs && cached.namesMtimeMs === namesMtimeMs) return cached.index;
+
+  const generated = buildLibraryIndex(dir);
+  const catalog = namesMtimeMs >= 0 ? readNamesFile(dir) : { types: [], functions: [] };
+  const have = new Set(generated.map((e) => `${e.module}|${e.container}|${e.name}`));
+  const functions = [...generated];
+  for (const f of catalog.functions) {
+    if (have.has(`${f.module}|${f.container}|${f.name}`)) continue;
+    functions.push({ name: f.name, container: f.container, module: f.module, signature: "", doc: "", generated: false });
+  }
+  const index = makeCompletionIndex(functions, catalog.types);
+  if (lockMtimeMs >= 0) completionCache.set(dir, { lockMtimeMs, namesMtimeMs, index });
+  return index;
 }
 
 const isIdChar = (c: number): boolean => (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95 || c === 36;
@@ -404,26 +626,82 @@ function importedContainer(sf: ts.SourceFile, container: string, module: string)
   return undefined;
 }
 
+/** Which names a position takes: `expr` functions and classes, `type` any catalog type, `heritage` (extends/implements) classes only. */
+type CompletionMode = "expr" | "type" | "heritage";
+
+const rankOf = (s: CompletionItemSource): number => (s.k === "type" ? 1 : s.e.generated === false ? 2 : 0);
+const nameOfSource = (s: CompletionItemSource): string => (s.k === "type" ? s.t.name : s.e.name);
+const tieKeyOf = (s: CompletionItemSource): string => (s.k === "type" ? `${s.t.module}\0${s.t.path}` : `${s.e.container}\0${s.e.module}`);
+
+/** Tier, then (full-name matches) the case-exact prefix first, then generated functions, types, catalog-only functions, then name. */
+function compareHits(prefix: string): (a: NameHit<CompletionItemSource>, b: NameHit<CompletionItemSource>) => number {
+  return (a, b) => {
+    if (a.tier !== b.tier) return a.tier - b.tier;
+    const an = nameOfSource(a.item);
+    const bn = nameOfSource(b.item);
+    if (a.tier === 0) {
+      const ca = an.startsWith(prefix) ? 0 : 1;
+      const cb = bn.startsWith(prefix) ? 0 : 1;
+      if (ca !== cb) return ca - cb;
+    }
+    const ra = rankOf(a.item);
+    const rb = rankOf(b.item);
+    if (ra !== rb) return ra - rb;
+    if (an !== bn) return an < bn ? -1 : 1;
+    const ka = tieKeyOf(a.item);
+    const kb = tieKeyOf(b.item);
+    return ka < kb ? -1 : ka > kb ? 1 : 0;
+  };
+}
+
+/** Moves an import that would touch the replaced word into the inserted text (an edit in front of the first statement). */
+function foldTouching(insertText: string, edits: Edit[], replace: { start: number; end: number }): { insertText: string; additionalEdits: Edit[] } {
+  let additionalEdits = mergeEdits(edits);
+  const touching = additionalEdits.find((x) => x.start === replace.start && x.end === x.start);
+  if (touching !== undefined) {
+    insertText = touching.newText + insertText;
+    additionalEdits = additionalEdits.filter((x) => x !== touching);
+  }
+  return { insertText, additionalEdits };
+}
+
 function libraryCompletions(
   loaded: LoadedProgram,
   sf: ts.SourceFile,
   at: ts.Node,
   prefix: string,
   replace: { start: number; end: number },
-  index: LibraryEntry[],
+  index: CompletionIndex,
+  mode: CompletionMode,
 ): AbfcCompletion[] {
-  const want = prefix.toLowerCase();
-  const hits = index.filter((e) => e.name.toLowerCase().startsWith(want));
-  hits.sort((a, b) => {
-    const ca = a.name.startsWith(prefix) ? 0 : 1;
-    const cb = b.name.startsWith(prefix) ? 0 : 1;
-    if (ca !== cb) return ca - cb;
-    return a.name < b.name ? -1 : a.name > b.name ? 1 : a.container < b.container ? -1 : a.container > b.container ? 1 : 0;
-  });
+  const accept = (s: CompletionItemSource): boolean =>
+    mode === "expr" ? s.k === "fn" || s.t.kind === "class" : s.k === "type" && (mode === "type" || s.t.kind === "class");
+  // headroom for the hits dropped below because their name is already bound in this file
+  const hits = index.prefix.lookup(prefix, accept, compareHits(prefix), MAX_LIBRARY_ITEMS * 2);
+  if (hits.length === 0) return [];
   const scope = namesInScope(loaded, at);
   const out: AbfcCompletion[] = [];
-  for (const e of hits) {
+  for (const { item, tier, filterText } of hits) {
     if (out.length >= MAX_LIBRARY_ITEMS) break;
+    if (item.k === "type") {
+      const t = item.t;
+      if (scope.has(t.name)) continue; // already imported or declared here
+      const folded = foldTouching(t.name, planImports(sf, [{ module: t.module, name: t.name, type: t.kind !== "class" }]), replace);
+      out.push({
+        label: t.name,
+        kind: t.kind,
+        detail: t.path,
+        insertText: folded.insertText,
+        snippet: false,
+        replace,
+        additionalEdits: folded.additionalEdits,
+        sortText: `1${"ABCD"[tier]}${t.name}`,
+        filterText,
+        labelDescription: t.module,
+      });
+      continue;
+    }
+    const e = item.e;
     let local = importedContainer(sf, e.container, e.module);
     let edits: Edit[] = [];
     if (local === undefined) {
@@ -431,27 +709,70 @@ function libraryCompletions(
       local = e.container;
       edits = planImports(sf, [{ module: e.module, name: e.container, type: false }]);
     }
-    let insertText = `${local}.${e.name}`;
-    let additionalEdits = mergeEdits(edits);
-    // An import in front of the first statement would touch the replaced word: fold it into the inserted text instead.
-    const touching = additionalEdits.find((x) => x.start === replace.start && x.end === x.start);
-    if (touching !== undefined) {
-      insertText = touching.newText + insertText;
-      additionalEdits = additionalEdits.filter((x) => x !== touching);
-    }
+    const folded = foldTouching(`${local}.${e.name}`, edits, replace);
+    const catalogOnly = e.generated === false;
     out.push({
       label: e.name,
       kind: "function",
-      detail: `${e.container}.${e.name}${e.signature}`,
+      detail: catalogOnly ? `${e.container}.${e.name}` : `${e.container}.${e.name}${e.signature}`,
       ...(e.doc === "" ? {} : { documentation: e.doc }),
-      insertText,
+      insertText: folded.insertText,
       snippet: false,
       replace,
-      additionalEdits,
-      sortText: `1${e.name}`,
+      additionalEdits: folded.additionalEdits,
+      sortText: `${catalogOnly ? "2" : "1"}${"ABCD"[tier]}${e.name}`,
+      filterText,
+      labelDescription: catalogOnly ? `${e.container} · not generated yet` : e.displayName === undefined ? e.container : `${e.container} · ${e.displayName}`,
     });
   }
   return out;
+}
+
+/**
+ * After `x.`: stub members whose Blueprint node name matches the typed prefix but whose C++ name does not (the TypeScript server
+ * already lists the others).
+ */
+function memberCompletions(loaded: LoadedProgram, access: ts.PropertyAccessExpression, prefix: string, replace: { start: number; end: number }): AbfcCompletion[] {
+  if (prefix.length < MIN_WORD_MATCH) return [];
+  const { checker } = loaded;
+  let props: ts.Symbol[];
+  try {
+    props = checker.getPropertiesOfType(checker.getTypeAtLocation(access.expression));
+  } catch {
+    return [];
+  }
+  const hits: Array<{ item: AbfcCompletion; tier: number }> = [];
+  for (const sym of props) {
+    if (!(sym.flags & (ts.SymbolFlags.Method | ts.SymbolFlags.Function))) continue;
+    const decl = (sym.declarations ?? []).find((d): d is ts.MethodDeclaration | ts.MethodSignature | ts.FunctionDeclaration => ts.isMethodDeclaration(d) || ts.isMethodSignature(d) || ts.isFunctionDeclaration(d));
+    if (decl === undefined) continue;
+    if (moduleOfStubPath(decl.getSourceFile().fileName) === undefined) continue;
+    if (ts.getJSDocDeprecatedTag(decl) !== undefined) continue;
+    if (matchName(sym.name, undefined, prefix) !== undefined) continue;
+    const doc = docOf(decl);
+    const display = displayNameFromDoc(doc);
+    if (display === undefined) continue;
+    const m = matchName(sym.name, display, prefix);
+    if (m === undefined) continue;
+    hits.push({
+      tier: m.tier,
+      item: {
+        label: sym.name,
+        kind: ts.isFunctionDeclaration(decl) ? "function" : "method",
+        detail: sym.name + signatureOf(decl, decl.getSourceFile()),
+        ...(doc === "" ? {} : { documentation: doc }),
+        insertText: sym.name,
+        snippet: false,
+        replace,
+        additionalEdits: [],
+        sortText: `1${"ABCD"[m.tier]}${sym.name}`,
+        filterText: m.filterText,
+        labelDescription: display,
+      },
+    });
+  }
+  hits.sort((a, b) => (a.tier !== b.tier ? a.tier - b.tier : a.item.label < b.item.label ? -1 : a.item.label > b.item.label ? 1 : 0));
+  return hits.slice(0, MAX_LIBRARY_ITEMS).map((h) => h.item);
 }
 
 /** True when the identifier is a declaration's name (a parameter, variable, member, ...), where no expression is written. */
@@ -460,10 +781,13 @@ function isDeclarationName(id: ts.Node, parent: ts.Node): boolean {
 }
 
 /**
- * Completions at `pos` of `fileName`: none in comments, strings, imports, after `.` or after `@`; in a class body at a member
- * start the overridable parent events; in a statement or expression the library functions starting with the typed prefix.
+ * Completions at `pos` of `fileName`: none in comments, strings, imports or after `@`; after `.` only stub members found by their
+ * Blueprint node name; in a class body at a member start the overridable parent events; in a statement or expression the library
+ * functions and catalog classes matching the typed prefix (C++ name with or without `K2_`/`BP_`, a word of it, or the Blueprint node
+ * name); in a type annotation the catalog classes, structs and enums, after `extends`/`implements` the classes. `index` is a
+ * `buildCompletionIndex` result, or library entries alone.
  */
-export function completionsAt(loaded: LoadedProgram, fileName: string, pos: number, index: LibraryEntry[]): AbfcCompletion[] {
+export function completionsAt(loaded: LoadedProgram, fileName: string, pos: number, index: LibraryEntry[] | CompletionIndex): AbfcCompletion[] {
   const sf = findSource(loaded, fileName);
   if (sf === undefined) return [];
   const text = sf.text;
@@ -482,13 +806,20 @@ export function completionsAt(loaded: LoadedProgram, fileName: string, pos: numb
   while (k >= 0 && /\s/.test(text[k] ?? "")) k--;
   const prevCh = k >= 0 ? text[k] : "";
   if (prevCh === "@") return [];
-  if (prevCh === "." && !(k >= 2 && text.slice(k - 2, k + 1) === "...")) return [];
+  const afterDot = prevCh === "." && !(k >= 2 && text.slice(k - 2, k + 1) === "...");
 
   const chain = chainAt(sf, pos);
   const leaf = chain[chain.length - 1];
   if (leaf === undefined || leaf === sf) return [];
   if (inComment(sf, leaf, pos) || inLiteral(sf, leaf, pos)) return [];
   if (chain.some((n) => ts.isImportDeclaration(n) || ts.isExportDeclaration(n) || ts.isImportEqualsDeclaration(n) || ts.isExportAssignment(n))) return [];
+
+  // after `.`: only members found by their Blueprint node name
+  if (afterDot) {
+    const parent = chain[chain.length - 2];
+    if (leaf.kind !== ts.SyntaxKind.Identifier || parent === undefined || !ts.isPropertyAccessExpression(parent) || parent.name !== leaf) return [];
+    return memberCompletions(loaded, parent, prefix, replace);
+  }
 
   // class body: member start
   let ci = -1;
@@ -519,9 +850,14 @@ export function completionsAt(loaded: LoadedProgram, fileName: string, pos: numb
   if (leaf.kind !== ts.SyntaxKind.Identifier) return [];
   const parent = chain[chain.length - 2];
   if (parent === undefined) return [];
-  if (chain.some((n) => ts.isTypeNode(n))) return [];
+  let mode: CompletionMode = "expr";
+  if (chain.some((n) => ts.isTypeNode(n))) {
+    if (ts.isTypeReferenceNode(parent) && parent.typeName === leaf) mode = "type";
+    else if (ts.isExpressionWithTypeArguments(parent) && parent.expression === leaf && chain[chain.length - 3] !== undefined && ts.isHeritageClause(chain[chain.length - 3] as ts.Node)) mode = "heritage";
+    else return [];
+  }
   if (isDeclarationName(leaf, parent)) return [];
   if (ts.isDecorator(parent) || (ts.isCallExpression(parent) && parent.expression === leaf && ts.isDecorator(chain[chain.length - 3] ?? parent.parent))) return [];
   if (ts.isQualifiedName(parent) || ts.isLabeledStatement(parent) || ts.isBreakOrContinueStatement(parent)) return [];
-  return libraryCompletions(loaded, sf, leaf, prefix, replace, index);
+  return libraryCompletions(loaded, sf, leaf, prefix, replace, Array.isArray(index) ? completionIndexOf(index) : index, mode);
 }

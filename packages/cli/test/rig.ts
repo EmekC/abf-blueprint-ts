@@ -2,10 +2,12 @@
 import assert from "node:assert/strict";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, win32 } from "node:path";
+import { gzipSync } from "node:zlib";
 import { fileURLToPath } from "node:url";
 import { loadProfile, realHost, resolveEnvironment } from "@abfc/env";
 import type { Host } from "@abfc/env";
-import { newLock, writeLock } from "@abfc/stubgen";
+import { CACHE_FILE, STUBGEN_VERSION, newLock, writeCatalog, writeLock } from "@abfc/stubgen";
+import type { StubCache } from "@abfc/stubgen";
 import { main } from "../src/index.js";
 import type { CliDeps } from "../src/index.js";
 import { FakeBackend } from "./fake-backend.js";
@@ -57,6 +59,27 @@ export interface Rig {
   lockFile: string;
 }
 
+/** The reflect cache of a finished stub generation (empty data): with it a build reflects only what is missing, never the whole set. */
+export function writeRigCache(profileDir: string, editorFingerprint: string): void {
+  const cache: StubCache = {
+    version: 1,
+    generator: STUBGEN_VERSION,
+    editorFingerprint,
+    // The profile's default classes, as the coverage file says: an incremental run merges its data onto these.
+    reflect: {
+      engineVersion: null,
+      classes: Object.fromEntries(
+        profile.initScriptClasses.map((c) => [c, { meta: "/Script/CoreUObject.Class", ancestors: ["/Script/CoreUObject.Object"], castPin: "AsX", properties: [], functions: [] }]),
+      ),
+      structs: {},
+      errors: [],
+    },
+    filter: { contentVersion: null, rules: [] },
+    manual: [],
+  };
+  writeFileSync(join(profileDir, CACHE_FILE), gzipSync(JSON.stringify(cache)));
+}
+
 export async function withRig(o: FakeBackendOptions, fn: (r: Rig) => Promise<void>): Promise<void> {
   // inside the package tree so that `@abfc/runtime` still resolves through the workspace node_modules
   const dir = mkdtempSync(join(here, "e2e-"));
@@ -84,9 +107,24 @@ export async function withRig(o: FakeBackendOptions, fn: (r: Rig) => Promise<voi
         classes: [],
         scriptClasses: [],
         modAssets: [],
+        auto: { catalogSha256: "test", gameClasses: 0, failed: [], added: [] },
         createdAt: "2026-01-02T00:00:00.000Z",
       }),
     );
+    // A catalog and coverage that already hold everything the fixture needs, so a build has no stubs to generate (stubsNeedWork is null).
+    writeCatalog(lockFile, {
+      version: 1,
+      editorFingerprint: env.fingerprint ?? "",
+      engineVersion: null,
+      createdAt: "2026-01-02T00:00:00.000Z",
+      game: [],
+      scriptClasses: [],
+      scriptStructs: [],
+      scriptEnums: [],
+    });
+    const defaults = [...profile.initScriptClasses].sort();
+    writeFileSync(join(lockFile, "_coverage.json"), JSON.stringify({ version: 1, reflected: defaults, declared: defaults, errors: [] }), "utf8");
+    writeRigCache(lockFile, env.fingerprint ?? "");
     const started = { count: 0, cold: [] as boolean[] };
     const run = async (argv: string[], extra: Partial<CliDeps> = {}): Promise<Run> => {
       const lines: string[] = [];

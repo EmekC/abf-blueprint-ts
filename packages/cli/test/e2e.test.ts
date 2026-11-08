@@ -3,11 +3,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, win32 } from "node:path";
+import type { ReflectData, ReflectRequest } from "@abfc/backend";
 import { buildHir, compileTests, loadProgram, lower, readManifest, readRetired, readSourceMap, writeManifest } from "@abfc/compiler";
 import type { IrModule, IrNode } from "@abfc/ir";
 import { main, readRuns } from "../src/index.js";
 import { FakeBackend, RELAY_ASSET, SPARE_NODE } from "./fake-backend.js";
-import { OPS, TA, addParentStubs, countOf, fileExists, profile, tally, tallyOnly, withRig } from "./rig.js";
+import { catalogFromBackend, writeCatalog } from "@abfc/stubgen";
+import { OPS, TA, addParentStubs, countOf, fileExists, profile, tally, tallyOnly, withRig, writeRigCache } from "./rig.js";
 import type { Run, Rig } from "./rig.js";
 
 function lowerProject(dir: string): IrModule {
@@ -351,6 +353,12 @@ test("(u1) --drift is an option of build only; --keep-failed-stage of build, tes
     x = await r.run(["check", "--keep-failed-stage"]);
     assert.equal(x.code, 2, x.out);
     assert.match(x.out, /--keep-failed-stage is an option of abfc build, test and publish/);
+    x = await r.run(["build", "--add", "/Script/FakeEngine.Thing"]);
+    assert.equal(x.code, 2, x.out);
+    assert.match(x.out, /--add and --refresh are options of abfc generate/);
+    x = await r.run(["check", "--refresh"]);
+    assert.equal(x.code, 2, x.out);
+    assert.match(x.out, /--add and --refresh are options of abfc generate/);
   });
 });
 
@@ -502,7 +510,9 @@ test("(d) a changed editor fingerprint: build exits 2 with ABFC3001, check warns
     let x = await r.run(["build"]);
     assert.equal(x.code, 2, x.out);
     assert.match(x.out, /error ABFC3001/);
-    assert.equal(r.started.count, 0, "the backend is not started");
+    // The stubs are for another editor build, so the build opens the backend once to see whether it can generate them (a new editor build
+    // regenerates automatically); this fake has no catalog tool, so nothing is generated. Complete, current stubs start nothing: see (s5).
+    assert.equal(r.started.count, 1, "stale stubs: the backend is started once, only to look for the catalog tool");
     assert.equal(r.backend.applyLabels().length, 0);
 
     x = await r.run(["check"]);
@@ -598,7 +608,8 @@ test("(f3) publish gate 1: a stale stub fingerprint stops before the backend sta
     const fast = await r.run(["publish", "--dry-run"]);
     assert.equal(fast.code, 2, fast.out);
     assert.match(fast.out, /error ABFC3001/);
-    assert.equal(r.started.count, 0);
+    // The full path's gate 1 stops before anything; the fast path runs the build, which looks once for a way to regenerate the stale stubs (this fake has no catalog tool).
+    assert.equal(r.started.count, 1, "the fast path starts the backend only to look for the catalog tool");
   });
 });
 
@@ -2614,5 +2625,217 @@ test("(A11-7) a failed publish, then a re-sync, then a build: the manifest is pr
     assert.equal(x.code, 0, x.out);
     assert.doesNotMatch(x.out, /ABFC5002/);
     assert.equal(r.backend.publishCalls.length, 2);
+  });
+});
+
+// ---- Automatic stubs at the start of a build (step 15) ----
+
+const EXTRA = "/Script/FakeEngine.Extra";
+const UNUSED = "/Game/Fake/BP_Unused.BP_Unused_C";
+/** The fake backend's catalog: one engine class the fixture does not import and one game class nothing uses. */
+const E2E_CATALOG = {
+  version: 1,
+  engineVersion: null,
+  game: [{ path: UNUSED, kind: "Blueprint", parent: null, interface: false }],
+  scriptClasses: [{ path: EXTRA, parent: null }],
+  scriptStructs: [],
+  scriptEnums: [],
+};
+const WHEN = "2026-01-02T00:00:00.000Z";
+
+/** Reflect data for exactly the classes asked for. */
+const reflectedAsAsked = (q: ReflectRequest): ReflectData => ({
+  engineVersion: null,
+  classes: Object.fromEntries(
+    q.classes.map((c) => [c, { meta: "/Script/CoreUObject.Class", ancestors: ["/Script/CoreUObject.Object"], castPin: "AsX", properties: [], functions: [] }]),
+  ),
+  structs: {},
+  errors: [],
+});
+
+const lockOf = (r: Rig): { editorFingerprint: string; auto?: Record<string, unknown> } & Record<string, unknown> =>
+  JSON.parse(readFileSync(join(r.lockFile, "stubs.lock.json"), "utf8"));
+const writeLockOf = (r: Rig, lock: Record<string, unknown>): void => writeFileSync(join(r.lockFile, "stubs.lock.json"), JSON.stringify(lock), "utf8");
+
+/** The stubs on disk came from an editor build whose catalog holds {@link E2E_CATALOG}. */
+function diskCatalog(r: Rig, fingerprint: string = lockOf(r).editorFingerprint): void {
+  writeCatalog(r.lockFile, catalogFromBackend(E2E_CATALOG, fingerprint, WHEN));
+}
+
+/** The source imports `Extra` from /Script/FakeEngine; the compiler's stubs (a separate folder) have it, the generated stubs' coverage does not. */
+function importExtra(r: Rig): void {
+  const file = join(r.dir, ".abfc", "stubs", "test", "Script", "FakeEngine.d.ts");
+  writeFileSync(file, readFileSync(file, "utf8") + "\n/**\n * @bpPath /Script/FakeEngine.Extra\n * @bpMeta /Script/CoreUObject.Class\n */\nexport declare class Extra extends Actor {}\n", "utf8");
+  writeFileSync(join(r.dir, "src", "UsesExtra.ts"), 'import type { Extra } from "/Script/FakeEngine";\n\nexport type Held = Extra;\n', "utf8");
+}
+
+const stubLockHashes = (r: Rig): string[] => {
+  const cache = JSON.parse(readFileSync(join(r.dir, ".abfc", "cache", "units.json"), "utf8")) as Record<string, Record<string, { stubLockHash: string }>>;
+  return Object.values(cache).flatMap((units) => Object.values(units).map((u) => u.stubLockHash));
+};
+
+test("(s1) a build whose source imports an engine class without a stub reflects only that class and does not re-plan the units", async () => {
+  const requests: ReflectRequest[] = [];
+  const o = { handMadeEvent: false, catalog: E2E_CATALOG, reflectData: (q: ReflectRequest) => (requests.push(q), reflectedAsAsked(q)) };
+  await withRig(o, async (r) => {
+    diskCatalog(r);
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(requests.length, 0, "complete stubs: nothing to reflect");
+    const before = stubLockHashes(r);
+    assert.ok(before.length > 0);
+
+    importExtra(r);
+    const applies = r.backend.applyLabels().length;
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /stubs: missing stubs for Extra; generating them/);
+    assert.equal(requests.length, 1, "one reflect call");
+    assert.deepEqual(requests[0]?.classes, [EXTRA], "only the new class");
+    assert.ok(!r.backend.tools().includes("catalog"), "the catalog on disk is current");
+    assert.deepEqual(stubLockHashes(r), before, "adding a class does not change the stub lock hash");
+    assert.equal(r.backend.applyLabels().length, applies, "no unit was planned again");
+    const coverage = JSON.parse(readFileSync(join(r.lockFile, "_coverage.json"), "utf8")) as { reflected: string[] };
+    assert.ok(coverage.reflected.includes(EXTRA));
+
+    // Now the stubs are complete: the next build reflects nothing.
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(requests.length, 1);
+    assert.doesNotMatch(x.out, /generating them/);
+  });
+});
+
+test("(s2) a reflect failure at the start of a build is a warning ABFC3020 once; the build continues with the existing stubs", async () => {
+  const o = {
+    handMadeEvent: false,
+    catalog: E2E_CATALOG,
+    reflectData: (): ReflectData => {
+      throw new Error("reflect exploded");
+    },
+  };
+  await withRig(o, async (r) => {
+    diskCatalog(r);
+    importExtra(r);
+    const x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(countOf(x.out, "ABFC3020"), 1, x.out);
+    assert.match(x.out, /warning ABFC3020: could not generate stubs \(missing stubs for Extra\): reflect exploded; the build continues with the existing stubs/);
+    assert.match(x.out, /abfc generate/);
+    assert.doesNotMatch(x.out, /error ABFC/);
+    assert.ok(r.backend.applyLabels().length > 0, "the build went on to apply");
+  });
+});
+
+test("(s3) a changed editor fingerprint generates the full set at the start of the build and the build passes", async () => {
+  const requests: ReflectRequest[] = [];
+  const o = { handMadeEvent: false, catalog: E2E_CATALOG, reflectData: (q: ReflectRequest) => (requests.push(q), reflectedAsAsked(q)) };
+  await withRig(o, async (r) => {
+    const current = lockOf(r).editorFingerprint;
+    const old = "0".repeat(64);
+    writeLockOf(r, { ...lockOf(r), editorFingerprint: old });
+    diskCatalog(r, old);
+    writeRigCache(r.lockFile, old);
+    const x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC3001/);
+    assert.match(x.out, /stubs: the Mod Editor build changed; generating them/);
+    assert.match(x.out, /generating stubs for \d+ classes \(1 game classes\)/);
+    assert.equal(r.backend.tools().filter((t) => t === "catalog").length, 1, "the catalog of the old build is fetched again");
+    assert.equal(requests.length, 1);
+    assert.ok(requests[0]?.classes.includes(UNUSED), "every game class of the new catalog");
+    assert.ok((requests[0]?.classes.length ?? 0) > 1, "and the profile defaults");
+    assert.equal(lockOf(r).editorFingerprint, current);
+    assert.equal(r.started.count, 1);
+  });
+});
+
+test("(s4) no stubs and a backend without the catalog tool: ABFC3003 as before, no ABFC3020", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    rmSync(join(r.lockFile, "stubs.lock.json"));
+    const x = await r.run(["build"]);
+    assert.equal(x.code, 2, x.out);
+    assert.match(x.out, /error ABFC3003/);
+    assert.doesNotMatch(x.out, /ABFC3020/);
+  });
+});
+
+test("(s5) complete stubs never start the backend for the build's own sake; stale stubs start it once", async () => {
+  const o = { handMadeEvent: false, catalog: E2E_CATALOG, reflectData: reflectedAsAsked };
+  await withRig(o, async (r) => {
+    diskCatalog(r);
+    // A type error stops the build in the frontend, before it needs the backend.
+    writeFileSync(join(r.dir, "src", "Broken.ts"), 'export const n: number = "text";\n', "utf8");
+    let x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, /ABFC2000/);
+    assert.equal(r.started.count, 0, "lock, catalog and coverage are complete: the backend is not started");
+
+    importExtra(r);
+    x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.equal(r.started.count, 1, "a missing stub starts it once (to generate it)");
+    assert.match(x.out, /generating them/);
+  });
+});
+
+test("(s6) a backend without the catalog tool is detected once: later builds neither start it for that nor warn again, until the editor or the backend changes", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    // An older lock: no `auto` (the stubs were made before the automatic set existed).
+    const lock = lockOf(r);
+    delete lock.auto;
+    writeLockOf(r, lock);
+    rmSync(join(r.lockFile, "_catalog.json"));
+    rmSync(join(r.lockFile, "_coverage.json"));
+    writeFileSync(join(r.dir, "src", "Broken.ts"), 'export const n: number = "text";\n', "utf8");
+
+    let x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.equal(r.started.count, 1, "detected: the backend is started once");
+    assert.equal(countOf(x.out, "ABFC3021"), 1, x.out);
+    assert.match(x.out, /then run abfc generate/);
+    assert.match(lockOf(r).auto?.noCatalog as string, /^[0-9a-f]{16}$/);
+
+    x = await r.run(["build"]);
+    assert.equal(r.started.count, 1, "not started again");
+    assert.doesNotMatch(x.out, /ABFC3021|ABFC3020/);
+    x = await r.run(["publish", "--dry-run"]);
+    assert.equal(r.started.count, 1);
+    assert.doesNotMatch(x.out, /ABFC3021|ABFC3020/);
+
+    // Another backend folder: looked at again.
+    const marked = lockOf(r);
+    writeLockOf(r, { ...marked, auto: { ...marked.auto, noCatalog: "0123456789abcdef" } });
+    x = await r.run(["build"]);
+    assert.equal(r.started.count, 2);
+    assert.equal(countOf(x.out, "ABFC3021"), 1, x.out);
+
+    // Another editor build: looked at again (and the old stubs stop the build, as always).
+    writeLockOf(r, { ...lockOf(r), editorFingerprint: "0".repeat(64) });
+    x = await r.run(["build"]);
+    assert.equal(r.started.count, 3);
+    assert.match(x.out, /error ABFC3001/);
+  });
+});
+
+test("(s7) the backend cannot start at the start of a build: ABFC3020 once with the fix command, the build goes on with the existing stubs", async () => {
+  const o = { handMadeEvent: false, catalog: E2E_CATALOG, reflectData: reflectedAsAsked };
+  await withRig(o, async (r) => {
+    diskCatalog(r);
+    importExtra(r);
+    writeFileSync(join(r.dir, "src", "Broken.ts"), 'export const n: number = "text";\n', "utf8");
+    let attempts = 0;
+    const x = await r.run(["build"], {
+      startBackend: async () => {
+        attempts++;
+        throw new Error("the Mod Editor is not installed");
+      },
+    });
+    assert.equal(attempts, 1, "tried once; the frontend error ends the build before it needs the backend");
+    assert.equal(countOf(x.out, "ABFC3020"), 1, x.out);
+    assert.match(x.out, /warning ABFC3020: could not generate stubs \(missing stubs for Extra\): the Mod Editor is not installed; the build continues with the existing stubs/);
+    assert.match(x.out, /abfc generate/);
+    assert.match(x.out, /ABFC2000/, "the build went on to the frontend");
+    assert.doesNotMatch(x.out, /ABFC3003|ABFC3001/, "the existing stubs are usable");
   });
 });

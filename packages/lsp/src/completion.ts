@@ -7,17 +7,26 @@ import { offsetRange } from "./convert.js";
 import type { ProjectState, Snapshot } from "./project.js";
 import { pathKey } from "./uri.js";
 
+const COMPLETION_KINDS: Record<AbfcCompletion["kind"], CompletionItemKind> = {
+  function: CompletionItemKind.Function,
+  method: CompletionItemKind.Method,
+  class: CompletionItemKind.Class,
+  struct: CompletionItemKind.Struct,
+  enum: CompletionItemKind.Enum,
+};
+
 /** One compiler completion as an LSP item: the typed word is replaced through `textEdit`, imports ride along as `additionalTextEdits`. */
 export function toCompletionItem(sf: TsSourceFile, c: AbfcCompletion): CompletionItem {
   const item: CompletionItem = {
     label: c.label,
-    kind: c.kind === "method" ? CompletionItemKind.Method : CompletionItemKind.Function,
+    kind: COMPLETION_KINDS[c.kind],
     detail: c.detail,
     insertTextFormat: c.snippet ? InsertTextFormat.Snippet : InsertTextFormat.PlainText,
     textEdit: { range: offsetRange(sf, c.replace.start, c.replace.end), newText: c.insertText },
-    filterText: c.label,
+    filterText: c.filterText ?? c.label,
     sortText: c.sortText,
   };
+  if (c.labelDescription !== undefined) item.labelDetails = { description: c.labelDescription };
   if (c.documentation !== undefined && c.documentation !== "") item.documentation = { kind: MarkupKind.PlainText, value: c.documentation };
   if (c.additionalEdits.length > 0) {
     item.additionalTextEdits = c.additionalEdits.map((e) => ({ range: offsetRange(sf, e.start, e.end), newText: e.newText }));
@@ -35,5 +44,5 @@ export function completionItemsAt(state: ProjectState, snap: Snapshot, path: str
   } catch {
     return [];
   }
-  return completionsAt(snap.loaded, sf.fileName, offset, state.libraryIndex()).map((c) => toCompletionItem(sf, c));
+  return completionsAt(snap.loaded, sf.fileName, offset, state.completionIndex()).map((c) => toCompletionItem(sf, c));
 }

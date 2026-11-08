@@ -20,6 +20,13 @@ export declare namespace KismetSystemLibrary {
    * @bpDefault InString "Hello"
    */
   function PrintString(InString?: string): void;
+  /**
+   * Starts a timer that runs the given event after a delay (Set Timer by Event).
+   * @bpPath /Script/FakeEngine.KismetSystemLibrary:K2_SetTimerDelegate
+   * @bpParam Time double
+   * @bpParam bLooping bool
+   */
+  function K2_SetTimerDelegate(Time: double, bLooping: boolean): void;
 }
 `;
 
@@ -95,12 +102,43 @@ test("completion: PrintS in a method body offers PrintString with the import edi
     assert.equal(print.textEdit.newText, "KismetSystemLibrary.PrintString");
     assert.deepEqual(print.textEdit.range, { start: { line: 7, character: 4 }, end: { line: 7, character: 10 } });
     assert.equal(print.filterText, "PrintString");
-    assert.equal(print.sortText, "1PrintString");
+    assert.equal(print.sortText, "1APrintString");
+    assert.equal(print.labelDetails?.description, "KismetSystemLibrary");
     assert.equal(print.additionalTextEdits.length, 1);
     assert.equal(
       accept(text, print),
       text.replace('import { Actor } from "/Script/FakeEngine";', 'import { Actor, KismetSystemLibrary } from "/Script/FakeEngine";').replace("PrintS\n", "KismetSystemLibrary.PrintString\n"),
     );
+    assert.deepEqual(started.client.protocolErrors, []);
+  } finally {
+    await started.dispose();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("completion: settimer, timer, timerdelegate, settimerdelegate and Set Timer by Event offer KismetSystemLibrary.K2_SetTimerDelegate with the import", async () => {
+  const dir = copyFixture("phase4", prepared);
+  const started = await startInMemory();
+  try {
+    const cases: Array<[string, string]> = [
+      ["settimer", "SetTimerDelegate"],
+      ["timer", "TimerDelegate"],
+      ["timerdelegate", "TimerDelegate"],
+      ["settimerdelegate", "SetTimerDelegate"],
+      ["SetTimerByEv", "SetTimerbyEvent"],
+    ];
+    for (const [typed, filterText] of cases) {
+      const { items, text } = await complete(started, dir, CALL.replace("PrintS|", `${typed}|`));
+      const timer = items.find((i) => i.label === "K2_SetTimerDelegate");
+      assert.ok(timer, `${typed}: ${items.map((i) => i.label).join()}`);
+      assert.equal(timer.textEdit.newText, "KismetSystemLibrary.K2_SetTimerDelegate");
+      assert.equal(timer.filterText, filterText);
+      assert.equal(timer.labelDetails?.description, "KismetSystemLibrary · Set Timer by Event");
+      assert.equal(
+        accept(text, timer),
+        text.replace('import { Actor } from "/Script/FakeEngine";', 'import { Actor, KismetSystemLibrary } from "/Script/FakeEngine";').replace(`${typed}\n`, "KismetSystemLibrary.K2_SetTimerDelegate\n"),
+      );
+    }
     assert.deepEqual(started.client.protocolErrors, []);
   } finally {
     await started.dispose();
@@ -145,6 +183,34 @@ test("completion: nothing in a comment, an unknown document or a position past t
     const uri = pathToUri(file);
     const far: any = await started.client.request("textDocument/completion", { textDocument: { uri }, position: { line: 999, character: 0 } });
     assert.ok(Array.isArray(far) ? far.length === 0 : (far?.items ?? []).length === 0);
+    assert.deepEqual(started.client.protocolErrors, []);
+  } finally {
+    await started.dispose();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("completion: a class from the catalog names file is offered with its import, in an expression and in a type position", async () => {
+  const dir = copyFixture("phase4", (d) => {
+    prepared(d);
+    const profile = join(d, ".abfc", "stubs", loadProjectEnvironment(d).profile.id);
+    const names = { version: 1, types: [{ name: "BP_Fake_C", module: "/Game/Fake/BP_Fake", path: "/Game/Fake/BP_Fake.BP_Fake_C", kind: "class" }], functions: [] };
+    writeFileSync(join(profile, "_names.json"), JSON.stringify(names), "utf8");
+  });
+  const started = await startInMemory();
+  try {
+    const inType = await complete(started, dir, `${HEAD}export function go(): void {\n  let v: BP_Fa|;\n}\n`);
+    const cls = inType.items.find((i) => i.label === "BP_Fake_C");
+    assert.ok(cls, inType.items.map((i) => i.label).join());
+    assert.equal(cls.kind, 7, "CompletionItemKind.Class");
+    assert.equal(cls.detail, "/Game/Fake/BP_Fake.BP_Fake_C");
+    assert.equal(cls.labelDetails?.description, "/Game/Fake/BP_Fake");
+    const accepted = accept(inType.text, cls);
+    assert.ok(accepted.includes(`import { BP_Fake_C } from "/Game/Fake/BP_Fake";`), accepted);
+    assert.ok(accepted.includes("let v: BP_Fake_C;"), accepted);
+
+    const inExpr = await complete(started, dir, `${HEAD}export function go(): void {\n  BP_Fa|\n}\n`);
+    assert.ok(inExpr.items.some((i) => i.label === "BP_Fake_C"), inExpr.items.map((i) => i.label).join());
     assert.deepEqual(started.client.protocolErrors, []);
   } finally {
     await started.dispose();

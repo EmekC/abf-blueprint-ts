@@ -1,7 +1,10 @@
 // File contents written by `abfc init` (docs/design.md 18.5 item 8). Pure text, no file access.
 import { DEFAULT_CLASS_MANAGER_TABLE, DEFAULT_SOURCE_ROOT } from "@abfc/ir";
 
-/** `abf.config.json` of a new project (schema 2). */
+/**
+ * `abf.config.json` of a new project (schema 2). `scriptClasses` is an optional list of extras: `abfc init` passes none, because
+ * `abfc generate` always adds the profile's default set and generates every game class and every imported engine name itself.
+ */
 export function projectConfigText(mod: string, scriptClasses: readonly string[]): string {
   const config = {
     schemaVersion: 2,

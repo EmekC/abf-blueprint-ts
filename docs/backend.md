@@ -96,6 +96,7 @@ Warnings and errors from the backend check use the codes below. `abfc doctor` ex
 | `capabilities.warmSession` | warm hidden editor between steps |
 | `capabilities.stageAudit` | `mod_audit` audits the staged copy (`abfc publish --full`) |
 | `capabilities.reflect` | `abfc generate` (abfc also checks the tool list) |
+| `capabilities.catalog` | backend 2.6.0: the read-only `catalog` tool (see below); without it `abfc generate` only generates the profile defaults, the config lists and `--add` paths ([ABFC3021](errors.md#abfc3021)) |
 | `capabilities.compileErrorNodeRefs` | compile errors name the node and graph, mapped back to the TypeScript line |
 | `capabilities.createKinds` | asset kinds that `bp_apply` can create (`Blueprint`, `WidgetBlueprint`, `BlueprintInterface`, `UserDefinedStruct`); gate ABFC2044 |
 | `capabilities.gameTest` | `abfc test`, `abfc publish --full` |
@@ -138,3 +139,9 @@ Every code, including the ones not listed here, is explained in [errors.md](erro
 - Function local variables are not supported by the backend; abfc hoists temporaries into members it owns.
 - User pure functions are not supported; use impure functions.
 - Changing the fields of an existing `UserDefinedStruct` is not supported (ABFC2046); abfc creates new structs and compares existing ones.
+
+### The `catalog` tool
+
+Provided by abf-mod-editor-mcp 2.6.0 or newer (feature flag `catalog`, `capabilities.catalog` in abfc). Read-only: a hidden editor on the staging copy, no asset loads, about 7 seconds. Arguments: `mod` (the mod name) and optional `timeout_seconds` (default 300). Result: `{ok, run, seconds, file, counts, warm}`; `file` is `<run>/catalog.json`.
+
+catalog.json (version 1): `{version, engineVersion, game, scriptClasses, scriptStructs, scriptEnums, counts, errors}`. `game` rows are `{path, kind, parent, interface}` for every `/Game` Blueprint generated class (`path` like `/Game/Dir/BP_X.BP_X_C`); `scriptClasses` rows are `{path, parent}` plus `interface: true` for interfaces and `library: true` with a sorted `functions` name list for Blueprint function libraries; `scriptStructs` and `scriptEnums` are sorted paths; `counts` has `game`, `scriptClasses`, `scriptStructs`, `scriptEnums`, `libraries`, `functions`; `errors` holds up to 200 per-item messages. abfc stores it as `_catalog.json` in the stub profile folder. The tool is on the client allowlist ([ABFC4090](errors.md#abfc4090) otherwise).

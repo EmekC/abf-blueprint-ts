@@ -85,6 +85,16 @@ describe("scanArtifact rules", () => {
     assert.equal(scan("x.js", utf(`I${w}P`)).length, 1);
   });
 
+  it("printable: counts printable characters around a match (window excluded), high in text and low in binary", () => {
+    const text = scan("x.js", utf(`${"a".repeat(40)} ${NAME} ${"b".repeat(40)}`));
+    assert.deepEqual(text[0].printable, { n: 64, of: 64 });
+    const bin = Buffer.concat([Buffer.alloc(40, 1), Buffer.alloc(10, 0x80), utf(` ${NAME} `), Buffer.alloc(40, 2)]);
+    const hits = scan("abfc.exe", bin, "exe");
+    assert.equal(hits.length, 1);
+    assert.deepEqual(hits[0].printable, { n: 2, of: 64 });
+    assert.ok(!JSON.stringify(hits).toLowerCase().includes(NAME));
+  });
+
   it("userPath: reports a user, masked; placeholders and Public are not hits", () => {
     const hits = scan("x.js", utf("a C:\\Users\\alice\\x b"));
     assert.deepEqual(hits.map((h) => [h.rule, h.detail]), [["userPath", "C:\\Users\\al***"]]);
@@ -204,7 +214,12 @@ describe("exceptions", () => {
     const bad = join(tmp, "exc-bad.json");
     writeFileSync(bad, '{"schemaVersion":1,"exceptions":[{"rule":"name"}]}');
     assert.throws(() => loadExceptions(bad), /artifact/);
-    assert.deepEqual(loadExceptions(join(repoRoot, "release", "scan-exceptions.json")), []);
+    const committed = loadExceptions(join(repoRoot, "release", "scan-exceptions.json"));
+    assert.equal(committed.length, 1);
+    assert.deepEqual(
+      { rule: committed[0].rule, artifact: committed[0].artifact, entry: committed[0].entry, context: committed[0].context },
+      { rule: "name", artifact: "installer", entry: "abfc-setup-<version>.exe", context: "8d8384bf570c" },
+    );
   });
 });
 
@@ -231,7 +246,7 @@ describe("scan-artifacts.mjs", () => {
     writeFileSync(deny, `${NAME}\n`);
     const bad = run(root, ["--require", "vsix", "--denylist", deny]);
     assert.equal(bad.status, 1, bad.stdout + bad.stderr);
-    assert.match(bad.stdout, /HIT name vsix > abfc-vscode-<version>\.vsix > extension\/x\.js: denylist entry #1 \[context [0-9a-f]{12}\]/);
+    assert.match(bad.stdout, /HIT name vsix > abfc-vscode-<version>\.vsix > extension\/x\.js: denylist entry #1 \[context [0-9a-f]{12}, 3\/3 printable\]/);
     assert.ok(!(bad.stdout + bad.stderr).toLowerCase().includes(NAME));
     writeFileSync(vsix, writeZip([{ name: "extension/x.js", data: utf("// fine") }]));
     const good = run(root, ["--require", "vsix", "--denylist", deny]);

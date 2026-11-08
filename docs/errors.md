@@ -895,11 +895,11 @@ Fix: update abfc when the build is unknown to it, then run `abfc generate`. `abf
 
 Severity: error when the stubs do not exist, warning when a configured class is missing from them · Exit: 2 (error), - (warning)
 
-Meaning: there is no `stubs.lock.json` for this editor build, or the stubs do not cover every class listed in `stubs.classes` and `stubs.scriptClasses`.
+Meaning: there is no `stubs.lock.json` for this editor build, or the stubs do not cover every class listed in `stubs.classes` and `stubs.scriptClasses` (or a changed `stubs.widgetMembers`).
 
-Typical cause: `abfc generate` was never run in this project, or a class was added to the config afterwards.
+Typical cause: the stubs were never generated in this project (a clone without `.abfc`, an interrupted `abfc generate`), or a class was added to the config afterwards. `abfc build` generates missing stubs at its start; this error remains when the Mod Editor backend could not be used (`ABFC3020` says why).
 
-Fix: run `abfc generate`.
+Fix: run `abfc generate` (or `abfc build` once the backend works). The classes of the game and the engine names you import do not have to be listed in the config.
 
 ### ABFC3004
 
@@ -907,9 +907,9 @@ Severity: warning in `abfc generate`, error in a build · Exit: 2 (error), - (wa
 
 Meaning: abfc could not determine the cast pin for a class, so a cast to that class (`as`, or a type test that casts) cannot be built.
 
-Typical cause: the class is not in the stubs, or the backend did not report how to cast to it.
+Typical cause: the class is not in the stubs (a class of your config, your source or `--add` that the backend could not reflect), or the backend did not report how to cast to it.
 
-Fix: add the class to `stubs.classes` or `stubs.scriptClasses` and run `abfc generate`. If the warning stays, report the class name.
+Fix: run `abfc generate --add <path>` with the class path (`ABFC3023` is reported when the backend cannot reflect it). If the warning stays, report the class name.
 
 ### ABFC3010
 
@@ -925,11 +925,11 @@ Fix: list the classes you need in `stubs.scriptClasses` instead. See [config.md]
 
 Severity: warning · Exit: -
 
-Meaning: an entry in `stubs.widgetMembers` names a widget class that is not in the stubs, so the member is typed as a plain `UObject`.
+Meaning: a not-yet-removed entry of the deprecated `stubs.widgetMembers` ([ABFC3015](errors.md#abfc3015)) names a widget class that is not in the stubs, so the member is typed as a plain `UObject`. Members found by reflection never give this warning.
 
-Typical cause: the widget class is missing from `stubs.scriptClasses`.
+Typical cause: the class path in `stubs.widgetMembers` is misspelled or is not a class of this editor build, or the backend could not reflect it (`ABFC3023` is reported too). The widget classes of `stubs.widgetMembers` are generated automatically; they do not have to be listed in `stubs.classes` or `stubs.scriptClasses`.
 
-Fix: add the class named in the message to `stubs.scriptClasses` and run `abfc generate`.
+Fix: check the class path named in the message, then run `abfc generate --add <path>` with that path to retry it (`ABFC3022` says when the path is not a class of this editor build).
 
 ### ABFC3012
 
@@ -940,6 +940,76 @@ Meaning: the backend cannot list the game's gameplay tags, so `abfc generate` co
 Typical cause: abf-mod-editor-mcp older than 2.6.0.
 
 Fix: update abf-mod-editor-mcp to 2.6.0 or newer (or use the bundled backend of `abfc.exe`) and run `abfc generate` again. Until then a tag can still be written as a string literal.
+
+### ABFC3013
+
+Severity: warning · Exit: -
+
+Meaning: a stub class does not have its full parent chain: the backend gave no Blueprint parents, or an ancestor could not be reflected and is a members-less placeholder.
+
+Typical cause: an older backend whose `reflect` does not report `supers` (the message asks you to update it), or a current backend that could not confirm the chain of a class because a parent failed to load or is not a confirmed ancestor (the message says "could not confirm"; see [ABFC4002](errors.md#abfc4002) in the reflect log).
+
+Fix: update the backend, run `abfc generate`, and check with `node scripts/stub-chain-audit.mjs --stubs .abfc/stubs/<profile>`.
+
+### ABFC3014
+
+Severity: warning · Exit: -
+
+Meaning: the backend did not list the members that class defaults cannot show (widgets, components and variables of widget or component type) for the reflected Blueprint classes, or listed only part of them. Those members are missing from the stubs.
+
+Typical cause: an abf-mod-editor-mcp without the member pass (the message asks you to update it), or a current backend whose cooked-package reader could not run (see [ABFC4002](errors.md#abfc4002) in the reflect log).
+
+Fix: update the backend (see [backend.md](backend.md)), check the reflect warnings, and run `abfc generate` again.
+
+### ABFC3015
+
+Severity: warning · Exit: -
+
+Meaning: `stubs.widgetMembers` is deprecated. Either an entry is now found by `abfc generate` itself (remove it), or it was not found by reflection and is still taken from the config.
+
+Typical cause: a config written for an older abfc, before widgets and components of game Blueprints were read from reflection.
+
+Fix: remove the entries named in the warnings; report the members that are still taken from the config.
+
+### ABFC3020
+
+Severity: warning · Exit: -
+
+Meaning: `abfc build`, `test` or `publish` found that stubs were missing (first build, a new Mod Editor build, an imported engine or game name without a stub) and could not generate them. The build continues with the existing stubs; when they are unusable, the lock check that follows stops the build (ABFC3003, ABFC3001).
+
+Typical cause: the Mod Editor backend does not start (the editor is not installed or reachable) or the reflection failed. It is reported once per build.
+
+Fix: run `abfc generate` once the Mod Editor backend works.
+
+### ABFC3021
+
+Severity: warning · Exit: -
+
+Meaning: the backend has no `catalog` tool, so `abfc generate` cannot list the game's classes. Only the classes in `stubs.classes` and `stubs.scriptClasses` (and the profile defaults) get stubs.
+
+Typical cause: abf-mod-editor-mcp older than 2.6.0.
+
+Fix: update abf-mod-editor-mcp to 2.6.0 or newer (or use the bundled backend of `abfc.exe`), then run `abfc generate`. `abfc generate` reports it every time; `abfc build` reports it once, records the finding in `stubs.lock.json` (`auto.noCatalog`) and then neither starts the backend for it nor warns again until the Mod Editor build or the backend folder changes.
+
+### ABFC3022
+
+Severity: warning · Exit: -
+
+Meaning: an `abfc generate --add` argument is not a class, struct or enum of this editor build; nothing was generated for it.
+
+Typical cause: a misspelled path, or a class added to the game after the catalog was made.
+
+Fix: check the path (`/Script/<Package>.<Name>`, a `/Game/...` class path or module). After a game update run `abfc generate --refresh`.
+
+### ABFC3023
+
+Severity: warning · Exit: -
+
+Meaning: the backend could not reflect some classes; they are left out of the stubs and are not retried by later runs.
+
+Typical cause: a class the Mod Editor cannot load or reflect.
+
+Fix: `abfc generate --add <path>` retries one class; `abfc generate --refresh` retries all of them.
 
 ## 4xxx backend
 

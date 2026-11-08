@@ -43,6 +43,7 @@ import {
 import { refreshTagsFile } from "../tags.js";
 import { deleteRetiredRows, runAssetOps, runParentChange } from "./assetops.js";
 import { ensureStage } from "./stage.js";
+import { ensureStubsForBuild } from "./generate.js";
 
 /** True for an @event whose doc comment is its tooltip: the backend only writes it with the bp_apply feature `event_meta`. */
 function hasEventTooltip(u: IrUnit): boolean {
@@ -112,6 +113,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   const mod = config.mod.name;
   const profile = env.profile;
 
+  await ensureStubsForBuild(ctx, session, rec);
   if (emitAll(ctx, lockDiagnostics(ctx, "build"))) return false;
 
   const tFront = performance.now();

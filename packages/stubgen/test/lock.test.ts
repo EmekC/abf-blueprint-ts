@@ -43,7 +43,7 @@ test("lock round trip through a folder", () => {
     const l = lock();
     writeLock(stubs, l);
     assert.deepEqual(readLock(stubs), l);
-    assert.equal(l.generator, "0.5.0");
+    assert.equal(l.generator, "0.7.0");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -171,4 +171,21 @@ test("manual stubs leave out owned members and mark the rest hand-made", () => {
   assert.doesNotMatch(f.text, /Heal/);
   assert.match(f.text, /@bpHandMade/);
   assert.match(f.text, /export declare class BP_Hand_C extends Thing \{\}/);
+});
+
+test("a lock with auto round-trips; a missing lock says abfc build also generates stubs", () => {
+  const dir = mkdtempSync(join(tmpdir(), "abfc-lock-auto-"));
+  try {
+    const auto = { catalogSha256: "abc", gameClasses: 3, failed: ["/Game/Fake/BP_Bad.BP_Bad_C"], added: ["/Script/FakeEngine.Other"] };
+    const l = lock({ auto });
+    writeLock(join(dir, "p1"), l);
+    assert.deepEqual(readLock(join(dir, "p1"))?.auto, auto);
+    assert.equal(readLock(join(dir, "p1"))?.createdAt, l.createdAt);
+    assert.equal(lock().auto, undefined);
+    const missing = checkLock(null, env(), config, "build");
+    assert.equal(missing[0]?.code, "ABFC3003");
+    assert.equal(missing[0]?.fix, 'run "abfc generate" (abfc build also generates them).');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

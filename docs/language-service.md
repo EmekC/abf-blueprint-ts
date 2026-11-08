@@ -125,20 +125,29 @@ The VS Code extension sends `tsDiagnostics: false` and `tsHover: false`.
 - **Completion.** Two kinds of items, both added to what the editor's TypeScript server offers (the lists merge; abfc never
   replaces them), and both completing the identifier under the cursor. The trigger character is `@`; the list is also
   offered on explicit completion (Ctrl+Space) and while typing a word.
-  - *Library functions.* In a statement or expression, typing the start of a Blueprint library function (`PrintS`, any case)
-    offers `PrintString` and inserts `KismetSystemLibrary.PrintString`. The item carries the import as an additional edit:
+  - *Library functions.* In a statement or expression, typing part of a Blueprint library function (`PrintS`, any case)
+    offers `PrintString` and inserts `KismetSystemLibrary.PrintString`. Matching is case-insensitive on, in rank order, the
+    start of the C++ name, the name without `K2_`/`BP_`, the start of the Blueprint node name, and any word start inside
+    either: `settimer`, `timer` and `settimerbyevent` all find `K2_SetTimerDelegate`, inserted as
+    `KismetSystemLibrary.K2_SetTimerDelegate`. The last two kinds need 3 characters. The item shows the library and the
+    node name beside the label. The item carries the import as an additional edit:
     the container (`KismetSystemLibrary`) is added to an existing import of its stub module, or a new `import` line is
     added after the last import. An existing import (also under an alias) is reused, and an item is left out when the
     container name is bound to something else in scope. Deprecated functions are not listed; at most 100 items are
     returned. The list comes from the stubs of the project's profile (`.abfc/stubs/<profile>`) and is rebuilt when
-    `stubs.lock.json` changes (run `abfc generate` to refresh it).
+    `stubs.lock.json` changes (run `abfc generate` to refresh it). The node name is read from the stub description
+    `(<Node Name>).`; stubs made with `ABF_REFLECT_META=0` only have the prettified C++ name there. Unreal's search
+    keywords are not in the stubs and are not matched.
+  - *Members by node name.* After `this.`, `x.` or `Library.` (3+ characters), abfc adds the stub members whose node name
+    matches but whose C++ name does not (`this.getcontrolledpawn` finds `K2_GetPawn`); everything else after a dot is the
+    TypeScript server's list.
   - *Overridable events.* In a class body at the start of a member (`Rec` matches `ReceiveBeginPlay`, `ReceiveTick`, ...;
     an empty prefix lists them all), the events of the parent class that can be overridden are offered as snippets:
     `@override override ReceiveTick(DeltaSeconds: double): void { ... }`, with the cursor inside the body. The
     `override` import from `@abfc/runtime` and the `import type` lines for the parameter types are added as additional
     edits. Events the class already declares are not offered; they sort before library items.
-  There is no completion in comments, strings, imports, after a `.` or `?.`, or after an `@` decorator name, and no
-  completion of gameplay tags or director names yet.
+  There is no completion in comments, strings or imports, no library-function completion after a `.` or `?.`, and none after an `@` decorator name.
+  Gameplay tags and director names are not completed yet.
 
 Go to definition and rename are not provided; they stay with the editor's TypeScript server.
 
@@ -229,3 +238,11 @@ a run after a one-file edit takes well under a second on a project of this size.
   ]
 }
 ```
+
+## Classes, structs and enums
+
+Completion also offers the classes, structs and enums of the game and the engine, from the names catalog `abfc generate` stores (`_names.json`), including names that have no stub yet. Typing `BP_Fa` in a type position or an expression offers `BP_Fake_C`, shows its path and module, and adds the import (`import { BP_Fake_C } from "/Game/..."`; structs and enums get `import type`). After `extends` only classes are offered. Library functions that exist only in the catalog rank after generated ones and say "not generated yet".
+
+## Generate stubs quick fix
+
+A TypeScript error about an unresolved `/Script/...` or `/Game/...` import (TS2305, TS2307, TS2614, TS2724) has the quick fix "Generate stubs for <names>". It runs the command `abfc.generateStubs`, which starts `abfc generate --add` for those names (the CLI that started the server, so it is offered only when the server was started by `abfc lsp`). This is the only time the language server starts the Mod Editor backend; checks and completion never do. The result (generated, already up to date, or the error, for example [ABFC4019](errors.md#abfc4019) while a build holds the project lock) is shown as a message, and the diagnostics refresh afterwards. Only one run per project at a time.
