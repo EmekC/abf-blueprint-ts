@@ -5,6 +5,7 @@ import type { Backend, ReflectData } from "@abfc/backend";
 import { libraryEntriesOf, ownedSets, sourceStubImports } from "@abfc/compiler";
 import { AbfcError, runtimeLayout } from "@abfc/env";
 import {
+  classesWithoutSupers,
   COVERAGE_FILE,
   STUBGEN_VERSION,
   catalogFromBackend,
@@ -14,6 +15,7 @@ import {
   emitStubsWithIndex,
   manualFromExport,
   manualReferences,
+  missingAncestors,
   missingStructs,
   newLock,
   readCatalog,
@@ -42,6 +44,9 @@ import { ensureStage } from "./stage.js";
 
 /** Folders of the mod's Content that are never stubbed. */
 const SKIPPED_FOLDERS = ["_McpTest", "_McpTmp"];
+
+/** Upper bound of the reflect rounds that close parent chains and structs. */
+const MAX_REFLECT_ROUNDS = 6;
 
 /** The backend's refusal to read an asset of another class (`<asset> is not a Blueprint (<Class>)`, `<asset> is a <Class>, not a Blueprint`). */
 const NOT_A_BLUEPRINT = /not a Blueprint/i;
@@ -72,8 +77,21 @@ function declarationOf(spec: string): string {
 
 function merge(into: ReflectData, add: ReflectData): void {
   into.engineVersion ??= add.engineVersion;
-  for (const [k, v] of Object.entries(add.classes)) if (into.classes[k] === undefined) into.classes[k] = v;
+  for (const [k, v] of Object.entries(add.classes)) {
+    const have = into.classes[k];
+    if (have === undefined || (have.castOnly === true && v.castOnly !== true)) into.classes[k] = v;
+  }
   for (const [k, v] of Object.entries(add.structs)) if (into.structs[k] === undefined) into.structs[k] = v;
+  if (add.supers !== undefined) {
+    const sup = (into.supers ??= {});
+    for (const [k, v] of Object.entries(add.supers)) if (sup[k] === undefined) sup[k] = v;
+  }
+  // The cooked-class source counts as present only when every round that reflected Blueprint classes had it (a round whose reader
+  // failed must not be hidden by another round's union).
+  if (add.memberSources !== undefined) into.memberSources = [...new Set([...(into.memberSources ?? []), ...add.memberSources])];
+  const reflectedGame = Object.entries(add.classes).some(([p, c]) => p.startsWith("/Game/") && c.castOnly !== true);
+  if (reflectedGame && !(add.memberSources ?? []).includes("cookedClass")) cookedMissing.add(into);
+  if (cookedMissing.has(into) && into.memberSources !== undefined) into.memberSources = into.memberSources.filter((s) => s !== "cookedClass");
   into.errors.push(...add.errors);
 }
 
@@ -105,6 +123,9 @@ const sortedUnique = (xs: Iterable<string>): string[] => [...new Set(xs)].sort()
 
 /** How many `reflect:` messages of the backend are printed one by one. */
 const REFLECT_MESSAGES_SHOWN = 20;
+
+/** Merged reflect results that had a round without the cooked-class member source. */
+const cookedMissing = new WeakSet<ReflectData>();
 
 async function reflectAndRead(ctx: CliContext, backend: Backend, run: StubRun): Promise<number> {
   const { config, env, output, deps, paths } = ctx;
@@ -150,7 +171,7 @@ async function reflectAndRead(ctx: CliContext, backend: Backend, run: StubRun): 
   }
   recordRun(paths.runsFile, { at: at(), step: "stubs.read", seconds: (clock() - t0) / 1000, ok: true, units: manual.length, mode: "cold" });
 
-  // Reflection: the configured classes, then the struct closure (depth 2).
+  // Reflection: the configured classes, then every ancestor on their parent chains with members, the struct closure (depth 2) and the parent chains of the opaque types.
   const t1 = clock();
   const profileDir = win32.join(paths.stubsDir, env.profile.id);
   const first =
@@ -183,10 +204,22 @@ async function reflectAndRead(ctx: CliContext, backend: Backend, run: StubRun): 
   // The seed's old messages stay with the run that produced them: data.errors holds this run's messages only.
   if (run.seed !== null) merge(data, { ...run.seed.reflect, errors: [] });
   const manualRefs = manual.flatMap((m) => manualReferences(m));
-  for (let depth = 0; depth < 2; depth++) {
-    const need = missingStructs(data, manualRefs);
-    if (need.length === 0) break;
-    const more = await backend.reflect({ mod, classes: [], structs: need, castTargets: [] });
+  const manualParents = manual.map((m) => m.parent).filter((p): p is string => p !== null);
+  const manualPaths = new Set(manual.map((m) => m.classPath));
+  // Backends that report `supers` do so on every reflect call; with everything from the cache (nothing reflected now) the seed tells.
+  const supersSupported = (first !== null ? first.result.data.supers : run.seed?.reflect.supers) !== undefined;
+  const askedClasses = new Set<string>(run.classes);
+  const askedSupers = new Set<string>();
+  let structRounds = 0;
+  for (let round = 0; round < MAX_REFLECT_ROUNDS; round++) {
+    const needClasses = missingAncestors(data, manualParents, manualPaths).filter((p) => !askedClasses.has(p));
+    const needStructs = structRounds < 2 ? missingStructs(data, manualRefs) : [];
+    const needSupers = supersSupported ? classesWithoutSupers(data, manualRefs).filter((p) => !askedSupers.has(p) && !needClasses.includes(p)) : [];
+    if (needClasses.length + needStructs.length + needSupers.length === 0) break;
+    if (needStructs.length > 0) structRounds++;
+    for (const p of needClasses) askedClasses.add(p);
+    for (const p of needSupers) askedSupers.add(p);
+    const more = await backend.reflect({ mod, classes: needClasses, structs: needStructs, castTargets: [], ...(needSupers.length > 0 ? { supersOf: needSupers } : {}) });
     merge(data, more.data);
   }
   recordRun(paths.runsFile, {
@@ -224,19 +257,6 @@ async function reflectAndRead(ctx: CliContext, backend: Backend, run: StubRun): 
     });
   }
 
-  for (const [cls, members] of Object.entries(config.stubs.widgetMembers)) {
-    for (const [member, widget] of Object.entries(members)) {
-      if (data.classes[widget] === undefined) {
-        output.diag({
-          severity: "warning",
-          code: "ABFC3011",
-          message: `stubs.widgetMembers: ${cls} ${member} is a ${widget}, which is not in the stubs; it is typed UObject.`,
-          fix: `"${widget}" is requested automatically; check that it is a class of this editor build, then run "abfc stubs --add ${widget}" to retry it.`,
-        });
-      }
-    }
-  }
-
   // Emit and write.
   const t2 = clock();
   const { files, index } = emitStubsWithIndex({
@@ -249,6 +269,79 @@ async function reflectAndRead(ctx: CliContext, backend: Backend, run: StubRun): 
     opaque: [],
     opaqueEnums: run.opaqueEnums,
   });
+  const firstFew = (list: string[]): string => `${list.slice(0, 5).join(", ")}${list.length > 5 ? ", ..." : ""}`;
+  if (index.noSupers.length > 0 && supersSupported) {
+    output.diag({
+      severity: "warning",
+      code: "ABFC3013",
+      message: `the backend could not confirm the Blueprint parent chain of ${index.noSupers.length} class(es) (${firstFew(index.noSupers)}); they extend the nearest native class, so members declared on Blueprint parents are missing.`,
+      fix: 'check the reflect warnings (ABFC4002) above for the parent that failed to load, then run "abfc stubs" again.',
+    });
+  } else if (index.noSupers.length > 0) {
+    output.diag({
+      severity: "warning",
+      code: "ABFC3013",
+      message: `the backend did not report the Blueprint parent classes of ${index.noSupers.length} class(es) (${firstFew(index.noSupers)}); their stubs extend the nearest native class, so members declared on Blueprint parents are missing.`,
+      fix: 'update abf-mod-editor-mcp to a version whose reflect reports "supers" (see docs/backend.md), then run "abfc stubs".',
+    });
+  }
+  if (index.chainGaps.length > 0) {
+    output.diag({
+      severity: "warning",
+      code: "ABFC3013",
+      message: `${index.chainGaps.length} stub class(es) inherit from a class without members: ${firstFew(index.chainGaps)}.`,
+      fix: 'check the reflect warnings (ABFC4002) above and run "abfc stubs" again; report the class if the warning stays.',
+    });
+  }
+  // Members that class defaults cannot list (widgets, components, widget/component variables) come from the backend's member pass.
+  const gameClasses = Object.entries(data.classes)
+    .filter(([p, c]) => p.startsWith("/Game/") && c.castOnly !== true)
+    .map(([p]) => p);
+  const memberSources = data.memberSources ?? [];
+  if (gameClasses.length > 0 && !memberSources.includes("cookedClass")) {
+    const partial = memberSources.includes("widgetTree") && memberSources.includes("scs");
+    output.diag({
+      severity: "warning",
+      code: "ABFC3014",
+      message: partial
+        ? `the backend found the designer widgets and components of ${gameClasses.length} Blueprint class(es) but could not list their other variables; plain variables of widget or component type are missing from the stubs.`
+        : `the backend did not list the members that class defaults cannot show (widget and component variables) for ${gameClasses.length} Blueprint class(es); such members are missing from the stubs.`,
+      fix: 'update abf-mod-editor-mcp (see docs/backend.md) and check the reflect warnings (ABFC4002) above, then run "abfc stubs" again.',
+    });
+  }
+  const discovered = new Set(index.discovered.map((d) => d.slice(0, d.lastIndexOf(" (")).toLowerCase()));
+  for (const [cls, members] of Object.entries(config.stubs.widgetMembers)) {
+    for (const [member, widget] of Object.entries(members)) {
+      if (discovered.has(`${cls}:${member}`.toLowerCase())) continue;
+      if (data.classes[widget] === undefined) {
+        output.diag({
+          severity: "warning",
+          code: "ABFC3011",
+          message: `stubs.widgetMembers: ${cls} ${member} is a ${widget}, which is not in the stubs; it is typed UObject.`,
+          fix: `"${widget}" is requested automatically; check that it is a class of this editor build, then run "abfc stubs --add ${widget}" to retry it.`,
+        });
+      }
+    }
+  }
+
+  const widgetEntries = Object.entries(config.stubs.widgetMembers).flatMap(([cls, members]) => Object.keys(members).map((m) => ({ cls, member: m })));
+  const found = widgetEntries.filter((e) => discovered.has(`${e.cls}:${e.member}`.toLowerCase()));
+  for (const e of found) {
+    output.diag({
+      severity: "warning",
+      code: "ABFC3015",
+      message: `stubs.widgetMembers: ${e.cls} ${e.member} is found by abfc stubs itself now; remove the entry (stubs.widgetMembers is deprecated).`,
+    });
+  }
+  const kept = widgetEntries.filter((e) => !found.includes(e));
+  if (kept.length > 0) {
+    output.diag({
+      severity: "warning",
+      code: "ABFC3015",
+      message: `stubs.widgetMembers is deprecated; ${kept.length} entr${kept.length === 1 ? "y was" : "ies were"} not found by reflection and ${kept.length === 1 ? "is" : "are"} still taken from the config: ${firstFew(kept.map((e) => `${e.cls}:${e.member}`))}.`,
+      fix: "report these members; the setting will be removed.",
+    });
+  }
   const failedFinal = sortedUnique([...run.failed, ...failedNow].filter((c) => !reflectedWithMembers(c)));
   const lock = newLock({
     profile: env.profile.id,
@@ -302,6 +395,7 @@ async function reflectAndRead(ctx: CliContext, backend: Backend, run: StubRun): 
 
   output.info(`stubs written to ${profileDir}`);
   output.info(`  ${files.size} file(s), ${index.members} member(s), ${index.deprecated.length} blocked, ${index.overridden.length} overridden, ${index.opaque.length} opaque`);
+  output.info(`  ${index.discovered.length} member(s) beyond class defaults (widgets, components, widget/component variables)`);
   output.info(`  hand-made assets: ${manual.length}`);
   output.json({
     dir: profileDir,

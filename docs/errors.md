@@ -925,7 +925,7 @@ Fix: list the classes you need in `stubs.scriptClasses` instead. See [config.md]
 
 Severity: warning · Exit: -
 
-Meaning: an entry in `stubs.widgetMembers` names a widget class that is not in the stubs, so the member is typed as a plain `UObject`.
+Meaning: a not-yet-removed entry of the deprecated `stubs.widgetMembers` ([ABFC3015](errors.md#abfc3015)) names a widget class that is not in the stubs, so the member is typed as a plain `UObject`. Members found by reflection never give this warning.
 
 Typical cause: the class path in `stubs.widgetMembers` is misspelled or is not a class of this editor build, or the backend could not reflect it (`ABFC3023` is reported too). The widget classes of `stubs.widgetMembers` are generated automatically; they do not have to be listed in `stubs.classes` or `stubs.scriptClasses`.
 
@@ -940,6 +940,36 @@ Meaning: the backend cannot list the game's gameplay tags, so `abfc stubs` could
 Typical cause: abf-mod-editor-mcp older than 2.6.0.
 
 Fix: update abf-mod-editor-mcp to 2.6.0 or newer (or use the bundled backend of `abfc.exe`) and run `abfc stubs` again. Until then a tag can still be written as a string literal.
+
+### ABFC3013
+
+Severity: warning · Exit: -
+
+Meaning: a stub class does not have its full parent chain: the backend gave no Blueprint parents, or an ancestor could not be reflected and is a members-less placeholder.
+
+Typical cause: an older backend whose `reflect` does not report `supers` (the message asks you to update it), or a current backend that could not confirm the chain of a class because a parent failed to load or is not a confirmed ancestor (the message says "could not confirm"; see [ABFC4002](errors.md#abfc4002) in the reflect log).
+
+Fix: update the backend, run `abfc stubs`, and check with `node scripts/stub-chain-audit.mjs --stubs .abfc/stubs/<profile>`.
+
+### ABFC3014
+
+Severity: warning · Exit: -
+
+Meaning: the backend did not list the members that class defaults cannot show (widgets, components and variables of widget or component type) for the reflected Blueprint classes, or listed only part of them. Those members are missing from the stubs.
+
+Typical cause: an abf-mod-editor-mcp without the member pass (the message asks you to update it), or a current backend whose cooked-package reader could not run (see [ABFC4002](errors.md#abfc4002) in the reflect log).
+
+Fix: update the backend (see [backend.md](backend.md)), check the reflect warnings, and run `abfc stubs` again.
+
+### ABFC3015
+
+Severity: warning · Exit: -
+
+Meaning: `stubs.widgetMembers` is deprecated. Either an entry is now found by `abfc stubs` itself (remove it), or it was not found by reflection and is still taken from the config.
+
+Typical cause: a config written for an older abfc, before widgets and components of game Blueprints were read from reflection.
+
+Fix: remove the entries named in the warnings; report the members that are still taken from the config.
 
 ### ABFC3020
 
