@@ -15,9 +15,10 @@ export function toCompletionItem(sf: TsSourceFile, c: AbfcCompletion): Completio
     detail: c.detail,
     insertTextFormat: c.snippet ? InsertTextFormat.Snippet : InsertTextFormat.PlainText,
     textEdit: { range: offsetRange(sf, c.replace.start, c.replace.end), newText: c.insertText },
-    filterText: c.label,
+    filterText: c.filterText ?? c.label,
     sortText: c.sortText,
   };
+  if (c.labelDescription !== undefined) item.labelDetails = { description: c.labelDescription };
   if (c.documentation !== undefined && c.documentation !== "") item.documentation = { kind: MarkupKind.PlainText, value: c.documentation };
   if (c.additionalEdits.length > 0) {
     item.additionalTextEdits = c.additionalEdits.map((e) => ({ range: offsetRange(sf, e.start, e.end), newText: e.newText }));

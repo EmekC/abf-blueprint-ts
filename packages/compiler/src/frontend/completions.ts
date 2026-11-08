@@ -21,6 +21,10 @@ export interface AbfcCompletion {
   /** Further edits (imports); never overlap `replace`. */
   additionalEdits: Array<{ start: number; end: number; newText: string }>;
   sortText: string;
+  /** Text the client filters on; the label when absent. */
+  filterText?: string;
+  /** Shown next to the label, e.g. `KismetSystemLibrary · Set Timer by Event`. */
+  labelDescription?: string;
 }
 
 export interface LibraryEntry {
@@ -32,6 +36,8 @@ export interface LibraryEntry {
   /** `(InString?: string): void` */
   signature: string;
   doc: string;
+  /** The Blueprint node name from the description's `(...)`, e.g. `Set Timer by Event`; absent in stubs without one. */
+  displayName?: string;
 }
 
 const MAX_LIBRARY_ITEMS = 100;
@@ -61,6 +67,97 @@ function docOf(node: ts.Node): string {
     if (ts.isJSDoc(d) && d.comment !== undefined) parts.push(ts.getTextOfJSDocComment(d.comment) ?? "");
   }
   return parts.join("\n").trim();
+}
+
+/** `(params): ret` of a declaration, as shown in a completion's detail. */
+function signatureOf(decl: ts.SignatureDeclaration, sf: ts.SourceFile): string {
+  const params = decl.parameters.map((p) => p.getText(sf)).join(", ");
+  return `(${params}): ${decl.type === undefined ? "void" : decl.type.getText(sf)}`;
+}
+
+/**
+ * The Blueprint node name stubgen writes at the end of a function description, `Starts a timer (Set Timer by Event).` ->
+ * `Set Timer by Event`; undefined when the first line does not end in a balanced `(...)`.
+ */
+export function displayNameFromDoc(doc: string): string | undefined {
+  const first = doc.split(/\r?\n/).find((l) => l.trim() !== "");
+  if (first === undefined) return undefined;
+  let line = first.trim();
+  if (line.endsWith(".")) line = line.slice(0, -1);
+  if (!line.endsWith(")")) return undefined;
+  let depth = 0;
+  for (let i = line.length - 1; i >= 0; i--) {
+    const c = line[i];
+    if (c === ")") depth++;
+    else if (c === "(") {
+      depth--;
+      if (depth === 0) {
+        const inside = line.slice(i + 1, line.length - 1).trim();
+        return inside === "" ? undefined : inside;
+      }
+    }
+  }
+  return undefined;
+}
+
+const isAlnum = (c: string | undefined): boolean => c !== undefined && /[A-Za-z0-9]/.test(c);
+const isUpper = (c: string | undefined): boolean => c !== undefined && /[A-Z]/.test(c);
+const isLower = (c: string | undefined): boolean => c !== undefined && /[a-z]/.test(c);
+const isDigit = (c: string | undefined): boolean => c !== undefined && /[0-9]/.test(c);
+const isLetter = (c: string | undefined): boolean => isUpper(c) || isLower(c);
+
+/** Indexes (>= 1) in `s` where a word begins: after a separator, at a camel hump, at an acronym end (`HUDClass` -> `Class`) or at a digit run. */
+function wordStarts(s: string): number[] {
+  const out: number[] = [];
+  for (let i = 1; i < s.length; i++) {
+    const c = s[i];
+    const p = s[i - 1];
+    const n = s[i + 1];
+    if (
+      (isAlnum(c) && !isAlnum(p)) ||
+      (isUpper(c) && (isLower(p) || isDigit(p))) ||
+      (isUpper(c) && isUpper(p) && isLower(n)) ||
+      (isDigit(c) && isLetter(p))
+    ) {
+      out.push(i);
+    }
+  }
+  return out;
+}
+
+const squash = (s: string): string => s.replace(/[^A-Za-z0-9_$]/g, "");
+
+/** Typed characters needed before display-name and word-start matches count. */
+export const MIN_WORD_MATCH = 3;
+
+export interface NameMatch {
+  /** 0 full-name prefix, 1 prefix of the name without `K2_`/`BP_`, 2 prefix of the node name, 3 word start inside the name or node name. */
+  tier: 0 | 1 | 2 | 3;
+  /** The matched text from the match point on (what a client should filter on). */
+  filterText: string;
+}
+
+/** How `prefix` (case-insensitive) matches a function name or its Blueprint node name, best tier first; undefined when it does not. */
+export function matchName(name: string, displayName: string | undefined, prefix: string): NameMatch | undefined {
+  const q = prefix.toLowerCase();
+  if (q === "") return undefined;
+  if (name.toLowerCase().startsWith(q)) return { tier: 0, filterText: name };
+  const stripped = name.replace(/^(K2|BP)_/, "");
+  if (stripped !== name && stripped.toLowerCase().startsWith(q)) return { tier: 1, filterText: stripped };
+  if (q.length < MIN_WORD_MATCH) return undefined;
+  const d = displayName === undefined ? "" : squash(displayName);
+  if (d !== "" && d.toLowerCase().startsWith(q)) return { tier: 2, filterText: d };
+  for (const i of wordStarts(name)) {
+    const rest = name.slice(i);
+    if (rest.toLowerCase().startsWith(q)) return { tier: 3, filterText: rest };
+  }
+  if (displayName !== undefined) {
+    for (const i of wordStarts(displayName)) {
+      const rest = squash(displayName.slice(i));
+      if (rest.toLowerCase().startsWith(q)) return { tier: 3, filterText: rest };
+    }
+  }
+  return undefined;
 }
 
 function* dtsFiles(dir: string): Generator<string> {
@@ -110,13 +207,15 @@ export function buildLibraryIndex(stubsProfileDir: string): LibraryEntry[] {
       for (const inner of st.body.statements) {
         if (!ts.isFunctionDeclaration(inner) || inner.name === undefined) continue;
         if (ts.getJSDocDeprecatedTag(inner) !== undefined) continue;
-        const params = inner.parameters.map((p) => p.getText(sf)).join(", ");
+        const doc = docOf(inner);
+        const displayName = displayNameFromDoc(doc);
         entries.push({
           name: inner.name.text,
           container: st.name.text,
           module,
-          signature: `(${params}): ${inner.type === undefined ? "void" : inner.type.getText(sf)}`,
-          doc: docOf(inner),
+          signature: signatureOf(inner, sf),
+          doc,
+          ...(displayName === undefined ? {} : { displayName }),
         });
       }
     }
@@ -412,17 +511,24 @@ function libraryCompletions(
   replace: { start: number; end: number },
   index: LibraryEntry[],
 ): AbfcCompletion[] {
-  const want = prefix.toLowerCase();
-  const hits = index.filter((e) => e.name.toLowerCase().startsWith(want));
+  const hits = index.flatMap((e) => {
+    const m = matchName(e.name, e.displayName, prefix);
+    return m === undefined ? [] : [{ e, m }];
+  });
   hits.sort((a, b) => {
-    const ca = a.name.startsWith(prefix) ? 0 : 1;
-    const cb = b.name.startsWith(prefix) ? 0 : 1;
-    if (ca !== cb) return ca - cb;
-    return a.name < b.name ? -1 : a.name > b.name ? 1 : a.container < b.container ? -1 : a.container > b.container ? 1 : 0;
+    if (a.m.tier !== b.m.tier) return a.m.tier - b.m.tier;
+    if (a.m.tier === 0) {
+      const ca = a.e.name.startsWith(prefix) ? 0 : 1;
+      const cb = b.e.name.startsWith(prefix) ? 0 : 1;
+      if (ca !== cb) return ca - cb;
+    }
+    const an = a.e.name;
+    const bn = b.e.name;
+    return an < bn ? -1 : an > bn ? 1 : a.e.container < b.e.container ? -1 : a.e.container > b.e.container ? 1 : 0;
   });
   const scope = namesInScope(loaded, at);
   const out: AbfcCompletion[] = [];
-  for (const e of hits) {
+  for (const { e, m } of hits) {
     if (out.length >= MAX_LIBRARY_ITEMS) break;
     let local = importedContainer(sf, e.container, e.module);
     let edits: Edit[] = [];
@@ -448,10 +554,59 @@ function libraryCompletions(
       snippet: false,
       replace,
       additionalEdits,
-      sortText: `1${e.name}`,
+      sortText: `1${"ABCD"[m.tier]}${e.name}`,
+      filterText: m.filterText,
+      labelDescription: e.displayName === undefined ? e.container : `${e.container} · ${e.displayName}`,
     });
   }
   return out;
+}
+
+/**
+ * After `x.`: stub members whose Blueprint node name matches the typed prefix but whose C++ name does not (the TypeScript server
+ * already lists the others).
+ */
+function memberCompletions(loaded: LoadedProgram, access: ts.PropertyAccessExpression, prefix: string, replace: { start: number; end: number }): AbfcCompletion[] {
+  if (prefix.length < MIN_WORD_MATCH) return [];
+  const { checker } = loaded;
+  let props: ts.Symbol[];
+  try {
+    props = checker.getPropertiesOfType(checker.getTypeAtLocation(access.expression));
+  } catch {
+    return [];
+  }
+  const hits: Array<{ item: AbfcCompletion; tier: number }> = [];
+  for (const sym of props) {
+    if (!(sym.flags & (ts.SymbolFlags.Method | ts.SymbolFlags.Function))) continue;
+    const decl = (sym.declarations ?? []).find((d): d is ts.MethodDeclaration | ts.MethodSignature | ts.FunctionDeclaration => ts.isMethodDeclaration(d) || ts.isMethodSignature(d) || ts.isFunctionDeclaration(d));
+    if (decl === undefined) continue;
+    if (moduleOfStubPath(decl.getSourceFile().fileName) === undefined) continue;
+    if (ts.getJSDocDeprecatedTag(decl) !== undefined) continue;
+    if (matchName(sym.name, undefined, prefix) !== undefined) continue;
+    const doc = docOf(decl);
+    const display = displayNameFromDoc(doc);
+    if (display === undefined) continue;
+    const m = matchName(sym.name, display, prefix);
+    if (m === undefined) continue;
+    hits.push({
+      tier: m.tier,
+      item: {
+        label: sym.name,
+        kind: ts.isFunctionDeclaration(decl) ? "function" : "method",
+        detail: sym.name + signatureOf(decl, decl.getSourceFile()),
+        ...(doc === "" ? {} : { documentation: doc }),
+        insertText: sym.name,
+        snippet: false,
+        replace,
+        additionalEdits: [],
+        sortText: `1${"ABCD"[m.tier]}${sym.name}`,
+        filterText: m.filterText,
+        labelDescription: display,
+      },
+    });
+  }
+  hits.sort((a, b) => (a.tier !== b.tier ? a.tier - b.tier : a.item.label < b.item.label ? -1 : a.item.label > b.item.label ? 1 : 0));
+  return hits.slice(0, MAX_LIBRARY_ITEMS).map((h) => h.item);
 }
 
 /** True when the identifier is a declaration's name (a parameter, variable, member, ...), where no expression is written. */
@@ -460,8 +615,9 @@ function isDeclarationName(id: ts.Node, parent: ts.Node): boolean {
 }
 
 /**
- * Completions at `pos` of `fileName`: none in comments, strings, imports, after `.` or after `@`; in a class body at a member
- * start the overridable parent events; in a statement or expression the library functions starting with the typed prefix.
+ * Completions at `pos` of `fileName`: none in comments, strings, imports or after `@`; after `.` only stub members found by their
+ * Blueprint node name; in a class body at a member start the overridable parent events; in a statement or expression the library
+ * functions matching the typed prefix (C++ name with or without `K2_`/`BP_`, a word of it, or the Blueprint node name).
  */
 export function completionsAt(loaded: LoadedProgram, fileName: string, pos: number, index: LibraryEntry[]): AbfcCompletion[] {
   const sf = findSource(loaded, fileName);
@@ -482,13 +638,20 @@ export function completionsAt(loaded: LoadedProgram, fileName: string, pos: numb
   while (k >= 0 && /\s/.test(text[k] ?? "")) k--;
   const prevCh = k >= 0 ? text[k] : "";
   if (prevCh === "@") return [];
-  if (prevCh === "." && !(k >= 2 && text.slice(k - 2, k + 1) === "...")) return [];
+  const afterDot = prevCh === "." && !(k >= 2 && text.slice(k - 2, k + 1) === "...");
 
   const chain = chainAt(sf, pos);
   const leaf = chain[chain.length - 1];
   if (leaf === undefined || leaf === sf) return [];
   if (inComment(sf, leaf, pos) || inLiteral(sf, leaf, pos)) return [];
   if (chain.some((n) => ts.isImportDeclaration(n) || ts.isExportDeclaration(n) || ts.isImportEqualsDeclaration(n) || ts.isExportAssignment(n))) return [];
+
+  // after `.`: only members found by their Blueprint node name
+  if (afterDot) {
+    const parent = chain[chain.length - 2];
+    if (leaf.kind !== ts.SyntaxKind.Identifier || parent === undefined || !ts.isPropertyAccessExpression(parent) || parent.name !== leaf) return [];
+    return memberCompletions(loaded, parent, prefix, replace);
+  }
 
   // class body: member start
   let ci = -1;

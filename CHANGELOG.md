@@ -6,6 +6,12 @@ All notable changes to abfc are recorded here. The format follows [Keep a Change
 
 abfc uses semantic versioning for its command-line surface: the commands, their flags, the exit codes, the error codes, the `abf.config.json` schema and the decorators. A new config schema or a removed option is a major change. All `@abfc/*` packages share one version.
 
+## [Unreleased]
+
+### Fixed
+
+- Editor completion finds Blueprint library functions by the C++ name without its `K2_`/`BP_` prefix, by any word of the name (`timer`) and by the Blueprint node name (`settimerbyevent` offers `KismetSystemLibrary.K2_SetTimerDelegate` with its import). After a dot, stub members are also found by their node name. Works with existing stubs.
+
 ## [1.0.0] - 2026-11-08
 
 ### Added
