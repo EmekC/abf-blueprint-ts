@@ -1175,6 +1175,8 @@ Severity: error · Exit: 1
 
 Meaning: the backend could not perform a stage operation that `abfc build` needs for a renamed or moved class, a class that left the TypeScript, or a changed `extends` clause (rename, delete, reparent or recreate of an asset). The backend restored the stage, so nothing was changed. The message names the operation and the backend's reason, for example an asset that still references a deleted asset, or a rename target that already exists.
 
+A delete runs after the build applied the new specs of the classes that used the removed class, so removing a class and its last use in TypeScript in one edit works in one build. If a delete fails then, the applied changes stay on the stage (only the delete is rolled back) and the next build tries the delete again.
+
 Typical cause: another Blueprint of the mod still uses an asset whose class you removed; a hand-made asset already sits at the new path of a moved class.
 
 Fix: remove the reference or the asset in the Mod Editor, or keep a moved class where it was with `path: "<its path below the mod>"`; then run `abfc build` again.

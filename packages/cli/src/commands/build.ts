@@ -157,13 +157,34 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   });
   rec.record("build.assetOps", since(tOps), assetOpsOutcome.ok);
   if (!assetOpsOutcome.ok) return false;
-  const opsJson = {
+  const opsJson: { renamed?: Array<{ from: string; to: string }>; deleted?: string[] } = {
     ...(assetOpsOutcome.renamed.length > 0 ? { renamed: assetOpsOutcome.renamed } : {}),
     ...(assetOpsOutcome.deleted.length > 0 ? { deleted: assetOpsOutcome.deleted } : {}),
   };
+  // The deletes of assets abfc created run after the referencers' new specs are applied and compiled: a class and the last use of it
+  // in TypeScript can go in one build. Nothing is read or planned from an asset that waits for its delete.
+  const deferredDeletes = new Set((assetOpsOutcome.deferred ?? []).map((a) => a.toLowerCase()));
+  const runDeferredDeletes = async (): Promise<boolean> => {
+    if (deferredDeletes.size === 0) return true;
+    const tDel = performance.now();
+    const done = await runAssetOps(ctx, backend, {
+      stagingPath: stage.stagingPath,
+      plan: opsPlan,
+      classPaths: new Set([...fe.hir.classes, ...fe.hir.structs].map((c) => c.path)),
+      owned: new Set(owned.map((a) => a.path)),
+      manifests: listManifests(projectDir),
+      assetOps: caps.assetOps,
+      directorRows: owned.flatMap((a) => (a.director !== undefined ? [a.director.asset] : [])),
+      phase: "deletes",
+    });
+    rec.record("build.assetOps.deletes", since(tDel), done.ok);
+    if (!done.ok) return false;
+    if (done.deleted.length > 0) opsJson.deleted = [...(opsJson.deleted ?? []), ...done.deleted];
+    return true;
+  };
   // A class whose TypeScript is gone but whose manifest still lists units: its units are retired like those of a removed event.
   for (const m of listManifests(projectDir)) {
-    if (!m.asset.startsWith(`/${mod}/`) || m.units.length === 0 || owned.some((a) => a.path === m.asset)) continue;
+    if (!m.asset.startsWith(`/${mod}/`) || m.units.length === 0 || owned.some((a) => a.path === m.asset) || deferredDeletes.has(m.asset.toLowerCase())) continue;
     owned.push(ir.assets.find((a) => a.path === m.asset) ?? { path: m.asset, variables: [], units: [] });
     if (m.classDefaultsHash !== undefined) {
       output.diag({
@@ -309,6 +330,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
 
   if (planned.plan.assets.length === 0) {
     refreshSources(new Set());
+    if (!(await runDeferredDeletes())) return false;
     writeCache(ctx, owned, cache, stubLockHash, caps.eventMeta === true);
     output.info(`up to date (${planned.upToDate.length} unit(s) unchanged)`);
     output.json({ applied: [], upToDate: planned.upToDate, ...opsJson });
@@ -570,6 +592,10 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   }
   for (const m of finals) writeManifest(projectDir, m);
   refreshSources(new Set(planned.plan.assets.map((a) => a.asset)));
+  if (!(await runDeferredDeletes())) {
+    output.json({ applied: stagedUnits, assets: appliedAssets, deleteFailed: true, ...opsJson });
+    return false;
+  }
   for (const m of report.messages) if (m.severity === "warning" && args.flags.verbose) output.info(`[Unreal warning] ${m.message}`);
 
   writeCache(ctx, owned, cache, stubLockHash, caps.eventMeta === true);

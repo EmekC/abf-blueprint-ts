@@ -19,6 +19,8 @@ export interface AssetOpsOutcome {
   deleted: string[];
   /** Assets the ops edited on the stage besides the ones renamed/deleted (referencers whose nodes the rename fixed up) and the renamed assets themselves. */
   edited?: string[];
+  /** After the "renames" phase: the assets (and class-manager rows) whose deletes wait for the "deletes" phase (run after the referencers were applied). */
+  deferred?: string[];
 }
 
 function describeOp(op: AssetOp): string {
@@ -43,15 +45,15 @@ async function callAssetOps(backend: Backend, mod: string, ops: AssetOp[]): Prom
   }
 }
 
-/** ABFC5016 for a failed `bp_asset_ops` call (the backend restored the stage). */
-function failedOps(ops: AssetOp[], r: AssetOpsResult): Diagnostic {
+/** ABFC5016 for a failed `bp_asset_ops` call (the backend restored the stage; `afterApply`: the build's applied changes stay on it). */
+function failedOps(ops: AssetOp[], r: AssetOpsResult, afterApply = false): Diagnostic {
   const failing = r.results.filter((x) => !x.ok).map((x) => x.detail).filter((d): d is string => d !== undefined && d !== "");
   const why = [r.error ?? "the backend reported no reason", ...failing.filter((d) => r.error === null || !r.error.includes(d))].join("; ");
   return {
     severity: "error",
     code: "ABFC5016",
     ...(ops[0] !== undefined ? { asset: "asset" in ops[0] ? ops[0].asset : ops[0].to } : {}),
-    message: `the backend could not ${ops.map(describeOp).join(", ")}: ${why}. The stage was restored; nothing was changed.`,
+    message: `the backend could not ${ops.map(describeOp).join(", ")}: ${why}. ${afterApply ? "The delete was rolled back; the changes this build applied stay on the stage." : "The stage was restored; nothing was changed."}`,
     fix: "fix what the backend names (assets that still reference a deleted asset, an existing target), or keep a moved class where it was with path: \"<its path below the mod>\"; then run abfc build again.",
   };
 }
@@ -74,6 +76,11 @@ export async function runAssetOps(
     assetOps: readonly string[];
     /** The class-manager rows the IR's current `@director`s name (a row that went back to its old value is in use again). */
     directorRows?: readonly string[];
+    /**
+     * `renames` (default): renames, and everything but the deletes. `deletes`: only the deletes, run after the build applied the
+     * referencers' new specs (a class and its last use in TypeScript can then go in one build). `all`: both at once.
+     */
+    phase?: "renames" | "deletes" | "all";
   },
 ): Promise<AssetOpsOutcome> {
   const { projectDir, paths, output } = ctx;
@@ -92,14 +99,17 @@ export async function runAssetOps(
   const can = (op: string): boolean => o.assetOps.includes(op);
 
   // Planned renames whose old asset the stage lacks (a re-sync lost a stage-only asset): nothing to rename, the class is created fresh.
-  const renames = o.plan.renames.filter((r) => exists(r.from));
-  const lostRenames = o.plan.renames.filter((r) => !exists(r.from));
+  const phase = o.phase ?? "renames";
+  const doRenames = phase !== "deletes";
+  const doDeletes = phase !== "renames";
+  const renames = doRenames ? o.plan.renames.filter((r) => exists(r.from)) : [];
+  const lostRenames = doRenames ? o.plan.renames.filter((r) => !exists(r.from)) : [];
   // A stage re-synced from the mod gives the old asset back: the rename is repeated.
-  const repeated = o.manifests
+  const repeated = (doRenames ? o.manifests : [])
     .filter((m) => m.renamedFrom !== undefined && m.deleted !== true && classPaths.has(lower(m.asset)) && can("rename") && exists(m.renamedFrom) && !exists(m.asset))
     .map((m) => ({ from: m.renamedFrom!, to: m.asset }));
   const deletes = o.plan.deletes.filter((a) => exists(a));
-  const lostDeletes = o.plan.deletes.filter((a) => !exists(a));
+  const lostDeletes = doRenames ? o.plan.deletes.filter((a) => !exists(a)) : [];
   const rowDeletes = o.plan.rowDeletes.filter((r) => exists(r.row) && deletes.some((d) => lower(d) === lower(r.asset)));
   // A tombstone whose asset is back on the stage (re-sync before the publish that deletes it): deleted again.
   const repeatedDeletes = o.manifests.filter((m) => m.deleted === true && can("delete") && !classPaths.has(lower(m.asset)) && exists(m.asset));
@@ -118,15 +128,15 @@ export async function runAssetOps(
   const ops: AssetOp[] = [
     ...renames.map((r): AssetOp => ({ op: "rename", from: r.from, to: r.to })),
     ...repeated.map((r): AssetOp => ({ op: "rename", from: r.from, to: r.to })),
-    ...[...rowDeletes.map((r) => r.row), ...repeatedRows, ...retiredAgain].map((row): AssetOp => ({ op: "delete", asset: row })),
-    ...[...deletes, ...repeatedDeletes.map((m) => m.asset)].map((asset): AssetOp => ({ op: "delete", asset })),
+    ...(doDeletes ? [...rowDeletes.map((r) => r.row), ...repeatedRows, ...retiredAgain].map((row): AssetOp => ({ op: "delete", asset: row })) : []),
+    ...(doDeletes ? [...deletes, ...repeatedDeletes.map((m) => m.asset)].map((asset): AssetOp => ({ op: "delete", asset })) : []),
   ];
-  const outcome: AssetOpsOutcome = { ok: true, renamed: [], deleted: [] };
+  const outcome: AssetOpsOutcome = { ok: true, renamed: [], deleted: [], ...(phase === "renames" ? { deferred: [...deletes, ...repeatedDeletes.map((m) => m.asset), ...rowDeletes.map((r) => r.row), ...repeatedRows, ...retiredAgain] } : {}) };
   let touched: string[] = [];
   if (ops.length > 0) {
     const r = await callAssetOps(backend, mod, ops);
     if (!r.ok) {
-      output.diag(failedOps(ops, r));
+      output.diag(failedOps(ops, r, phase === "deletes"));
       return { ...outcome, ok: false };
     }
     touched = r.touched;
@@ -169,7 +179,7 @@ export async function runAssetOps(
     dropUnitCacheAsset(cacheFile, r.from);
     output.info(`forgot ${r.from}: it is not in the stage any more; ${r.class} gets a new asset at ${r.to}`);
   }
-  for (const asset of deletes) {
+  for (const asset of doDeletes ? deletes : []) {
     const m = readManifest(projectDir, asset);
     const row = rowDeletes.find((r) => lower(r.asset) === lower(asset))?.row;
     writeManifest(projectDir, {
@@ -187,11 +197,11 @@ export async function runAssetOps(
     outcome.deleted.push(asset);
     output.info(`deleted ${asset}`);
   }
-  for (const m of repeatedDeletes) {
+  for (const m of doDeletes ? repeatedDeletes : []) {
     outcome.deleted.push(m.asset);
     output.info(`deleted ${m.asset} (again: the stage was re-synced before the delete was published)`);
   }
-  for (const row of retiredAgain) output.info(`deleted ${row} (again: the stage was re-synced before the delete was published)`);
+  for (const row of doDeletes ? retiredAgain : []) output.info(`deleted ${row} (again: the stage was re-synced before the delete was published)`);
   for (const asset of lostDeletes) {
     deleteManifest(projectDir, asset);
     deleteSourceMap(projectDir, asset);

@@ -503,6 +503,13 @@ export class FakeBackend implements Backend {
     p.def = value;
   }
 
+  /** Adds an asset by hand (as the Mod Editor would) whose only member is a variable of `type`. */
+  addHandMadeReference(asset: string, referenced: string): void {
+    const name = referenced.slice(referenced.lastIndexOf("/") + 1);
+    this.assets.set(asset, { path: asset, variables: [{ name: "Ref", type: `object:${referenced}.${name}_C` }], nodes: [] });
+    this.mirrorFiles();
+  }
+
   /** Adds a member variable by hand (as the Mod Editor would). */
   addHandMadeVariable(asset: string, name: string, type: string): void {
     const a = this.assets.get(asset);
@@ -922,6 +929,11 @@ export class FakeBackend implements Backend {
         if (this.opsEditNodes) this.editFirstPin(work.get(op.to)!);
         results.push({ op: "rename", ok: true });
       } else if (op.op === "delete") {
+        // Like the real backend: an asset that another asset (not deleted in this call) still references is not deleted.
+        const name = op.asset.slice(op.asset.lastIndexOf("/") + 1);
+        const deleting = new Set(ops.flatMap((o) => (o.op === "delete" ? [o.asset] : [])));
+        const blocking = [...work.values()].filter((other) => other.path !== op.asset && !deleting.has(other.path) && other.variables.some((v) => v.type.includes(`${op.asset}.${name}_C`)));
+        if (blocking.length > 0) return fail(`delete: ${op.asset} is still referenced by ${blocking.map((b) => b.path).join(", ")}`);
         const had = work.delete(op.asset);
         if (!rows.delete(op.asset) && !had) return fail(`${op.asset} does not exist`);
         removed.add(fileOfAsset(op.asset));

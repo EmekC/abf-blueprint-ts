@@ -215,3 +215,60 @@ test("(S08) a second publish publishes nothing and keeps the manifests", async (
     assert.equal(readManifest(r.dir, "/TestMod/BP_Tally2")!.renamedFrom, undefined);
   });
 });
+
+const holder = (withTarget: boolean): string =>
+  [
+    'import { blueprint } from "@abfc/runtime";',
+    'import type { int } from "@abfc/runtime";',
+    'import { Actor } from "/Script/FakeEngine";',
+    ...(withTarget ? ['import { BP_Zed } from "./Tally.js";'] : []),
+    "",
+    "@blueprint()",
+    "export class BP_Alpha extends Actor {",
+    "  Count!: int;",
+    ...(withTarget ? ["  Other!: BP_Zed | null;"] : []),
+    "}",
+    "",
+  ].join(String.fromCharCode(10));
+
+test("(S07b) deleting a class and its last TS use in one build", async () => {
+  await withRig({ ...OPS, publishDeletes: true }, async (r) => {
+    tallyOnly(r.dir, tally("BP_Zed"));
+    writeFileSync(join(r.dir, "src", "BP_Alpha.ts"), holder(true), "utf8");
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    // the class and the field that uses it go in the same edit
+    rmSync(join(r.dir, "src", "Tally.ts"));
+    writeFileSync(join(r.dir, "src", "BP_Alpha.ts"), holder(false), "utf8");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC5016/);
+    assert.match(x.out, /deleted \/TestMod\/BP_Zed/);
+    assert.deepEqual(r.backend.stageAssets().filter((a) => a.includes("Zed")), []);
+    assert.equal(readManifest(r.dir, "/TestMod/BP_Zed")!.deleted, true);
+    assert.deepEqual(readManifest(r.dir, "/TestMod/BP_Alpha")!.variables.map((v) => v.name), ["Count"]);
+    // the next build has nothing to do, and a publish deletes the file
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /up to date/);
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+  });
+});
+
+test("(S07c) a class that a hand-made asset still references is not deleted, and the stage is restored", async () => {
+  await withRig({ ...OPS, publishDeletes: true }, async (r) => {
+    tallyOnly(r.dir, tally("BP_Zed"));
+    writeFileSync(join(r.dir, "src", "BP_Alpha.ts"), holder(false), "utf8");
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    r.backend.addHandMadeReference("/TestMod/BP_Hand", "/TestMod/BP_Zed");
+    rmSync(join(r.dir, "src", "Tally.ts"));
+    x = await r.run(["build"]);
+    assert.equal(x.code, 1, x.out);
+    assert.match(x.out, /ABFC5016/);
+    assert.match(x.out, /still referenced by \/TestMod\/BP_Hand/);
+    assert.ok(r.backend.stageAssets().includes("/TestMod/BP_Zed"), "the stage still has the class");
+    assert.equal(readManifest(r.dir, "/TestMod/BP_Zed")!.deleted, undefined);
+  });
+});
