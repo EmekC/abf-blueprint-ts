@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { BP_APPLY_P1_BASE, MIN_BACKEND_VERSION, NATIVE_POLICY, capabilitiesFrom, compareServerVersion } from "../src/index.js";
+import { BP_APPLY_P1_BASE, MIN_BACKEND_VERSION, NATIVE_POLICY, RECOMMENDED_BACKEND_VERSION, capabilitiesFrom, compareServerVersion } from "../src/index.js";
 import type { RawBackendInfo } from "../src/index.js";
 
 const ALL_TOOLS = [
@@ -149,4 +149,33 @@ test("classManagerRows needs capabilities.classManagerRows AND the bp_apply feat
   assert.equal(capabilitiesFrom([], feat([], true), null).classManagerRows, false);
   assert.equal(capabilitiesFrom([], feat(["class_manager_row"], false), null).classManagerRows, false);
   assert.equal(capabilitiesFrom([], null, null).classManagerRows, false);
+});
+
+test("2.6.0 capabilities: assetOps needs the tool and the report, publishDeletes needs bp_publish, gameplayTags/reflectDefaults/classManagerRowTag follow the report", () => {
+  const info = (features: string[], caps: Record<string, unknown>): RawBackendInfo => ({ protocol: 1, bpApply: { features }, capabilities: caps }) as RawBackendInfo;
+  const full = info(["class_manager_row", "class_manager_row_tag"], {
+    classManagerRows: true,
+    assetOps: ["rename", "delete", "reparent", "recreate"],
+    publishDeletes: true,
+    gameplayTags: true,
+    reflectDefaults: true,
+  });
+  const c = capabilitiesFrom(["bp_asset_ops", "bp_publish"], full, null);
+  assert.deepEqual(c.assetOps, ["rename", "delete", "reparent", "recreate"]);
+  assert.equal(c.publishDeletes, true);
+  assert.equal(c.gameplayTags, true);
+  assert.equal(c.reflectDefaults, true);
+  assert.equal(c.classManagerRowTag, true);
+  // the tool is missing: no asset ops, even when the report lists them; no bp_publish: no deletions
+  const noTools = capabilitiesFrom([], full, null);
+  assert.deepEqual(noTools.assetOps, []);
+  assert.equal(noTools.publishDeletes, false);
+  // the row tag needs classManagerRows AND both features
+  assert.equal(capabilitiesFrom(["bp_asset_ops"], info(["class_manager_row"], { classManagerRows: true }), null).classManagerRowTag, false);
+  assert.equal(capabilitiesFrom([], info(["class_manager_row_tag"], { classManagerRows: false }), null).classManagerRowTag, false);
+  // an old backend has none of it
+  const old = capabilitiesFrom(ALL_TOOLS, FIX_INFO, null);
+  assert.deepEqual(old.assetOps, []);
+  assert.deepEqual([old.publishDeletes, old.gameplayTags, old.reflectDefaults, old.classManagerRowTag], [false, false, false, false]);
+  assert.equal(RECOMMENDED_BACKEND_VERSION, "2.6.0");
 });

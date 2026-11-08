@@ -96,6 +96,9 @@ async function fakeBackend(withReflect: boolean, calls: ReflectRequest[], reads:
     publish: async () => {
       throw new Error("unused");
     },
+    assetOps: async () => {
+      throw new Error("unused");
+    },
     close: async () => {},
   };
 }

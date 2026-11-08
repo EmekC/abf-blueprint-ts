@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AbfcError } from "@abfc/env";
-import { BpApplyBackend, McpStdioClient, publishResultFrom } from "../src/index.js";
+import { BpApplyBackend, McpStdioClient, grantPublish, publishResultFrom } from "../src/index.js";
 
 const FIXTURE = fileURLToPath(new URL("../../test/fixtures/fake-bpapply-server.mjs", import.meta.url));
 
@@ -254,6 +254,46 @@ test("reflect reads the result file (BOM tolerated) and maps the filter", async 
       cast_targets: ["/Script/Fake.Other"],
       timeout_seconds: 900,
     });
+  });
+});
+
+test("reflect asks for gameplay tags only when requested and parses them", async () => {
+  await withBackend({}, async ({ backend, calls }) => {
+    const plain = await backend.reflect({ mod: "TestMod", classes: [], structs: [], castTargets: [] });
+    assert.equal(plain.data.gameplayTags, undefined);
+    assert.equal("gameplay_tags" in (calls()[0]?.args ?? {}), false);
+    const res = await backend.reflect({ mod: "TestMod", classes: [], structs: [], castTargets: [], gameplayTags: true });
+    assert.equal(calls()[1]?.args.gameplay_tags, true);
+    assert.deepEqual(res.data.gameplayTags, { tags: ["ClassManager.EntityDirector.Fake"], sources: { settings: 1 } });
+  });
+});
+
+test("assetOps sends bp_asset_ops and maps the result; a refused op is a result, not an exception", async () => {
+  await withBackend({}, async ({ backend, calls }) => {
+    const ok = await backend.assetOps("TestMod", [{ op: "rename", from: "/TestMod/A", to: "/TestMod/B" }, { op: "recreate", asset: "/TestMod/C" }]);
+    assert.equal(ok.ok, true);
+    assert.deepEqual(ok.results, [{ op: "rename", ok: true }, { op: "recreate", ok: true }]);
+    assert.deepEqual(ok.touched, ["/TestMod/Row"]);
+    assert.equal(ok.error, null);
+    assert.deepEqual(calls()[0]?.args.ops, [{ op: "rename", from: "/TestMod/A", to: "/TestMod/B" }, { op: "recreate", asset: "/TestMod/C" }]);
+    assert.equal(calls()[0]?.args.mod, "TestMod");
+    const bad = await backend.assetOps("TestMod", [{ op: "delete", asset: "/TestMod/Referenced" }]);
+    assert.equal(bad.ok, false);
+    assert.equal(bad.rolledBack, true);
+    assert.ok((bad.error ?? "").includes("referenced by /TestMod/Other"));
+    assert.equal(bad.results[0]?.detail, "referenced by /TestMod/Other");
+  });
+});
+
+test("publish passes delete_removed only when asked and returns the deleted files", async () => {
+  await withBackend({}, async ({ backend, calls }) => {
+    const grant = grantPublish("TestMod");
+    const plain = await backend.publish("TestMod", ["/TestMod/A"], grant);
+    assert.deepEqual(plain.deleted, []);
+    assert.equal("delete_removed" in (calls()[0]?.args ?? {}), false);
+    const del = await backend.publish("TestMod", ["/TestMod/A"], grant, { deleteRemoved: true });
+    assert.equal(calls()[1]?.args.delete_removed, true);
+    assert.deepEqual(del.deleted, ["Content/Old.uasset"]);
   });
 });
 

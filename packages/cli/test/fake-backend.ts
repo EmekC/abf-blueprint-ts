@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { capabilitiesFrom } from "@abfc/backend";
 import type {
+  AssetOp,
+  AssetOpsResult,
   AssetSnapshot,
   AuditReport,
   Backend,
@@ -62,6 +64,8 @@ interface FAsset {
   nodes: FNode[];
   /** Set for a UserDefinedStruct: its members as the apply spec gave them. */
   structFields?: Array<{ name: string; type: string }>;
+  /** Parent class path of a Blueprint (set by `create` and `reparent`); rendered as `ParentClass=` when known. */
+  parent?: string;
 }
 
 interface SpecNode {
@@ -129,7 +133,29 @@ export interface FakeBackendOptions {
   structs?: boolean;
   /** The backend writes class-manager rows (`classManagerRows` capability, backend 2.5.0; default false). */
   classManagerRows?: boolean;
+  /** The backend has `bp_asset_ops` with these operations (backend 2.6.0; default none). `true` = all four. */
+  assetOps?: boolean | string[];
+  /** The backend can delete removed files from the mod on publish (`publishDeletes`; default false). */
+  publishDeletes?: boolean;
+  /** The backend lists/creates gameplay tags (`gameplayTags`; default false). */
+  gameplayTags?: boolean;
+  /** The backend returns `defaults` in reflect function meta (`reflectDefaults`; default false). */
+  reflectDefaults?: boolean;
+  /** The class-manager row may carry `gameplay_tag` (`classManagerRowTag`; needs `classManagerRows`; default false). */
+  classManagerRowTag?: boolean;
 }
+
+const ALL_ASSET_OPS = ["rename", "delete", "reparent", "recreate"];
+
+/** Family of a parent class path, like the backend's reparent check (Actor / ActorComponent / UserWidget / other object). */
+export function parentFamily(parent: string): "actor" | "component" | "widget" | "object" {
+  if (/\.(ActorComponent|SceneComponent|PrimitiveComponent|StaticMeshComponent)$/.test(parent)) return "component";
+  if (/\.UserWidget$/.test(parent)) return "widget";
+  if (/\.(Actor|Pawn|Character|Info|GameModeBase|GameMode|PlayerController)$/.test(parent)) return "actor";
+  return "object";
+}
+
+const fileOfAsset = (path: string): string => `Content/${path.split("/").slice(2).join("/")}.uasset`;
 
 /** Name of the unlinked node that `spareNode` adds. */
 export const SPARE_NODE = "K2Node_CallFunction_77";
@@ -239,6 +265,7 @@ function renderAsset(a: FAsset): string {
     }
     out.push("   End Object");
   }
+  if (a.parent !== undefined) out.push(`   ParentClass=/Script/CoreUObject.Class'${a.parent}'`);
   out.push("End Object", "");
   return out.join("\n");
 }
@@ -347,6 +374,7 @@ export class FakeBackend implements Backend {
     route: "file-copy",
     compileErrors: [],
     conflicts: [],
+    deleted: [],
     restored: null,
     editor: "closed",
     editorReason: null,
@@ -359,7 +387,13 @@ export class FakeBackend implements Backend {
     raw: {},
   };
   /** The arguments of every `publish` call (the `bp_publish` calls also appear in `calls`). */
-  readonly publishCalls: Array<{ mod: string; assets: string[]; grant: PublishGrant }> = [];
+  readonly publishCalls: Array<{ mod: string; assets: string[]; grant: PublishGrant; deleteRemoved?: boolean }> = [];
+  /** Every `bp_asset_ops` call (the ops as sent), in order. */
+  readonly assetOpsCalls: AssetOp[][] = [];
+  /** The next `bp_asset_ops` call fails as a whole (nothing changes) with this error; cleared after use. */
+  assetOpsError: string | null = null;
+  /** Files of the stage that are gone from it but still in the mod (deleted or renamed-away assets); `staging_status` lists them as `removed`. A resync forgets them. */
+  readonly removedFiles = new Set<string>();
   /** The raw JSON of the audit result. */
   auditRaw: unknown = { audited_copy: "stage" };
   /** Pretend the server runs a warm session: read, apply and compile results say `warm: true` (`lastWarm`). */
@@ -393,6 +427,11 @@ export class FakeBackend implements Backend {
     capabilities.selfEventCalls = o.selfEventCalls !== false || o.advertiseSelfEventCalls === true;
     capabilities.eventMeta = o.eventMeta === true;
     capabilities.classManagerRows = o.classManagerRows === true;
+    capabilities.assetOps = o.assetOps === true ? [...ALL_ASSET_OPS] : Array.isArray(o.assetOps) ? [...o.assetOps] : [];
+    capabilities.publishDeletes = o.publishDeletes === true;
+    capabilities.gameplayTags = o.gameplayTags === true;
+    capabilities.reflectDefaults = o.reflectDefaults === true;
+    capabilities.classManagerRowTag = o.classManagerRowTag === true && o.classManagerRows === true;
     if (o.structs === true) capabilities.createKinds = [...capabilities.createKinds, "UserDefinedStruct"];
     if (o.structs === true) capabilities.createKinds = [...capabilities.createKinds, "UserDefinedStruct"];
     this.infoValue = {
@@ -483,6 +522,7 @@ export class FakeBackend implements Backend {
             ]);
       this.changed.clear();
       this.rowClasses.clear();
+      this.removedFiles.clear();
     }
     this.staged = true;
     this.syncs++;
@@ -499,7 +539,7 @@ export class FakeBackend implements Backend {
       syncedAt: `sync-${this.syncs}`,
       changed: this.hideChanged ? [] : [...this.changed, ...this.extraChanged],
       added: ["Content/_McpTmp/Scratch.uasset"],
-      removed: [],
+      removed: [...this.removedFiles],
       conflicts: [],
     };
   }
@@ -538,7 +578,9 @@ export class FakeBackend implements Backend {
     }
 
     (specs as Spec[]).forEach((spec, i) => {
-      if (!work.has(spec.asset) && spec.create !== undefined) work.set(spec.asset, { path: spec.asset, variables: [], nodes: [] });
+      if (!work.has(spec.asset) && spec.create !== undefined) {
+        work.set(spec.asset, { path: spec.asset, variables: [], nodes: [], ...(spec.create.parent ? { parent: spec.create.parent } : {}) });
+      }
       if (spec.create?.class === "UserDefinedStruct") {
         const st = work.get(spec.asset)!;
         st.structFields = (spec.struct_fields ?? []).map((f) => ({ name: f.name, type: f.type }));
@@ -683,12 +725,89 @@ export class FakeBackend implements Backend {
     return { ok: this.auditOk, raw: this.auditRaw, seconds: 0.2 };
   }
 
-  async publish(mod: string, assets: string[], grant: PublishGrant): Promise<PublishResult> {
+  async publish(mod: string, assets: string[], grant: PublishGrant, o?: { deleteRemoved?: boolean }): Promise<PublishResult> {
     this.calls.push({ tool: "bp_publish" });
-    this.publishCalls.push({ mod, assets, grant });
+    this.publishCalls.push({ mod, assets, grant, ...(o?.deleteRemoved === undefined ? {} : { deleteRemoved: o.deleteRemoved }) });
     this.lastWarm = false;
     if (this.publishResult.ok) this.changed.clear(); // what was published no longer differs from the mod
+    if (this.publishResult.ok && o?.deleteRemoved === true) {
+      // deletes the removed files of the requested assets (like the real backend), and forgets them
+      const wanted = new Set(assets.map((a) => fileOfAsset(a)));
+      const deleted = [...this.removedFiles].filter((f) => wanted.has(f));
+      for (const d of deleted) this.removedFiles.delete(d);
+      return { ...this.publishResult, deleted: [...this.publishResult.deleted, ...deleted] };
+    }
     return this.publishResult;
+  }
+
+  /** `bp_asset_ops` on the in-memory stage: all-or-nothing; rename/delete leave the old file in `removedFiles`; a rename fixes up row referencers. */
+  async assetOps(_mod: string, ops: AssetOp[]): Promise<AssetOpsResult> {
+    this.calls.push({ tool: "bp_asset_ops" });
+    this.assetOpsCalls.push(structuredClone(ops));
+    this.lastWarm = false;
+    const failWhole = (error: string, results: AssetOpsResult["results"] = []): AssetOpsResult => ({ ok: false, results, touched: [], error, rolledBack: true });
+    if (this.assetOpsError !== null) {
+      const e = this.assetOpsError;
+      this.assetOpsError = null;
+      return failWhole(e);
+    }
+    const supported = new Set(this.infoValue.capabilities.assetOps);
+    const work = new Map([...this.assets].map(([k, v]) => [k, structuredClone(v)]));
+    const rows = new Map(this.rowClasses);
+    const removed = new Set(this.removedFiles);
+    const touched: string[] = [];
+    const results: AssetOpsResult["results"] = [];
+    for (const op of ops) {
+      const fail = (detail: string): AssetOpsResult => failWhole(`${op.op} failed: ${detail}`, [...results, { op: op.op, ok: false, detail }]);
+      if (!supported.has(op.op)) return fail("operation not supported");
+      if (op.op === "rename") {
+        const a = work.get(op.from);
+        if (a === undefined) return fail(`${op.from} does not exist`);
+        if (work.has(op.to)) return fail(`${op.to} already exists`);
+        work.delete(op.from);
+        work.set(op.to, { ...a, path: op.to });
+        removed.add(fileOfAsset(op.from));
+        removed.delete(fileOfAsset(op.to));
+        const oldName = op.from.slice(op.from.lastIndexOf("/") + 1);
+        const newName = op.to.slice(op.to.lastIndexOf("/") + 1);
+        for (const [row, cls] of rows) {
+          if (cls === `${op.from}.${oldName}_C`) {
+            rows.set(row, `${op.to}.${newName}_C`);
+            touched.push(row);
+          }
+        }
+        results.push({ op: "rename", ok: true });
+      } else if (op.op === "delete") {
+        const had = work.delete(op.asset);
+        if (!rows.delete(op.asset) && !had) return fail(`${op.asset} does not exist`);
+        removed.add(fileOfAsset(op.asset));
+        results.push({ op: "delete", ok: true });
+      } else if (op.op === "reparent") {
+        const a = work.get(op.asset);
+        if (a === undefined) return fail(`${op.asset} does not exist`);
+        if (a.parent !== undefined && parentFamily(a.parent) !== parentFamily(op.parent)) {
+          return fail(`cannot reparent across families (${parentFamily(a.parent)} -> ${parentFamily(op.parent)})`);
+        }
+        a.parent = op.parent;
+        results.push({ op: "reparent", ok: true });
+      } else {
+        // recreate: the stage loses the asset's files; a following apply `create` makes it again
+        if (!work.delete(op.asset)) return fail(`${op.asset} does not exist`);
+        results.push({ op: "recreate", ok: true });
+      }
+    }
+    this.assets = work;
+    this.rowClasses.clear();
+    for (const [k, v] of rows) this.rowClasses.set(k, v);
+    this.removedFiles.clear();
+    for (const r of removed) this.removedFiles.add(r);
+    for (const t of touched) this.changed.add(fileOfAsset(t));
+    for (const op of ops) {
+      if (op.op === "rename") this.changed.add(fileOfAsset(op.to));
+      if (op.op === "reparent") this.changed.add(fileOfAsset(op.asset));
+    }
+    this.mirrorFiles();
+    return { ok: true, results, touched, error: null };
   }
 
   async close(): Promise<void> {

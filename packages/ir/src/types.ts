@@ -107,6 +107,16 @@ export interface BackendCapabilities {
   eventMeta: boolean;
   /** `backend_info.capabilities.classManagerRows` (backend 2.5.0) AND bp_apply feature `class_manager_row`: the defaults spec may carry `class_manager_row`. */
   classManagerRows: boolean;
+  /** `backend_info.capabilities.assetOps` (backend 2.6.0) AND the `bp_asset_ops` tool: the operations it supports (`rename`, `delete`, `reparent`, `recreate`); empty when absent. */
+  assetOps: string[];
+  /** `backend_info.capabilities.publishDeletes` (backend 2.6.0) AND `bp_publish`: `delete_removed` deletes removed files from the mod. */
+  publishDeletes: boolean;
+  /** `backend_info.capabilities.gameplayTags` (backend 2.6.0): reflect can list gameplay tags and the tag ini is managed. */
+  gameplayTags: boolean;
+  /** `backend_info.capabilities.reflectDefaults` (backend 2.6.0): reflect function meta carries `defaults`. */
+  reflectDefaults: boolean;
+  /** `classManagerRows` AND bp_apply feature `class_manager_row_tag` (backend 2.6.0): `class_manager_row` may carry `gameplay_tag`. */
+  classManagerRowTag: boolean;
   bpApplyFeatures: string[];
   nodeKinds: string[];
   /** `mod_audit` can audit the stage (false in Phase 1: it audits the real mod). */

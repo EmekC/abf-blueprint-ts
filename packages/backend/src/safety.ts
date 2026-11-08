@@ -12,6 +12,7 @@ export const ALLOWED_TOOLS = [
   "staging_sync",
   "staging_status",
   "bp_apply",
+  "bp_asset_ops",
   "bp_read",
   "bp_compile_report",
   "bp_game_test",
