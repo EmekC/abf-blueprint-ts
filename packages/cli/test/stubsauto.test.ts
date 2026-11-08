@@ -9,7 +9,7 @@ import { catalogFromBackend, newLock, writeCatalog, writeLock } from "@abfc/stub
 import type { AutoStubs, Catalog } from "@abfc/stubgen";
 import type { StubImport } from "@abfc/compiler";
 import type { CliContext } from "../src/context.js";
-import { resolveStubRequest, stubsNeedWork } from "../src/stubsauto.js";
+import { backendIdOf, resolveStubRequest, stubsNeedWork, usedPlaceholdersToGenerate } from "../src/stubsauto.js";
 import type { StubRequestInput } from "../src/stubsauto.js";
 
 const FAKE = "/Game/Fake/BP_Fake.BP_Fake_C";
@@ -54,6 +54,7 @@ const base = (o: Partial<StubRequestInput> = {}): StubRequestInput => ({
   added: [],
   adds: [],
   failed: [],
+  used: [],
   full: false,
   ...o,
 });
@@ -242,5 +243,59 @@ test("stubsNeedWork: no fingerprint (an editor that cannot be fingerprinted) ski
     writeCatalog(p.profileDir, { ...catalog, editorFingerprint: "something else" });
     writeCoverage(p, [...p.ctx.env.profile.initScriptClasses]);
     assert.equal(stubsNeedWork(p.ctx), null);
+  });
+});
+
+// ---- used placeholders ----
+
+test("used placeholders are wanted, missing and kept in added; a failed one is neither wanted nor added; an unknown one is ignored", () => {
+  const r = resolveStubRequest(base({ used: [OTHER_NATIVE] }));
+  assert.deepEqual(r.want.classes, [DEFAULT, OTHER_NATIVE]);
+  assert.ok(r.missing.classes.includes(OTHER_NATIVE));
+  assert.deepEqual(r.added, [OTHER_NATIVE]);
+
+  const failed = resolveStubRequest(base({ used: [OTHER_NATIVE], failed: [OTHER_NATIVE] }));
+  assert.ok(!failed.want.classes.includes(OTHER_NATIVE));
+  assert.deepEqual(failed.added, []);
+
+  const unknown = resolveStubRequest(base({ used: ["/Script/FakeEngine.Nope"] }));
+  assert.deepEqual(unknown.want.classes, [DEFAULT]);
+  assert.deepEqual(unknown.added, []);
+});
+
+test("usedPlaceholdersToGenerate: drops failed, reflected and unknown paths", () => {
+  withTmp((tmp) => {
+    const p = project(tmp);
+    writeCatalog(p.profileDir, { ...catalog, editorFingerprint: FP });
+    writeLockFor(p, { auto: { ...AUTO, failed: [THING] } });
+    writeCoverage(p, [DEFAULT]);
+    const used = [OTHER_NATIVE, THING, DEFAULT, "/Script/FakeEngine.Nope", VEC, OTHER_NATIVE];
+    assert.deepEqual(usedPlaceholdersToGenerate(p.ctx, used), [VEC, OTHER_NATIVE]);
+    assert.deepEqual(usedPlaceholdersToGenerate(p.ctx, []), []);
+  });
+});
+
+test("usedPlaceholdersToGenerate: nothing without auto, with noCatalog for this backend, without coverage or with a stale catalog", () => {
+  withTmp((tmp) => {
+    const p = project(tmp);
+    writeCatalog(p.profileDir, { ...catalog, editorFingerprint: FP });
+    writeCoverage(p, [DEFAULT]);
+
+    writeLockFor(p, { auto: null });
+    assert.deepEqual(usedPlaceholdersToGenerate(p.ctx, [OTHER_NATIVE]), [], "no auto section yet");
+
+    const ctx = { ...p.ctx, env: { ...p.ctx.env, backendDir: { value: null } } } as unknown as CliContext;
+    writeLockFor(p, { auto: { ...AUTO, noCatalog: backendIdOf(ctx.env) } });
+    assert.deepEqual(usedPlaceholdersToGenerate(ctx, [OTHER_NATIVE]), [], "this backend has no catalog tool");
+
+    writeLockFor(p);
+    assert.deepEqual(usedPlaceholdersToGenerate(p.ctx, [OTHER_NATIVE]), [OTHER_NATIVE]);
+
+    writeCatalog(p.profileDir, { ...catalog, editorFingerprint: "other" });
+    assert.deepEqual(usedPlaceholdersToGenerate(p.ctx, [OTHER_NATIVE]), [], "a catalog of another editor build does not count");
+
+    rmSync(join(p.profileDir, "_coverage.json"));
+    writeCatalog(p.profileDir, { ...catalog, editorFingerprint: FP });
+    assert.deepEqual(usedPlaceholdersToGenerate(p.ctx, [OTHER_NATIVE]), [], "no coverage file");
   });
 });

@@ -1,7 +1,7 @@
 // Quick fixes, built from the server's own diagnostics for the requested range.
 import { CodeActionKind } from "vscode-languageserver/node.js";
 import type { CodeAction, Range } from "vscode-languageserver/node.js";
-import { addDirectorTagFix, directorFix, idivFix, keepPathFix, modImportFix, optionalChainFix, relativePathFix, removePathFix, stubImportAt, useOverrideFix } from "@abfc/compiler";
+import { addDirectorTagFix, directorFix, idivFix, keepPathFix, modImportFix, optionalChainFix, placeholderReceiverAt, relativePathFix, removePathFix, stubImportAt, useOverrideFix } from "@abfc/compiler";
 import type { CompilerProjectConfig, TextEdit, TsSourceFile } from "@abfc/compiler";
 import type { Diagnostic } from "@abfc/ir";
 import { offsetRange, spanOffsets, toLspDiagnostic } from "./convert.js";
@@ -14,6 +14,9 @@ const TS_NULL = /^\[TS(2531|2532|18047|18048|18049)\]/;
 
 /** TypeScript's "module / exported member not found" errors, which a missing stub causes. */
 const TS_STUB_MISSING = /^\[TS(2305|2307|2614|2724)\]/;
+
+/** TypeScript's "property does not exist" errors, which a member of a placeholder type (no members generated yet) causes. */
+const TS_MEMBER_MISSING = /^\[TS(2339|2551)\]/;
 
 /** What the "Generate stubs" quick fix needs besides the editor: the CLI is known and where the project lives. */
 export interface ActionOptions {
@@ -109,7 +112,9 @@ export function codeActionsFor(
   }
   if (opts.canGenerate) {
     for (const d of state.tsDiagnosticsOf(snap, sf)) {
-      if (d.span === undefined || !TS_STUB_MISSING.test(d.message)) continue;
+      if (d.span === undefined) continue;
+      const stubMissing = TS_STUB_MISSING.test(d.message);
+      if (!stubMissing && !TS_MEMBER_MISSING.test(d.message)) continue;
       let offsets: { start: number; end: number };
       try {
         offsets = spanOffsets(sf, d.span);
@@ -117,6 +122,21 @@ export function codeActionsFor(
         continue;
       }
       if (offsets.start > rangeEnd || rangeStart > offsets.end) continue;
+      if (!stubMissing) {
+        // A member of a placeholder type (@bpOpaque, no members yet): generating the class gives it its members.
+        const ph = placeholderReceiverAt(snap.loaded.checker, sf, offsets.start, offsets.end);
+        if (ph === undefined) continue;
+        const title = `Generate stubs for ${ph.name}`;
+        if (seen.has(title)) continue;
+        seen.add(title);
+        out.push({
+          title,
+          kind: CodeActionKind.QuickFix,
+          diagnostics: [toLspDiagnostic(d)],
+          command: { title, command: GENERATE_STUBS_COMMAND, arguments: [{ projectDir: opts.projectDir, add: [ph.path] }] },
+        });
+        continue;
+      }
       const imp = stubImportAt(sf, offsets.start, offsets.end);
       if (imp === undefined) continue;
       const isScript = imp.specifier.startsWith("/Script/");

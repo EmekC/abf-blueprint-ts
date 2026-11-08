@@ -9,6 +9,7 @@ import { DiagSink, Fail, relFile, spanOf } from "./diag.js";
 import type { LoadedProgram } from "./program.js";
 import { BLUEPRINT_META, WIDGET_META, bpPathOf, bpTagsOfSymbol, bpTypeOf, bpTypeOfMember, classInfo, classPathOf, functionInfo, ownEventInfo, resolveAlias, splitMemberPath, tsStructMemberName } from "./tags.js";
 import { udsMemberName } from "./structnames.js";
+import { placeholdersOfType } from "./opaqueuse.js";
 import type { FunctionInfo } from "./tags.js";
 
 export { classPathOf } from "./tags.js";
@@ -1755,7 +1756,13 @@ class HirBuilder {
 
     const path = memberSym ? bpPathOf(memberSym) : undefined;
     const mp = path === undefined ? undefined : splitMemberPath(path);
-    if (!memberSym || !mp) return f.fail("ABFC2060", `member ${name} has no Blueprint metadata (@bpPath)`, node.name);
+    if (!memberSym || !mp) {
+      const ph = placeholdersOfType(this.checker, this.checker.getTypeAtLocation(recv))[0];
+      if (ph !== undefined) {
+        return f.fail("ABFC2060", `member ${name} has no Blueprint metadata (@bpPath): ${ph.name} is a placeholder without members; "abfc generate" (or the next "abfc build") generates it because the source uses it`, node.name);
+      }
+      return f.fail("ABFC2060", `member ${name} has no Blueprint metadata (@bpPath)`, node.name);
+    }
     const type = bpTypeOfMember(memberSym) ?? bpTypeOf(this.checker, this.checker.getTypeAtLocation(node));
     if (type === undefined) return f.fail("ABFC2099", `${name} is not a Blueprint variable`, node.name);
     return { k: "getOn", obj, owner: mp.owner, name: mp.name, type, span: sp };
@@ -1781,7 +1788,7 @@ class HirBuilder {
         const value = this.expr(arg0);
         const ci = this.classArg(node.arguments[1]);
         if (!ci) return f.fail("ABFC2060", "the cast target has no Blueprint metadata (@bpPath)", node.arguments[1] ?? node);
-        if (ci.castPin === null) return f.fail("ABFC3004", `no cast pin known for ${ci.path}; run "abfc generate"`, node);
+        if (ci.castPin === null) return f.fail("ABFC3004", `no cast pin known for ${ci.path}; run "abfc generate" (it generates the classes the source uses) or "abfc generate --add ${ci.path}" to retry it`, node);
         this.classMeta[ci.path] = ci.meta;
         return { k: "cast", value, target: ci.path, castPin: ci.castPin, type: `object:${ci.path}`, span: sp };
       }
@@ -1840,7 +1847,13 @@ class HirBuilder {
 
     const sym = this.checker.getSymbolAtLocation(callee.name);
     const fi = sym ? (functionInfo(sym) ?? ownEventInfo(this.checker, sym)) : undefined;
-    if (!fi) return f.fail("ABFC2060", `function ${callee.name.text} has no Blueprint metadata (@bpPath)`, callee.name);
+    if (!fi) {
+      const ph = placeholdersOfType(this.checker, this.checker.getTypeAtLocation(callee.expression))[0];
+      if (ph !== undefined) {
+        return f.fail("ABFC2060", `function ${callee.name.text} has no Blueprint metadata (@bpPath): ${ph.name} is a placeholder without members; "abfc generate" (or the next "abfc build") generates it because the source uses it`, callee.name);
+      }
+      return f.fail("ABFC2060", `function ${callee.name.text} has no Blueprint metadata (@bpPath)`, callee.name);
+    }
     if (this.unitKind === "function" && fi.latent) {
       f.fail(
         "ABFC2086",
