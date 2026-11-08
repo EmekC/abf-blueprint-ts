@@ -342,6 +342,36 @@ test("(S13) unsaved-changes refusal then conflict re-sync publishes", async () =
   });
 });
 
+test("(S16) Play In Editor running: publish is refused with a clear message, after stopping it publishes", async () => {
+  await withRig({ ...OPS }, async (r) => {
+    tallyOnly(r.dir, tally("BP_Tally"));
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+
+    const ok = r.backend.publishResult;
+    r.backend.publishResult = {
+      ...ok,
+      ok: false,
+      published: [],
+      refused: "editor refused",
+      editorReason: "Play In Editor is running",
+      message: "Refused by the open editor: /TestMod/BP_Tally (Play In Editor is running). Stop Play In Editor, then publish again. Nothing was copied.",
+    };
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 3, x.out);
+    assert.match(x.out, /error ABFC7005/);
+    assert.match(x.out, /Stop Play In Editor/);
+    assert.match(x.out, /fix: stop Play In Editor in the Mod Editor/);
+
+    r.backend.publishResult = ok;
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /nothing to publish/);
+  });
+});
+
 test("(S14) a field whose variable the Mod Editor retyped (renamed class) is recreated with the TS type", async () => {
   await withRig({ ...OPS }, async (r) => {
     tallyOnly(r.dir, tally("BP_Tally"));
