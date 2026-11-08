@@ -1841,6 +1841,7 @@ test("(tag1) @director with a tag and classManagerRowTag: the spec carries gamep
     assert.match(x.out, new RegExp(`gameplay tag ${DIRECTOR_TAG.replaceAll(".", "\\.")}: added to the mod's tag list \\(published with abfc publish\\)`));
     assert.doesNotMatch(x.out, /ABFC2079|ABFC2080|ABFC2081|ABFC2082/);
     assert.equal(r.backend.tagIni.has(DIRECTOR_TAG), true);
+    assert.match(readFileSync(join(r.dir, ".abfc", "tags.d.ts"), "utf8"), /"ClassManager\.EntityDirector\.Test": true/);
 
     x = await r.run(["build"]);
     assert.match(x.out, /up to date/);
@@ -1851,6 +1852,9 @@ test("(tag1) @director with a tag and classManagerRowTag: the spec carries gamep
     assert.equal(x.code, 0, x.out);
     assert.doesNotMatch(x.out, /up to date/);
     assert.match(x.out, /gameplay tag ClassManager\.EntityDirector\.Other: added to the mod's tag list/);
+    const tagsDts = readFileSync(join(r.dir, ".abfc", "tags.d.ts"), "utf8");
+    assert.match(tagsDts, /"ClassManager\.EntityDirector\.Other": true/);
+    assert.match(tagsDts, /"ClassManager\.EntityDirector\.Test": true/, "the earlier stage-only tag stays");
     assert.equal(r.backend.calls.filter((c) => c.tool === "bp_apply" && c.label === "defaults").length, 2);
   });
 });

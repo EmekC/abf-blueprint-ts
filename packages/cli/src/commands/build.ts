@@ -35,6 +35,7 @@ import {
   readAsset,
   since,
 } from "./common.js";
+import { refreshTagsFile } from "../tags.js";
 import { ensureStage } from "./stage.js";
 
 /** True for an @event whose doc comment is its tooltip: the backend only writes it with the bp_apply feature `event_meta`. */
@@ -336,6 +337,8 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   // Gameplay tags the defaults pass added to the stage's tag list (backend 2.6.0); they reach the mod with `abfc publish`.
   const tagsAdded = applied.tagsAdded ?? [];
   for (const t of tagsAdded) output.info(`gameplay tag ${t}: added to the mod's tag list (published with abfc publish)`);
+  // The constants of .abfc/tags.d.ts follow: the stored game list, the mod's own ini, and the tags that live only in the stage until publish.
+  if (tagsAdded.length > 0) refreshTagsFile(ctx, tagsAdded);
   for (let i = 0; i < planned.plan.assets.length; i++) {
     const a = planned.plan.assets[i]!;
     const outcome = applied.perAsset[i]!;

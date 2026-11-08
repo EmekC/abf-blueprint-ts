@@ -829,6 +829,16 @@ Typical cause: the widget class is missing from `stubs.scriptClasses`.
 
 Fix: add the class named in the message to `stubs.scriptClasses` and run `abfc stubs`.
 
+### ABFC3012
+
+Severity: warning · Exit: -
+
+Meaning: the backend cannot list the game's gameplay tags, so `abfc stubs` could not store them. `.abfc/tags.d.ts` (the typed tag constants and the tag names the `director` decorator suggests) then holds only the tags of the mod's own `Config/Tags` files.
+
+Typical cause: abf-mod-editor-mcp older than 2.6.0.
+
+Fix: update abf-mod-editor-mcp to 2.6.0 or newer (or use the bundled backend of `abfc.exe`) and run `abfc stubs` again. Until then a tag can still be written as a string literal.
+
 ## 4xxx backend
 
 The backend is the part of abfc that talks to the Mod Editor (the bundled one in `abfc.exe`, or an abf-mod-editor-mcp checkout in a source install). See [backend.md](backend.md). Except ABFC4090, these codes exit with 2.
