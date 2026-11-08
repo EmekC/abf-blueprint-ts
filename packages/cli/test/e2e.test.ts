@@ -1825,6 +1825,29 @@ test("(A8-2) a hand-made event, variable and function graph on a non-hybrid asse
   });
 });
 
+test("(R1) components, the widget tree and timeline templates in the stage export are not graphs: the sweep never lists them, only the hand-made event goes", async () => {
+  await withRig({}, async (r) => {
+    rmSync(join(r.dir, "src", "Relay.ts"));
+    rmSync(join(r.dir, "src", "Relay.test.ts"));
+    writeFileSync(join(r.dir, "src", "Tally.ts"), TALLY, "utf8");
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    r.backend.addNonGraphParts(TALLY_ASSET);
+    const handNodes = r.backend.addHandMadeEvent(TALLY_ASSET, "MyOwnEvent");
+    const before = appliedSpecs(r).length;
+    x = await r.run(["build", "--drift"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC5014/);
+    assert.doesNotMatch(x.out, /SCS_Node_0|NameText|CurveFloat_0|SimpleConstructionScript|WidgetTree|Fade_Template/);
+    const specs = appliedSpecs(r).slice(before).filter((s: any) => s.asset === TALLY_ASSET);
+    const touched = specs.flatMap((s: any) => (s.graphs ?? []).map((g: any) => g.name ?? g.graph));
+    for (const g of ["SimpleConstructionScript", "WidgetTree", "Fade_Template"]) assert.ok(!touched.includes(g), `${g} is not a graph`);
+    const removed = specs.flatMap((s: any) => (s.graphs ?? []).flatMap((g: any) => g.remove ?? []));
+    for (const n of handNodes) assert.ok(removed.includes(n), `${n} removed`);
+    for (const n of ["SCS_Node_0", "NameText", "CurveFloat_0"]) assert.ok(!removed.includes(n), `${n} kept`);
+  });
+});
+
 test("(A8-4) a hybrid class (the _Manual merge) keeps its hand-made variable, function graph and events", async () => {
   await withRig({}, async (r) => {
     let x = await r.run(["build"]);

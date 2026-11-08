@@ -91,6 +91,15 @@ function isIntermediate(n: T3dNode): boolean {
   return n.head.includes("bIsIntermediateNode=True");
 }
 
+/**
+ * Is this a node of an EdGraph page (a K2 node or a comment box)? The parser files every second-level subobject of the export under a "graph",
+ * so the SimpleConstructionScript (SCS_Node components), the WidgetTree (designer widgets) and timeline templates (curves) look like graphs too;
+ * they are not, and the backend cannot address them as graphs. Only nodes of this kind are ever swept.
+ */
+function isGraphContent(n: T3dNode): boolean {
+  return n.cls.includes("/Script/BlueprintGraph.") || n.cls.endsWith("EdGraphNode_Comment");
+}
+
 /** Does the asset's class defaults pass need to run (hash or stage changed)? */
 function defaultsStale(asset: IrModule["assets"][number], manifest: Manifest | null, stage: StageInfo, directorRows = false): boolean {
   // The `@director` is gone but the manifest still records its row: the pass runs once more so the build can clear the record.
@@ -412,7 +421,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
       const functionGraphs = new Map<string, T3dNode>(); // graph -> its K2Node_FunctionEntry
       const macroGraphs = new Set<string>();
       for (const n of snapshot.values()) {
-        if (n.graph === null) continue;
+        if (n.graph === null || !isGraphContent(n)) continue;
         if (n.cls.endsWith("K2Node_FunctionEntry")) functionGraphs.set(n.graph, n);
         else if (n.cls.endsWith("K2Node_Tunnel")) macroGraphs.add(n.graph);
       }
@@ -427,7 +436,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
       }
       const byGraph = new Map<string, string[]>();
       for (const n of snapshot.values()) {
-        if (n.graph === null || macroGraphs.has(n.graph) && !functionGraphs.has(n.graph) || dropGraphs.has(n.graph)) continue;
+        if (n.graph === null || !isGraphContent(n) || macroGraphs.has(n.graph) && !functionGraphs.has(n.graph) || dropGraphs.has(n.graph)) continue;
         if (gone.has(n.name) || owned.has(n.name)) continue;
         if (n.cls.endsWith("K2Node_FunctionEntry") || n.cls.endsWith("K2Node_FunctionResult") || isIntermediate(n)) continue;
         if (n.cls.endsWith("K2Node_Event") && n.head.includes("EnabledState=Disabled")) continue;

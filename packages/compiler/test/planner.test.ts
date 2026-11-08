@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { structFieldsHash, unitStateHash } from "@abfc/ir";
+import { parseExport, structFieldsHash, unitStateHash } from "@abfc/ir";
 import type { IrModule, IrUnit, Profile, T3dNode } from "@abfc/ir";
 import { assetsNeedingRead, buildHir, loadProgram, lower, planBuild } from "../src/index.js";
 import type { Manifest, ManifestUnit } from "../src/index.js";
@@ -821,4 +821,51 @@ test("a unit the manifest lost (pruned) that is applied again also removes the t
   const snapshot = snapshotOf(node("N1", CALL, []), tagNode("CMT_old", unit.id, "92f777f3"));
   const r = planBuild(ir, { manifests: new Map(), snapshots: new Map([[asset, snapshot]]), stage, handMadeUnits: new Map() });
   assert.ok(r.plan.assets[0]!.units[0]!.removeNodes.includes("CMT_old"));
+});
+
+test("TS wins, non-hybrid: components (SimpleConstructionScript), designer widgets (WidgetTree) and timeline curves are not graph nodes and are never swept", () => {
+  const t3d = [
+    `Begin Object Class=/Script/Engine.Blueprint Name="BP_X" ExportPath="/Script/Engine.Blueprint'${asset}.BP_X'"`,
+    `   Begin Object Class=/Script/Engine.SimpleConstructionScript Name="SimpleConstructionScript" ExportPath="x"`,
+    `      Begin Object Class=/Script/Engine.SCS_Node Name="SCS_Node_0" ExportPath="x"`,
+    `      End Object`,
+    `   End Object`,
+    `   Begin Object Class=/Script/UMG.WidgetTree Name="WidgetTree" ExportPath="x"`,
+    `      Begin Object Class=/Script/UMG.TextBlock Name="NameText" ExportPath="x"`,
+    `      End Object`,
+    `   End Object`,
+    `   Begin Object Class=/Script/Engine.TimelineTemplate Name="Fade_Template" ExportPath="x"`,
+    `      Begin Object Class=/Script/Engine.CurveFloat Name="CurveFloat_0" ExportPath="x"`,
+    `      End Object`,
+    `   End Object`,
+    `   Begin Object Class=/Script/Engine.EdGraph Name="EventGraph" ExportPath="x"`,
+    `   End Object`,
+    `   ParentClass="/Script/CoreUObject.Class'/Script/Engine.Actor'"`,
+    `End Object`,
+  ].join("\n");
+  const parsed = parseExport(t3d);
+  assert.deepEqual([...parsed.nodes.values()].map((n) => n.graph).sort(), ["Fade_Template", "SimpleConstructionScript", "WidgetTree"]);
+  const snapshot = new Map(parsed.nodes);
+  const hand = node("HAND_1", CALL, []);
+  const r = planBuild(ir, {
+    manifests: new Map([[asset, manifestOf()]]),
+    snapshots: new Map([[asset, new Map([...snapshot, [hand.name, hand]])]]),
+    stage,
+    handMadeUnits: new Map(),
+    snapshotVariables: new Map([[asset, []]]),
+    snapshotVariableTypes: new Map([[asset, new Map()]]),
+  });
+  const a = r.plan.assets[0]!;
+  assert.deepEqual(a.removeGraphNodes, [{ graph: "EventGraph", nodes: ["HAND_1"] }]); // only the real graph node goes
+  assert.equal(a.removeFunctions, undefined);
+  const only = planBuild(ir, {
+    manifests: new Map([[asset, manifestOf()]]),
+    snapshots: new Map([[asset, snapshot]]),
+    stage,
+    handMadeUnits: new Map(),
+    snapshotVariables: new Map([[asset, []]]),
+    snapshotVariableTypes: new Map([[asset, new Map()]]),
+  });
+  assert.equal(only.plan.assets[0]?.removeGraphNodes, undefined);
+  assert.ok(only.diagnostics.every((d) => !/SCS_Node_0|NameText|CurveFloat_0|SimpleConstructionScript|WidgetTree|Fade_Template/.test(d.message)));
 });

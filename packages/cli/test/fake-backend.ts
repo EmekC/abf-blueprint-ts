@@ -66,6 +66,8 @@ interface FAsset {
   structFields?: Array<{ name: string; type: string }>;
   /** Parent class path of a Blueprint (set by `create` and `reparent`); rendered as `ParentClass=` when known. */
   parent?: string;
+  /** Second-level subobjects that are not EdGraphs (components, widget tree, timeline templates), rendered verbatim after the graphs. */
+  extraBlocks?: string[];
 }
 
 interface SpecNode {
@@ -267,6 +269,7 @@ function renderAsset(a: FAsset): string {
     }
     out.push("   End Object");
   }
+  for (const block of a.extraBlocks ?? []) out.push(block);
   if (a.parent !== undefined) out.push(`   ParentClass=/Script/CoreUObject.Class'${a.parent}'`);
   out.push("End Object", "");
   return out.join("\n");
@@ -495,6 +498,23 @@ export class FakeBackend implements Backend {
     const a = this.assets.get(asset);
     if (a === undefined) throw new Error(`fake stage: no asset ${asset}`);
     a.variables.push({ name, type });
+  }
+
+  /** Adds the second-level subobjects a real export has next to the graphs: a component tree, a widget tree and a timeline template (none of them graph nodes). */
+  addNonGraphParts(asset: string): void {
+    const a = this.assets.get(asset);
+    if (a === undefined) throw new Error(`fake stage: no asset ${asset}`);
+    const block = (cls: string, name: string, childCls: string, child: string): string[] => [
+      `   Begin Object Class=${cls} Name="${name}" ExportPath="x"`,
+      `      Begin Object Class=${childCls} Name="${child}" ExportPath="x"`,
+      "      End Object",
+      "   End Object",
+    ];
+    a.extraBlocks = [
+      ...block("/Script/Engine.SimpleConstructionScript", "SimpleConstructionScript", "/Script/Engine.SCS_Node", "SCS_Node_0"),
+      ...block("/Script/UMG.WidgetTree", "WidgetTree", "/Script/UMG.TextBlock", "NameText"),
+      ...block("/Script/Engine.TimelineTemplate", "Fade_Template", "/Script/Engine.CurveFloat", "CurveFloat_0"),
+    ];
   }
 
   /** Adds a function graph by hand: a function entry node in a graph of that name. */
