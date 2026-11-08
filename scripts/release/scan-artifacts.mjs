@@ -127,7 +127,8 @@ for (const kind of scanned) {
 }
 
 const { failing, excepted, unused } = applyExceptions(hits, exceptions);
-const line = (prefix, h) => `${prefix} ${h.rule} ${h.artifact} > ${h.entry}: ${h.detail} [context ${h.context.slice(0, 12)}]`;
+const line = (prefix, h) =>
+  `${prefix} ${h.rule} ${h.artifact} > ${h.entry}: ${h.detail} [context ${h.context.slice(0, 12)}${h.printable === undefined ? "" : `, ${h.printable.n}/${h.printable.of} printable`}]`;
 for (const h of failing) console.log(line("HIT", h));
 for (const h of excepted) console.log(line("EXCEPTED", h));
 for (const e of unused) {
