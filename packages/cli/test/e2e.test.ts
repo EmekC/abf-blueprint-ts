@@ -959,6 +959,22 @@ test("(h3) a backend without std_macro: ABFC2088 once, the loops are built with 
   });
 });
 
+test("(h4) a build with std_macro after one without replaces the manual loop with the macro and removes the counter variable", async () => {
+  await withRig({ backendInfo: true, handMadeEvent: false, stdMacros: false }, async (r) => {
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC2088/);
+    assert.equal(r.backend.nodeNames(RELAY_ASSET).filter((n) => n.startsWith("K2Node_MacroInstance")).length, 0);
+    assert.ok(r.backend.variableNames(RELAY_ASSET).some((v) => v.startsWith("abfc_UpdateTarget_i")));
+    r.backend.setStdMacros(true);
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC2088/);
+    assert.equal(r.backend.nodeNames(RELAY_ASSET).filter((n) => n.startsWith("K2Node_MacroInstance")).length, 1);
+    assert.equal(r.backend.variableNames(RELAY_ASSET).filter((v) => /^abfc_.+_i\d+$/.test(v)).length, 0, "the orphaned counter variable is removed");
+  });
+});
+
 test("adopt --remove-node: an unknown node is ABFC5008, an override that is not in the graph is ABFC5002; nothing is written", async () => {
   await withRig({}, async (r) => {
     let x = await r.run(["adopt", RELAY_ASSET, "UpdateTarget", "--remove-node", "NoSuchNode", "--yes"]);

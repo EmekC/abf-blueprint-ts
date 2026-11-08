@@ -483,6 +483,11 @@ export class FakeBackend implements Backend {
     this.infoValue.capabilities.eventMeta = on;
   }
 
+  /** Updates the backend: it has (or loses) the bp_apply node kind `std_macro` from the next session on. */
+  setStdMacros(on: boolean): void {
+    this.infoValue.capabilities.stdMacros = on;
+  }
+
   /** Publishes the stage as it is now: the mod holds these assets from now on, and a resync restores them (published nodes survive it). */
   markPublished(): void {
     this.published = structuredClone(this.assets);

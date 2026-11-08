@@ -644,6 +644,26 @@ test("an own field removed from the TS is removed from the asset (ABFC5011 warni
   assert.deepEqual(absent.plan.assets[0]!.forgetVariables, ["Gone"]);
 });
 
+test("a loop counter temp the IR no longer declares is removed silently; one it still declares and other abfc_ names are kept", () => {
+  const stale = "abfc_UpdateTarget_i7";
+  const other = ["abfc_UpdateTarget_r", "abfc_UpdateTarget_t9", "abfc_Fn_i", "abfc_i3"];
+  const live = ir.assets[0]!.variables.filter((v) => v.temp === true && /^abfc_.+_i\d+$/.test(v.name)).map((v) => v.name);
+  assert.ok(live.length > 0, "the fixture has a manual loop counter");
+  // an old counter the asset still holds and the manifest records
+  const manifest = { ...manifestOf(), variables: [{ name: stale, type: "int" }, ...other.map((name) => ({ name, type: "int" }))] } as unknown as Manifest;
+  const r = fieldPlan(ir, manifest, [stale, ...other, ...live]);
+  assert.deepEqual(r.diagnostics.filter((d) => d.code === "ABFC5011" || d.severity === "warning"), []);
+  const a = r.plan.assets[0]!;
+  assert.deepEqual(a.removeVariables, [stale], "only the orphaned counter goes; the live counter and the other abfc_ names stay");
+  // recorded but already gone from the asset: only forgotten
+  const gone = fieldPlan(ir, manifest, [...other, ...live]);
+  assert.equal(gone.plan.assets[0]!.removeVariables, undefined);
+  assert.deepEqual(gone.plan.assets[0]!.forgetVariables, [stale]);
+  // nothing orphaned: nothing removed
+  const clean = fieldPlan(ir, manifestOf(), [...other, ...live]);
+  assert.equal(clean.plan.assets[0]?.removeVariables, undefined);
+});
+
 test("an asset whose only news is a field is still planned, with no units", () => {
   const snapshot = snapshotOf(node("N1", CALL, []));
   const keep = mu({ irHash: unit.hash, nodes: ["N1"], assetHash: unitStateHash(snapshot, ["N1"]), stageSyncedAt: "T1" });

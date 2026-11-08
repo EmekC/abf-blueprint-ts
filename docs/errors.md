@@ -781,7 +781,7 @@ Fix: update the backend ([backend.md](backend.md)); `abfc doctor` shows `variabl
 
 Severity: warning · Exit: 0
 
-Meaning: the backend has no bp_apply node kind `std_macro`, so the loops of the project are built as counter loops (a Branch, a back-edge and an owned counter variable `abfc_<event>_i<n>`) instead of Unreal's For Each Loop / For Loop macro nodes. The result behaves the same; the graph is just bigger.
+Meaning: the backend has no bp_apply node kind `std_macro`, so the loops of the project are built as counter loops (a Branch, a back-edge and an owned counter variable `abfc_<unit>_i<n>`) instead of Unreal's For Each Loop / For Loop macro nodes. The result behaves the same; the graph is just bigger.
 
 Typical cause: an older abf-mod-editor-mcp backend.
 

@@ -866,6 +866,8 @@ export class UnitBuilder {
   /** A counted `for` (see `forLoopBound`) as a ForLoop instance: FirstIndex = init, LastIndex = bound (`<`: bound - 1). */
   private forLoopMacro(s: Extract<HirStmt, { k: "forCount" }>, b: { bound: HirExpr; inclusive: boolean }): void {
     const start = this.operand(s.init, "int");
+    // On a null start the invalid exit still enters the loop: the macro then reads FirstIndex from an invalid object (Accessed None, reads
+    // as 0), whereas the manual lowering keeps a stale counter. Neither matches TypeScript exactly.
     if (start.nulls.length > 0) this.cur = [...this.cur, ...start.nulls];
     const last = this.operand(b.bound, "int");
     const id = this.stdMacro("ForLoop", s.span);

@@ -903,6 +903,7 @@ test("a counted loop whose start value has null exits: every exit runs into the 
   const loop = macroNodes(u, "ForLoop")[0]!;
   assert.ok(loop);
   // evaluating the start value (an optional chain) is part of entering the loop: both the valid and the invalid exit run into Exec, none skips it
+  // (on the invalid exit FirstIndex reads from an invalid object, i.e. 0; the manual lowering keeps a stale counter; neither matches TS exactly)
   const k = kit(u);
   const branch = u.nodes.find((n) => n.sem?.k === "branch")!;
   assert.deepEqual(k.into(`${loop.id}.Exec`).sort(), [`${branch.id}.else`, `${branch.id}.then`]);
