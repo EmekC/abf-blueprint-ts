@@ -263,8 +263,10 @@ begin
     Exit;
   if Copy(Lowercase(ProcName[I]), 1, 5) = 'unins' then
     Exit;
-  if Key = PathKey(ExpandConstant('{srcexe}')) then
-    Exit;
+  // {srcexe} cannot be evaluated while uninstalling; the running unins*.exe is skipped by name above.
+  if not IsUninstaller then
+    if Key = PathKey(ExpandConstant('{srcexe}')) then
+      Exit;
   Result := True;
 end;
 
@@ -345,8 +347,9 @@ end;
 function RunningAbfcMessage(Interactive: Boolean): String;
 var
   AppPrefix, Editors, Terminals, Others, Phrases, Actions, Friendly, Tail: String;
-  I, Cur, Parent, Depth, Kind: Integer;
-  Found, Unowned: Boolean;
+  I, Cur, Parent, Depth, Kind, OwnKind: Integer;
+  Found, Unowned, SawTerminal: Boolean;
+  OwnFriendly: String;
 begin
   Result := '';
   try
@@ -376,6 +379,7 @@ begin
     Cur := I;
     Kind := 0;
     Friendly := '';
+    SawTerminal := False;
     for Depth := 1 to 10 do
     begin
       Parent := IndexOfPid(ProcParent[Cur]);
@@ -385,10 +389,22 @@ begin
         Cur := Parent
       else
       begin
-        Kind := OwnerKind(ProcName[Parent], Friendly);
+        OwnKind := OwnerKind(ProcName[Parent], OwnFriendly);
+        if OwnKind = 2 then
+        begin
+          // A shell or console host may only be the wrapper an editor starts the server through: remember it, keep walking.
+          SawTerminal := True;
+          Cur := Parent;
+          Continue;
+        end;
+        Kind := OwnKind;
+        Friendly := OwnFriendly;
         Break;
       end;
     end;
+    // An editor found within the depth limit wins; otherwise a shell on the way means a terminal.
+    if (Kind <> 1) and SawTerminal then
+      Kind := 2;
     if Kind = 1 then
       AddUnique(Editors, Friendly)
     else if Kind = 2 then

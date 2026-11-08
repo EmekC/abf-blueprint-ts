@@ -34,6 +34,19 @@ describe("abfc.iss running-process check", () => {
     assert.ok(iss.includes("abfc.exe is still open, started by "));
   });
 
+  it("never evaluates {srcexe} while uninstalling", () => {
+    // ExpandConstant('{srcexe}') raises during uninstall; IsInsideApp runs there too.
+    const m = /if not IsUninstaller then\n\s+if Key = PathKey\(ExpandConstant\('\{srcexe\}'\)\) then\n\s+Exit;/.exec(iss);
+    assert.ok(m !== null, "the {srcexe} comparison must sit under `if not IsUninstaller then`");
+    const uses = iss.split("\n").filter((l) => l.includes("{srcexe}") && !l.trim().startsWith("//"));
+    assert.equal(uses.length, 1, "{srcexe} is used on more than the guarded line");
+  });
+
+  it("keeps walking past a shell to find an editor and falls back to the terminal", () => {
+    assert.match(iss, /if OwnKind = 2 then\n\s+begin\n[^]*?SawTerminal := True;\n\s+Cur := Parent;\n\s+Continue;/);
+    assert.match(iss, /if \(Kind <> 1\) and SawTerminal then\n\s+Kind := 2;/);
+  });
+
   it("is silent-aware", () => {
     assert.ok(iss.includes("WizardSilent"));
     assert.ok(iss.includes("UninstallSilent"));

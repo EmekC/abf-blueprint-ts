@@ -17,6 +17,7 @@
     "release:exe": "node scripts/release/build-exe.mjs",
     "release:installer": "node scripts/release/build-installer.mjs",
     "release:inspect": "node scripts/release/inspect.mjs",
+    "release:smoke": "node scripts/release/smoke-backend.mjs",
     "release:fetch": "node scripts/release/fetch-pins.mjs",
     "release:version": "node scripts/release/set-version.mjs",
     "release:npm": "node scripts/release/pack-npm.mjs",

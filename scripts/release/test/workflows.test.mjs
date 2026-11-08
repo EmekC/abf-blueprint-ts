@@ -149,6 +149,13 @@ describe("ci.yml", () => {
     assert.ok(artifacts.includes("--require exe,runtime,zip,installer-input,installer,vsix,npm"));
     assert.ok(artifacts.includes("--require-iscc"));
   });
+
+  it("starts the bundled backend after building the runtime and before the installer", () => {
+    const artifacts = jobBlocks(text).get("artifacts");
+    const smoke = artifacts.indexOf("node scripts/release/smoke-backend.mjs");
+    assert.ok(smoke > artifacts.indexOf("node scripts/release/build-exe.mjs"));
+    assert.ok(smoke < artifacts.indexOf("node scripts/release/build-installer.mjs"));
+  });
 });
 
 describe("release.yml", () => {
@@ -248,6 +255,8 @@ describe("release.yml", () => {
     assert.ok(build.includes("--require-iscc"));
     assert.ok(build.includes("--require-installer"));
     assert.ok(build.includes("set-version.mjs --check"));
+    const smoke = build.indexOf("node scripts/release/smoke-backend.mjs");
+    assert.ok(smoke > build.indexOf("node scripts/release/build-exe.mjs"), "the bundled backend is smoke-tested after the exe build");
     assert.ok(!build.includes("ABFC_NAME_DENYLIST"));
   });
 
