@@ -281,6 +281,23 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
 
   // Manifests of assets this build does not touch still learn where their class lives now (an older manifest has no source yet).
   const refreshSources = (touched: ReadonlySet<string>): void => {
+    // An asset this build does not apply keeps its graph, but its TS may have moved (file renamed or moved, lines shifted): the source map's spans follow.
+    for (const a of owned) {
+      if (touched.has(a.path)) continue;
+      const sm = readSourceMap(projectDir, a.path);
+      if (sm === null) continue;
+      const next = structuredClone(sm);
+      for (const u of a.units) {
+        const su = next.units[u.id];
+        if (su === undefined) continue;
+        su.span = u.origin;
+        for (const n of u.nodes) {
+          const sn = su.nodes[n.id];
+          if (sn !== undefined) sn.span = n.origin;
+        }
+      }
+      if (JSON.stringify(next) !== JSON.stringify(sm)) writeSourceMap(projectDir, next);
+    }
     for (const [p, m] of manifests) {
       const s = sources.get(p);
       if (m === null || s === undefined || touched.has(p)) continue;

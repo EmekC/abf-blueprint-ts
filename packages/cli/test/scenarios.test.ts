@@ -1,9 +1,9 @@
 // "Careless modder" scenarios on the fake backend: the regression tests of the live scenario runs (see docs/known-issues.md).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { rmSync, writeFileSync } from "node:fs";
+import { renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { readManifest } from "@abfc/compiler";
+import { readManifest, readSourceMap } from "@abfc/compiler";
 import { OPS, TA, tally, tallyOnly, withRig } from "./rig.js";
 
 const appliedSpecs = (r: { backend: { calls: Array<{ tool: string; specs?: Array<Record<string, any>> }> } }): Array<Record<string, any>> =>
@@ -123,5 +123,28 @@ test("(S02c) two new classes and one removed class in a folder are never paired 
     assert.equal(x.code, 0, x.out);
     assert.doesNotMatch(x.out, /renamed /);
     assert.deepEqual(r.backend.assetOpsCalls, [[{ op: "delete", asset: "/TestMod/BP_Zed" }]]);
+  });
+});
+
+test("(S03) moving a class file keeps the source map's spans on the new file", async () => {
+  await withRig(OPS, async (r) => {
+    tallyOnly(r.dir, tally("BP_Zed"));
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    const files = (): string[] => {
+      const sm = readSourceMap(r.dir, "/TestMod/BP_Zed")!;
+      const out = new Set<string>();
+      for (const u of Object.values(sm.units)) {
+        out.add(u.span.file);
+        for (const n of Object.values(u.nodes)) out.add(n.span.file);
+      }
+      return [...out];
+    };
+    assert.deepEqual(files(), ["src/Tally.ts"]);
+    renameSync(join(r.dir, "src", "Tally.ts"), join(r.dir, "src", "Moved.ts"));
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /up to date/);
+    assert.deepEqual(files(), ["src/Moved.ts"]);
   });
 });
