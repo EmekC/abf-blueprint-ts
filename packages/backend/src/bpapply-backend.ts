@@ -226,6 +226,7 @@ export class BpApplyBackend implements Backend {
       added: strList(json.added),
       removed: strList(json.removed),
       conflicts: strList(json.conflicts),
+      stale: strList(json.stale),
     };
   }
 

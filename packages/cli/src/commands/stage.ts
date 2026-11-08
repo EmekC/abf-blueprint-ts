@@ -53,8 +53,11 @@ export async function ensureStage(
       resynced = true;
     }
   }
-  if (status.conflicts.length > 0) {
-    const listed = status.conflicts.slice(0, 10).join(", ") + (status.conflicts.length > 10 ? `, and ${status.conflicts.length - 10} more` : "");
+  // Conflicts (edited in the stage and in the mod) and stale files (untouched in the stage, saved or deleted in the mod): either way
+  // the stage no longer shows the real mod.
+  const changedInMod = [...status.conflicts, ...status.stale];
+  if (changedInMod.length > 0) {
+    const listed = changedInMod.slice(0, 10).join(", ") + (changedInMod.length > 10 ? `, and ${changedInMod.length - 10} more` : "");
     if (o.onConflict === "report") {
       // Read-only commands (abfc status) never discard the stage: they only say what the next build will do.
       o.warn?.({

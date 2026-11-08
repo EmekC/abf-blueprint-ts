@@ -15,6 +15,8 @@ export interface StageStatus {
   added: string[];
   removed: string[];
   conflicts: string[];
+  /** Files untouched in the stage but saved or deleted in the real mod since the sync (backend 2.6.0; empty on older backends). */
+  stale: string[];
 }
 
 export interface AssetSnapshot {

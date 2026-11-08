@@ -69,7 +69,7 @@ async function fakeBackend(withReflect: boolean, calls: ReflectRequest[], reads:
   return {
     info: async () => info,
     stage: async () => ({ mod: "TestMod", files: 1, stagingPath: "C:\\Stage" }),
-    stageStatus: async () => ({ mod: "TestMod", stagingPath: "C:\\Stage", syncedAt: "t", changed: [], added: [], removed: [], conflicts: [] }),
+    stageStatus: async () => ({ mod: "TestMod", stagingPath: "C:\\Stage", syncedAt: "t", changed: [], added: [], removed: [], conflicts: [], stale: [] }),
     read: async (_mod, asset) => {
       reads.push(asset);
       if (asset.endsWith("Missing")) throw new Error("read failed");

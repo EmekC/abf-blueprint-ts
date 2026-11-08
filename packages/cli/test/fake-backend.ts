@@ -403,6 +403,8 @@ export class FakeBackend implements Backend {
   readonly removedFiles = new Set<string>();
   /** Files `staging_status` lists as conflicts (the real mod changed since the sync); a resync (`discardChanges`) clears them. */
   stageConflicts: string[] = [];
+  /** Files `staging_status` lists as stale (untouched in the stage, saved in the real mod since the sync); a resync clears them. */
+  stageStale: string[] = [];
   /** The raw JSON of the audit result. */
   auditRaw: unknown = { audited_copy: "stage" };
   /** Pretend the server runs a warm session: read, apply and compile results say `warm: true` (`lastWarm`). */
@@ -625,6 +627,7 @@ export class FakeBackend implements Backend {
     if (o.discardChanges) {
       this.resynced = true;
       this.stageConflicts = [];
+      this.stageStale = [];
     }
     if (!this.staged || (o.discardChanges && !this.keepAssetsOnSync)) {
       this.assets =
@@ -656,6 +659,7 @@ export class FakeBackend implements Backend {
       added: ["Content/_McpTmp/Scratch.uasset"],
       removed: [...this.removedFiles],
       conflicts: [...this.stageConflicts],
+      stale: [...this.stageStale],
     };
   }
 

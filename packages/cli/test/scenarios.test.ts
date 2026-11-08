@@ -272,3 +272,27 @@ test("(S07c) a class that a hand-made asset still references is not deleted, and
     assert.equal(readManifest(r.dir, "/TestMod/BP_Zed")!.deleted, undefined);
   });
 });
+
+test("(S10) an asset saved in the Mod Editor that the stage had not touched makes the next build re-sync the stage (ABFC4017)", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    const syncs = r.backend.calls.filter((c) => c.tool === "staging_sync").length;
+    r.backend.stageStale = ["Content/Relay/BP_Relay.uasset"];
+
+    x = await r.run(["status"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC4020/);
+    assert.equal(r.backend.calls.filter((c) => c.tool === "staging_sync").length, syncs, "status never re-syncs");
+
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC4017/);
+    assert.match(x.out, /BP_Relay\.uasset/);
+    assert.equal(r.backend.calls.filter((c) => c.tool === "staging_sync").length, syncs + 1);
+
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC4017/);
+  });
+});
