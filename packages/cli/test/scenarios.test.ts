@@ -196,3 +196,22 @@ test("(S06) recreating a moved class keeps the old path to delete on publish", a
     assert.equal(readManifest(r.dir, "/TestMod/Sub/BP_Tally")!.renamedFrom, undefined);
   });
 });
+
+test("(S08) a second publish publishes nothing and keeps the manifests", async () => {
+  await withRig({ ...OPS, publishDeletes: true }, async (r) => {
+    tallyOnly(r.dir, tally("BP_Tally"));
+    assert.equal((await r.run(["build"])).code, 0);
+    writeFileSync(join(r.dir, "src", "Tally.ts"), tally("BP_Tally2"), "utf8");
+    assert.equal((await r.run(["build"])).code, 0);
+    let x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(r.backend.publishCalls.length, 1);
+    const manifest = JSON.stringify(readManifest(r.dir, "/TestMod/BP_Tally2"));
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /nothing to publish/);
+    assert.equal(r.backend.publishCalls.length, 1, "the second publish did not call the backend");
+    assert.equal(JSON.stringify(readManifest(r.dir, "/TestMod/BP_Tally2")), manifest);
+    assert.equal(readManifest(r.dir, "/TestMod/BP_Tally2")!.renamedFrom, undefined);
+  });
+});
