@@ -295,6 +295,15 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
         message: `removed own field ${mv.name}: it is no longer declared in TypeScript, so the variable is removed from ${asset.path.slice(asset.path.lastIndexOf("/") + 1)}.`,
       });
     }
+    // A loop counter temp (`abfc_<unit>_i<n>`) that the IR no longer declares (the loop became a StandardMacros loop, or went away) is removed
+    // silently. The temps the IR still has are collected from every variable of the asset, which holds the temps of ALL its units whatever
+    // their kind (event, function, ...), so a live counter is never deleted. Other `abfc_` names (`abfc_<fn>_r`, `abfc_<unit>_t<n>`) are untouched.
+    const liveTemps = new Set(asset.variables.map((v) => v.name));
+    for (const name of new Set([...declared, ...(manifest?.variables ?? []).map((m) => m.name)])) {
+      if (!/^abfc_.+_i\d+$/.test(name) || liveTemps.has(name) || removeVariables.includes(name)) continue;
+      if (declared.has(name)) removeVariables.push(name);
+      else forgetVariables.push(name);
+    }
     // TS wins: a field whose TS type is the one recorded but whose variable in the asset has another type (a class the field points at was
     // renamed in the Mod Editor, which retyped the variable there) is recreated with the TS type.
     const retypedInAsset = new Set<string>();

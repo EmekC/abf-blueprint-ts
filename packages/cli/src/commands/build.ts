@@ -4,6 +4,7 @@ import {
   assetsNeedingRead,
   fingerprintUnit,
   listManifests,
+  lowerChecked,
   mapCompileMessages,
   featureGates,
   planAssetOps,
@@ -117,7 +118,22 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   const fe = compileFrontend(ctx);
   rec.record("build.frontend", since(tFront), fe.ir !== null, fe.ir === null ? 0 : countUnits(fe.ir));
   if (fe.ir === null) return false;
-  const ir = fe.ir;
+  let ir = fe.ir;
+  const { backend, info } = await session.open();
+  const caps = info.capabilities;
+  // A backend without the std_macro node kind gets counter loops instead of For Each Loop / For Loop nodes.
+  if (!caps.stdMacros && ir.assets.some((a) => a.units.some((u) => u.nodes.some((n) => n.sem?.k === "std_macro")))) {
+    const re = lowerChecked(fe.hir, profile, { loopMacros: false });
+    for (const d of re.diagnostics) ctx.output.diag(d);
+    if (re.ir === null) return false;
+    ir = re.ir;
+    ctx.output.diag({
+      severity: "warning",
+      code: "ABFC2088",
+      message: "the backend has no bp_apply node kind std_macro: loops are built as counter loops instead of For Each Loop / For Loop nodes; update abf-mod-editor-mcp.",
+      fix: "update abf-mod-editor-mcp to the version bundled with this abfc.",
+    });
+  }
   // Where each asset comes from (recorded in its manifest, docs/design.md 18.2).
   const classByPath = new Map(fe.hir.classes.map((c) => [c.path, c]));
   const sources = new Map<string, NonNullable<Manifest["source"]>>();
@@ -130,8 +146,6 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     return m === null || m.deleted === true ? null : m;
   };
   const owned = ir.assets.filter((a) => a.units.length > 0 || a.classDefaults !== undefined || a.classManagerRow !== undefined || a.director !== undefined || a.variables.some((v) => v.temp !== true) || (a.director === undefined && liveManifest(a.path)?.directorRow !== undefined));
-  const { backend, info } = await session.open();
-  const caps = info.capabilities;
   // Feature gates: Map/Set types and creatable kinds the backend (or abfc's native policy) lacks fail here, before the stage is touched.
   if (emitAll(ctx, featureGates({ ...ir, assets: [...structAssets, ...owned] }, caps))) return false;
 

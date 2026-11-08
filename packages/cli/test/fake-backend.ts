@@ -33,7 +33,7 @@ const CLS = profile.nodeClasses;
 export const RELAY_ASSET = "/TestMod/Relay/BP_Relay";
 
 const EXT_FEATURES = ["reflect", "compile_node_refs", "bp_read_seconds"];
-const EXEC_PINS = new Set(["execute", "then", "else", "CastFailed", "NotValid", "Valid", "Completed", "LoopBody"]);
+const EXEC_PINS = new Set(["execute", "then", "else", "CastFailed", "NotValid", "Valid", "Completed", "LoopBody", "Exec", "Execute", "Break"]);
 
 interface FPin {
   id: string;
@@ -124,6 +124,8 @@ export interface FakeBackendOptions {
   stageAudit?: boolean;
   /** The initial asset also holds a hand-made engine override event (`ReceiveTick`, calling HideAll). */
   overrideEvent?: boolean;
+  /** Advertise the `std_macro` node kind (default: true only with `backendInfo`). */
+  stdMacros?: boolean;
   /** The initial asset also holds the unlinked node `SPARE_NODE` (to be removed with `--remove-node`). */
   spareNode?: boolean;
   /**
@@ -458,6 +460,7 @@ export class FakeBackend implements Backend {
     this.root = mkdtempSync(join(tmpdir(), "abfc-fake-backend-"));
     const tools = withInfo ? ALL_TOOLS : ALL_TOOLS.filter((t) => t !== "backend_info");
     const capabilities = capabilitiesFrom(tools, withInfo ? (fixInfo() as RawBackendInfo) : null, { features: EXT_FEATURES });
+    capabilities.stdMacros = o.stdMacros ?? capabilities.stdMacros;
     capabilities.stageAudit = o.stageAudit === true;
     capabilities.selfEventCalls = o.selfEventCalls !== false || o.advertiseSelfEventCalls === true;
     capabilities.eventMeta = o.eventMeta === true;
@@ -490,6 +493,11 @@ export class FakeBackend implements Backend {
   /** Updates the backend: it has (or loses) the bp_apply feature `event_meta` from the next session on. */
   setEventMeta(on: boolean): void {
     this.infoValue.capabilities.eventMeta = on;
+  }
+
+  /** Updates the backend: it has (or loses) the bp_apply node kind `std_macro` from the next session on. */
+  setStdMacros(on: boolean): void {
+    this.infoValue.capabilities.stdMacros = on;
   }
 
   /** Publishes the stage as it is now: the mod holds these assets from now on, and a resync restores them (published nodes survive it). */
@@ -648,6 +656,12 @@ export class FakeBackend implements Backend {
   /** The raw body lines of a node of the stage (position, references, comment text). */
   nodeHead(asset: string, node: string): string[] {
     return this.assets.get(asset)?.nodes.find((x) => x.name === node)?.head ?? [];
+  }
+
+  /** Number of links of the pins with the given name on a node of the stage (in and out). */
+  pinLinkCount(asset: string, node: string, pin: string): number {
+    const n = this.assets.get(asset)?.nodes.find((x) => x.name === node);
+    return (n?.pins ?? []).filter((p) => p.name === pin).reduce((sum, p) => sum + p.links.length, 0);
   }
 
   /** Real names of the nodes of an asset, in the stage. */
@@ -1065,6 +1079,8 @@ export class FakeBackend implements Backend {
         return CLS.branch;
       case "cast":
         return CLS.dynamicCast;
+      case "std_macro":
+        return "/Script/BlueprintGraph.K2Node_MacroInstance";
       case "node":
         return s.class ?? "";
       default:
@@ -1096,11 +1112,18 @@ export class FakeBackend implements Backend {
       head.push(`CustomFunctionName="${s.name ?? ""}"`);
     } else if (s.k === "cast") {
       head.push(`TargetType="${s.target ?? ""}"`);
+    } else if (s.k === "std_macro") {
+      const asset = "/Engine/EditorBlueprintResources/StandardMacros.StandardMacros";
+      head.push(`MacroGraphReference=(MacroGraph="/Script/Engine.EdGraph'${asset}:${s.name ?? ""}'",GraphBlueprint="/Script/Engine.Blueprint'${asset}'")`);
     } else {
       head.push(...(s.props ?? []));
     }
     const node: FNode = { name: this.nodeName(asset, graph, cls), cls, graph, head, pins: [] };
     for (const w of wildcardPins(cls)) wildcardPin(getPin(node, w.name, w.dir), w.container);
+    if (s.k === "std_macro" && (s.name === "ForEachLoop" || s.name === "ForEachLoopWithBreak")) {
+      wildcardPin(getPin(node, "Array", "in"), "Array");
+      wildcardPin(getPin(node, "Array Element", "out"), "None");
+    }
     if (cls === CLS.dynamicCast && castTyped) typePin(getPin(node, "Object", "in"), profile.castObjectPinType);
     for (const [pin, value] of Object.entries(s.set ?? {})) getPin(node, pin, "in").def = value;
     for (const [pin, path] of Object.entries(s.objects ?? {})) getPin(node, pin, "in").defObj = path;

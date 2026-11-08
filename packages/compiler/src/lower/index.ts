@@ -6,7 +6,12 @@ import { UnitBuilder } from "./builder.js";
 export { formatLiteral } from "./builder.js";
 export { assignPositions } from "./layout.js";
 
-export function lower(h: HirProgram, profile: Profile): IrModule {
+export interface LowerOptions {
+  /** Lower eligible loops to StandardMacros instances (default true). */
+  loopMacros?: boolean;
+}
+
+export function lower(h: HirProgram, profile: Profile, opts: LowerOptions = {}): IrModule {
   // Structs first: a Blueprint (or another struct) that uses one needs it to exist.
   const structs: IrAsset[] = h.structs.map((st) => ({
     path: st.path,
@@ -20,6 +25,7 @@ export function lower(h: HirProgram, profile: Profile): IrModule {
     const units: IrUnit[] = [];
     for (const ev of cls.events) {
       const b = new UnitBuilder(profile, h.classMeta, ev);
+      b.loopMacros = opts.loopMacros !== false;
       units.push(b.build());
       variables.push(...b.vars);
     }

@@ -25,6 +25,7 @@ Server 2.4.0 and 2.5.0 therefore still work, with these differences from 2.6.0:
 - no `gameplayTags`: the director tag is ignored ([ABFC2082](errors.md#abfc2082));
 - no `reflectDefaults`: engine parameters stay required in the stubs (only the curated zero defaults of the stub generator apply);
 - no `variable_defaults`: changing the initializer of an existing field leaves the default as it is ([ABFC2084](errors.md#abfc2084));
+- no `std_macro` node kind in `bpApply.nodeKinds` (or no `pinTypes`): array `for..of` and simple counted `for` loops are built as counter loops instead of For Each Loop / For Loop macro nodes ([ABFC2088](errors.md#abfc2088));
 - no `function_graphs`: an undecorated method (a Blueprint function) is refused with [ABFC2044](errors.md#abfc2044);
 - no `staging_status` `stale` list: an asset saved in the Mod Editor that the stage never touched is not noticed as a change; use `abfc build --resync`.
 

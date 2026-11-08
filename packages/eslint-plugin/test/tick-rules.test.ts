@@ -58,7 +58,7 @@ ruleTester.run("no-loop-in-tick", noLoopInTick, {
   valid: [
     `class A { @override ReceiveBeginPlay() { for (let i = 0; i < 3; i++) { this.Count = i; } } }`,
     `class A { @event Refresh() { for (const d of this.Doors) { d.Open(); } } }`,
-    `class A { @override ReceiveTick(dt: number) { this.Items.forEach((i) => { while (i.Busy) { i.Wait(); } }); } }`,
+    `class A { @override ReceiveBeginPlay() { this.Items.forEach((i) => { i.Wait(); }); } }`,
     `class A { @override ReceiveTick(dt: number) { this.Elapsed = this.Elapsed + dt; } }`,
     {
       code: `class A { @override ReceiveTick(dt: number) { for (const d of this.Doors) { d.Open(); } } }`,
@@ -77,6 +77,10 @@ ruleTester.run("no-loop-in-tick", noLoopInTick, {
     {
       code: `class A { @override ReceiveTick(dt: number) { while (this.Busy) { this.Wait(); } do { this.Wait(); } while (this.Busy); } }`,
       errors: [{ messageId: "loop" }, { messageId: "loop" }],
+    },
+    {
+      code: `class A { @override ReceiveTick(dt: number) { this.Items.forEach((i) => { while (i.Busy) { i.Wait(); } }); } }`,
+      errors: [{ messageId: "loop", data: { tick: "ReceiveTick" } }],
     },
     {
       code: `class A { @override OtherTick() { while (true) {} } }`,

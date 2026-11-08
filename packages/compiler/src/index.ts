@@ -11,6 +11,7 @@ export { assetPathOf, bindPathContext, modImportHints, pathContextOf } from "./f
 export type { AssetPathInfo, AssetPathProblem, CompilerProjectConfig, PathContext } from "./frontend/assetpaths.js";
 export { blockedMemberHits } from "./frontend/blocked.js";
 export { lower, formatLiteral, assignPositions } from "./lower/index.js";
+export type { LowerOptions } from "./lower/index.js";
 export { analyzeAdoption, adoptionDiagnostics, AdoptionError } from "./ownership/adopt.js";
 export type { AdoptionAnalysis, AdoptOptions } from "./ownership/adopt.js";
 export { builtGraphMatches, driftDiagnostics, fingerprintUnit, rebaseStaleUnits, unitState } from "./ownership/drift.js";

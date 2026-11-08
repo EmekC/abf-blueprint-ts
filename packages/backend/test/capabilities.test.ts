@@ -196,6 +196,20 @@ test("variableDefaults follows the bp_apply feature variable_defaults", () => {
   assert.equal(capabilitiesFrom([], null, null).variableDefaults, false);
 });
 
+test("stdMacros needs the std_macro node kind AND pinTypes", () => {
+  const info = (pinTypes: boolean, nodeKinds: string[]): RawBackendInfo => ({
+    protocol: 1,
+    capabilities: { pinTypes },
+    bpApply: { features: ["pin_types"], nodeKinds },
+  }) as RawBackendInfo;
+  assert.equal(capabilitiesFrom(ALL_TOOLS, info(true, ["call", "std_macro"]), null).stdMacros, true);
+  assert.equal(capabilitiesFrom(ALL_TOOLS, info(true, ["call", "cast"]), null).stdMacros, false);
+  assert.equal(capabilitiesFrom(ALL_TOOLS, info(false, ["std_macro"]), null).stdMacros, false);
+  assert.equal(capabilitiesFrom(ALL_TOOLS, FIX_INFO, null).stdMacros, false);
+  assert.equal(capabilitiesFrom(ALL_TOOLS, null, null).stdMacros, false);
+  assert.equal(BP_APPLY_P1_BASE.stdMacros, false);
+});
+
 test("functionGraphs follows the bp_apply feature function_graphs", () => {
   const info = (features: string[]): RawBackendInfo => ({ protocol: 1, bpApply: { features } }) as RawBackendInfo;
   assert.equal(capabilitiesFrom([], info(["function_graphs"]), null).functionGraphs, true);
