@@ -1,14 +1,14 @@
 import { win32 } from "node:path";
 import { AbfcError, checkHeadlessDir, envWarning, machineKeysInProject } from "@abfc/env";
 import type { Resolved } from "@abfc/env";
-import { MIN_BACKEND_VERSION } from "@abfc/backend";
+import { MIN_BACKEND_VERSION, RECOMMENDED_BACKEND_VERSION } from "@abfc/backend";
 import type { Backend } from "@abfc/backend";
 import type { BackendInfo, Diagnostic } from "@abfc/ir";
 import type { ParsedArgs } from "../args.js";
 import { installOf } from "../context.js";
 import type { CliContext, CliDeps } from "../context.js";
 import { Output } from "../output.js";
-import { backendInfoDiagnostics } from "./backend-version.js";
+import { backendInfoDiagnostics, recommendedBackendDiagnostics } from "./backend-version.js";
 
 function show(label: string, r: Resolved<string>, extra = ""): string {
   const value = r.value === null ? "(not found)" : r.value;
@@ -172,6 +172,7 @@ export function cleanRuntimesCommand(args: ParsedArgs, deps: CliDeps): number {
 function checkInfo(ctx: CliContext, info: BackendInfo): void {
   const { output, config, env } = ctx;
   for (const d of backendInfoDiagnostics(info, config.backend.minProtocol, env.backendDir.value ?? "?")) output.diag(d);
+  for (const d of recommendedBackendDiagnostics(info, env.backendDir.value ?? "?")) output.diag(d);
   if (info.headlessDir !== null) {
     const d = checkHeadlessDir(info.headlessDir);
     if (d !== null) output.diag(d);
@@ -219,6 +220,11 @@ function printInfo(ctx: CliContext, info: BackendInfo): void {
     `  reflect: ${yn(c.reflect)}, compile node refs: ${yn(c.compileErrorNodeRefs)}, game test: ${yn(c.gameTest)}, audit: ${yn(c.audit)}`,
   );
   output.info(`  warm session: ${yn(c.warmSession)}, stage audit: ${yn(c.stageAudit)}, class-manager rows: ${yn(c.classManagerRows)}`);
+  output.info(
+    `  backend capabilities: asset ops: ${c.assetOps.length > 0 ? c.assetOps.join("/") : "no"}, publish deletions: ${yn(c.publishDeletes)}, ` +
+      `gameplay tags: ${yn(c.gameplayTags)}, reflect defaults: ${yn(c.reflectDefaults)}, class-manager row tag: ${yn(c.classManagerRowTag)} ` +
+      `(recommended server ${RECOMMENDED_BACKEND_VERSION})`,
+  );
   output.info(`  extensions: ${info.extensions.length > 0 ? info.extensions.join(", ") : "(none)"}`);
   if (info.headlessDir !== null) output.info(`  backend headless folder: ${info.headlessDir}`);
   if (info.headlessDirHasSpace) output.info("  backend headless folder contains a space");

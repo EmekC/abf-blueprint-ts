@@ -15,10 +15,10 @@
   },
   "backend": {
     "repo": "https://github.com/EmekC/abf-mod-editor-mcp",
-    "version": "2.5.0",
-    "tag": "v2.5.0",
-    "commit": "7ff46879e2daae8fbf11475409537e7fa618d515",
-    "filesSha256": "f630991476de7e5a3d29baf5a55638b9dfeafe0d60323bd797d70c9e4c23dc97"
+    "version": "2.6.0",
+    "tag": "v2.6.0",
+    "commit": "a61ce9d4a40f864014b54357098641395ab10c40",
+    "filesSha256": "1db7a973df62d81a0a33165216b965152c908003a4e0f1ef164a42198734de73"
   },
   "innosetup": {
     "version": "",

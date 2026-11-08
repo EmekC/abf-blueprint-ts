@@ -973,6 +973,16 @@ Typical cause: you saved the mod in the Mod Editor, or published by hand, after 
 
 Fix: nothing is required. The staged copy only holds abfc's own work, which the build generates again from the TypeScript. Edits you made by hand in the Mod Editor to what the TypeScript owns are replaced and reported as [ABFC5014](errors.md#abfc5014).
 
+### ABFC4018
+
+Severity: warning · Exit: - (`abfc doctor` only)
+
+Meaning: the backend is older than the version abfc recommends (2.6.0), or it does not report one of the capabilities `assetOps`, `publishDeletes`, `gameplayTags` and `reflectDefaults`. The message lists the missing ones. Everything still works: without `assetOps` a renamed or moved class stays [ABFC5012](errors.md#abfc5012); without `publishDeletes` a publish does not delete files ([ABFC7014](errors.md#abfc7014)); without `gameplayTags` the editor offers only the tags of your mod ([ABFC3012](errors.md#abfc3012)); without `reflectDefaults` the default values of function parameters are not read from the editor.
+
+Typical cause: a source install with an old abf-mod-editor-mcp checkout.
+
+Fix: update the checkout to tag `v2.6.0` or newer, or use `abfc.exe`, which bundles a current backend. See [backend.md](backend.md).
+
 ### ABFC4020
 
 Severity: warning (`abfc status`); error · Exit: 2 (only if the conflict remains after the staged copy was made again)
