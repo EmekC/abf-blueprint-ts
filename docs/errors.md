@@ -1201,6 +1201,16 @@ Typical cause: another Blueprint of the mod still uses an asset whose class you 
 
 Fix: remove the reference or the asset in the Mod Editor, or keep a moved class where it was with `path: "<its path below the mod>"`; then run `abfc build` again.
 
+### ABFC5017
+
+Severity: warning · Exit: -
+
+Meaning: a class that was declared in TypeScript is gone, but its asset was not created by abfc (a hand-made asset that a TypeScript class took over, or a build from an older abfc that did not record this). abfc deletes only assets it created, so the build removed the units and variables it owned and left the emptied asset in the mod.
+
+Typical cause: you deleted the file of a class that took over an asset you had made in the Mod Editor.
+
+Fix: delete the asset in the Mod Editor if you no longer need it. Nothing else is required.
+
 ### ABFC5101
 
 Severity: warning · Exit: -

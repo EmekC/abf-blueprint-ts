@@ -610,5 +610,9 @@ test("(S22b) a hand-made asset at a TypeScript class path is taken over (ABFC501
     assert.equal(x.code, 0, x.out);
     assert.ok(r.backend.stageAssets().includes("/TestMod/BP_Hand"), "abfc did not create it, so it does not delete it");
     assert.doesNotMatch(x.out, /deleted \/TestMod\/BP_Hand/);
+    assert.match(x.out, /warning ABFC5017: \/TestMod\/BP_Hand was not created by abfc, so it was not deleted/);
+    assert.match(x.out, /Delete it in the Mod Editor/);
+    x = await r.run(["build"]);
+    assert.doesNotMatch(x.out, /ABFC5017/, "the warning is shown once, by the build that removed the parts");
   });
 });

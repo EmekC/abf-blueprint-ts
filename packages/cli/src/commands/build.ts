@@ -194,6 +194,16 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
         message: `${m.asset} is no longer declared in TypeScript; its owned units are removed, the class defaults abfc set stay as they are.`,
       });
     }
+    // abfc deletes only assets it created: an emptied hand-made asset (or one from a manifest written before `created` existed) stays.
+    if (m.created !== true && m.structFieldsHash === undefined) {
+      output.diag({
+        severity: "warning",
+        code: "ABFC5017",
+        asset: m.asset,
+        message: `${m.asset} was not created by abfc, so it was not deleted; its TypeScript parts were removed. Delete it in the Mod Editor if you no longer need it.`,
+        fix: "delete the asset in the Mod Editor if you do not need it; abfc never deletes an asset it did not create.",
+      });
+    }
   }
 
   // A class whose asset is not in the stage yet is created by the apply: it is not read, its manifest (if any) is ignored, every unit is planned.
