@@ -76,6 +76,11 @@ const EXTRA_EVENTS = `  /**
    * @bpPath /Script/FakeEngine.Actor:ReceiveCount
    */
   ReceiveCount(): int;
+  /**
+   * Event called when the actor is constructed.
+   * @bpPath /Script/FakeEngine.Actor:UserConstructionScript
+   */
+  UserConstructionScript(): void;
 `;
 
 /** phase4 plus a library namespace (engine and mod), a lock file and some more Actor members; fn gets the project and its stubs profile dir. */
@@ -344,7 +349,7 @@ test("override stubs only at a member start of a class with a stub parent", () =
 
     // an explicit invocation on an empty line in the class body lists the events
     const empty = at(dir, profile, `${HEAD}export class A extends Actor {\n  Score!: int;\n  |\n}\n`);
-    assert.deepEqual(labels(empty.items), ["HappenedSomething", "ReceiveBeginPlay", "ReceiveHit", "ReceiveTick"]);
+    assert.deepEqual(labels(empty.items), ["HappenedSomething", "ReceiveBeginPlay", "ReceiveHit", "ReceiveTick"], "UserConstructionScript (ABFC2083) is never offered");
     const openBrace = at(dir, profile, `${HEAD}export class A extends Actor {|}\n`);
     assert.equal(openBrace.items.length, 4);
     const between = at(dir, profile, `${HEAD}export class A extends Actor {\n  Score!: int;\n  |\n  Other!: int;\n}\n`);

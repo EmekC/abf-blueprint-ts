@@ -747,6 +747,16 @@ Typical cause: a backend older than 2.6.0 (source install).
 
 Fix: update the backend to 2.6.0 or newer ([backend.md](backend.md)), or set the tag on the row in the Mod Editor. `abfc.exe` bundles a current backend.
 
+### ABFC2083
+
+Severity: error · Exit: 1
+
+Meaning: `@override UserConstructionScript()` was written. The Blueprint Construction Script is not an event Unreal lets a graph override: the compile fails with "cannot be overridden and/or placed as event" (ABFC6001). The method is not built.
+
+Typical cause: porting Blueprint logic that lived in the Construction Script.
+
+Fix: move the logic to an `@override` of `ReceiveBeginPlay` (runtime) or to a custom `@event` you call yourself. The Construction Script of a class cannot be written in TypeScript.
+
 ### ABFC2099
 
 Severity: error · Exit: 1

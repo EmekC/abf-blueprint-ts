@@ -385,6 +385,14 @@ class HirBuilder {
       const kind = methodKind(m);
       if (kind === undefined) continue;
       if (kind === "event" && this.shadowsParentEvent(m, parentType)) continue; // ABFC2078 reported, not lowered
+      if (kind === "override" && m.name.text === "UserConstructionScript") {
+        this.sink.error(
+          "ABFC2083",
+          "UserConstructionScript cannot be overridden: Unreal refuses a Construction Script event node (ABFC6001). Put the logic in an @override of ReceiveBeginPlay or in a custom @event.",
+          m.name,
+        );
+        continue;
+      }
       const sig = this.signature(m, kind, parentType);
       if (sig) this.ownSigs.set(m.name.text, sig);
     }

@@ -354,6 +354,7 @@ function overrideCompletions(
   const out: AbfcCompletion[] = [];
   for (const sym of checker.getPropertiesOfType(parent)) {
     if (!(sym.flags & ts.SymbolFlags.Method) || declared.has(sym.name)) continue;
+    if (sym.name === "UserConstructionScript") continue; // Unreal refuses it as an event node (ABFC2083)
     if (wantPrefix !== "" && !sym.name.toLowerCase().includes(wantPrefix)) continue;
     const decl = (sym.declarations ?? []).find((d): d is ts.MethodDeclaration | ts.MethodSignature => ts.isMethodDeclaration(d) || ts.isMethodSignature(d));
     if (decl === undefined) continue;

@@ -692,3 +692,16 @@ test("ABFC2078: the override keyword alone is reported, a parent member without 
   const ov = shadowHir(`  @override\n  override ReceiveBeginPlay(): void {}\n`);
   assert.deepEqual(ov.diagnostics.filter((d) => d.code === "ABFC2078"), []);
 });
+
+test("ABFC2083: @override UserConstructionScript is an error at the method name and is not lowered; other overrides are not affected", () => {
+  const r = shadowHir(`  @override\n  override UserConstructionScript(): void {}\n`);
+  const d = r.diagnostics.filter((x) => x.code === "ABFC2083");
+  assert.equal(d.length, 1);
+  assert.equal(d[0]!.severity, "error");
+  assert.match(d[0]!.message, /UserConstructionScript cannot be overridden/);
+  assert.equal(d[0]!.span?.line, 10, "reported on the method name line");
+  assert.deepEqual(r.events, []);
+  const ok = shadowHir(`  @override\n  override ReceiveBeginPlay(): void {}\n`);
+  assert.deepEqual(ok.diagnostics.filter((x) => x.code === "ABFC2083"), []);
+  assert.deepEqual(ok.events, ["ReceiveBeginPlay"]);
+});
