@@ -195,7 +195,7 @@ test("(a) adopt needs --yes; build on the fallback route writes manifest, hashes
   });
 });
 
-test("(b) an edit of an owned node in the stage stops the build with ABFC5001 and applies nothing", async () => {
+test("(b) an edit of an owned node in the stage is replaced by the next build that re-plans the unit (TS wins): ABFC5014 warning, exit 0", async () => {
   await withRig({}, async (r) => {
     assert.equal((await r.run(["adopt", RELAY_ASSET, "UpdateTarget", "--yes"])).code, 0);
     assert.equal((await r.run(["build"])).code, 0);
@@ -211,17 +211,25 @@ test("(b) an edit of an owned node in the stage stops the build with ABFC5001 an
     assert.match(x.out, /up to date/);
     assert.equal(r.backend.applyLabels().length, before);
 
-    // once the unit is re-planned the drift is found
+    // status previews what the next build replaces, as a warning
+    x = await r.run(["status"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /event:UpdateTarget edited/);
+    assert.match(x.out, /warning ABFC5001/);
+    assert.match(x.out, /TypeScript wins/);
+
+    // once the unit is re-planned the edit is replaced, not refused
     const src = join(r.dir, "src", "Relay.ts");
     writeFileSync(src, readFileSync(src, "utf8").replace("const rowName = Lib.RowToName(pot.Row);", "const rowName = Lib.RowToName(pot.Row); this.LastName = rowName;"), "utf8");
     x = await r.run(["build"]);
-    assert.equal(x.code, 3, x.out);
-    assert.match(x.out, /error ABFC5001/);
-    assert.equal(r.backend.applyLabels().length, before, "no bp_apply after the drift");
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC5014/);
+    assert.match(x.out, /ABFC5001/);
+    assert.ok(r.backend.applyLabels().length > before, "the unit was applied again");
 
     x = await r.run(["status"]);
-    assert.equal(x.code, 3, x.out);
-    assert.match(x.out, /event:UpdateTarget edited/);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /warning ABFC5001/);
   });
 });
 
@@ -420,7 +428,7 @@ test("(d1) build --drift reads every owned asset, a plain build of an up-to-date
   });
 });
 
-test("(d2) after an editor edit of an unchanged unit, build is up to date but build --drift exits 3 with ABFC5001", async () => {
+test("(d2) after an editor edit of an unchanged unit, build is up to date but build --drift reads every asset and replaces the edit (ABFC5014)", async () => {
   await withRig({}, async (r) => {
     assert.equal((await r.run(["adopt", RELAY_ASSET, "UpdateTarget", "--yes"])).code, 0);
     assert.equal((await r.run(["build"])).code, 0);
@@ -434,9 +442,13 @@ test("(d2) after an editor edit of an unchanged unit, build is up to date but bu
     assert.equal(x.code, 0, x.out);
     assert.match(x.out, /up to date/);
     x = await r.run(["build", "--drift"]);
-    assert.equal(x.code, 3, x.out);
-    assert.match(x.out, /error ABFC5001/);
-    assert.equal(r.backend.applyLabels().length, before, "no bp_apply after the drift");
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC5014/);
+    assert.match(x.out, /ABFC5001/);
+    assert.ok(r.backend.applyLabels().length > before, "the edited unit was applied again");
+    x = await r.run(["build", "--drift"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC5014/);
   });
 });
 
@@ -496,7 +508,7 @@ test("(b1) a build that applies but fails Unreal's compile is repeated by the ne
   });
 });
 
-test("(b3) publish --full gate 3 reads every owned asset: an editor edit of an unchanged unit fails with ABFC5001 and nothing is applied", async () => {
+test("(b3) publish --full gate 3 reads every owned asset: an editor edit of an unchanged unit is replaced (TS wins) with ABFC5014 and the gate passes", async () => {
   await withRig({}, async (r) => {
     assert.equal((await r.run(["adopt", RELAY_ASSET, "UpdateTarget", "--yes"])).code, 0);
     assert.equal((await r.run(["build"])).code, 0);
@@ -508,12 +520,11 @@ test("(b3) publish --full gate 3 reads every owned asset: an editor edit of an u
     const before = r.backend.applyLabels().length;
     assert.equal((await r.run(["build"])).code, 0, "an unchanged build does not read the asset");
     const x = await r.run(["publish", "--full", "--dry-run"]);
-    assert.equal(x.code, 3, x.out);
-    assert.match(x.out, /error ABFC5001/);
-    assert.doesNotMatch(x.out, /would publish/);
-    assert.equal(r.backend.applyLabels().length, before, "no bp_apply after the drift");
+    assert.match(x.out, /warning ABFC5014/);
+    assert.match(x.out, /ABFC5001/);
+    assert.ok(r.backend.applyLabels().length > before, "the edited unit was applied again by gate 3");
     const gates = readRuns(join(r.dir, ".abfc", "runs.jsonl")).filter((e) => e.step === "gate.3");
-    assert.equal(gates[gates.length - 1]!.ok, false);
+    assert.equal(gates[gates.length - 1]!.ok, true);
   });
 });
 

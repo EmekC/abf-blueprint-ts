@@ -28,7 +28,7 @@ export async function status(ctx: CliContext): Promise<number> {
         rows.push({ asset, unit: u.id, state, irHash: u.irHash === "" ? null : u.irHash, assetHash: u.assetHash });
         output.info(`${asset} ${u.id} ${state} ${shortHash(u.irHash)} ${shortHash(u.assetHash)}`);
       }
-      for (const d of driftDiagnostics(asset, manifest.units, nodes, stage, spans)) output.diag(d);
+      for (const d of driftDiagnostics(asset, manifest.units, nodes, stage, spans, { severity: "warning" })) output.diag(d);
     }
     if (rows.length === 0) output.info("no owned units yet (run abfc build, or abfc adopt)");
     output.info(

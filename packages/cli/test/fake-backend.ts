@@ -91,6 +91,8 @@ interface Spec {
   asset: string;
   create?: { class: string; parent: string; if_missing?: boolean };
   variables?: Array<{ name: string; type: string; flags: number }>;
+  remove_variables?: string[];
+  remove_functions?: string[];
   struct_fields?: Array<{ name: string; friendly: string; guid: string; type: string }>;
   graphs?: SpecGraph[];
   raw?: Array<{ kind: "graph"; graph: string; text: string } | { kind: "python"; code: string }>;
@@ -606,6 +608,15 @@ export class FakeBackend implements Backend {
       }
       for (const v of spec.variables ?? []) {
         if (!a.variables.some((x) => x.name === v.name)) a.variables.push({ name: v.name, type: v.type });
+      }
+      for (const name of spec.remove_variables ?? []) {
+        if (!a.variables.some((x) => x.name === name)) scripted.push({ asset: spec.asset, message: `cannot remove variable ${name}: no such variable` });
+        a.variables = a.variables.filter((x) => x.name !== name);
+      }
+      // a function graph is the nodes of that graph name in the fake
+      for (const name of spec.remove_functions ?? []) {
+        if (!a.nodes.some((n) => n.graph === name)) scripted.push({ asset: spec.asset, message: `cannot remove function ${name}: no such function graph` });
+        a.nodes = a.nodes.filter((n) => n.graph !== name);
       }
       const nodeIds: Record<string, Record<string, string>> = {};
       if (this.options.selfEventCalls === false && specError === null) specError = this.zeroPinSelfCall(a, spec);

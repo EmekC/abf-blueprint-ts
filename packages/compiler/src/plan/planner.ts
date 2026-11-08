@@ -2,6 +2,7 @@
 import { classDefaultsHash, structFieldsHash } from "@abfc/ir";
 import type { ApplyPlan, AssetPlan, Diagnostic, IrModule, IrUnit, IrVariable, Span, T3dNode } from "@abfc/ir";
 import { builtGraphMatches, driftDiagnostics, unitState } from "../ownership/drift.js";
+import { analyzeAdoption } from "../ownership/adopt.js";
 import type { StageInfo } from "../ownership/drift.js";
 import type { Manifest, ManifestUnit } from "../ownership/manifest.js";
 
@@ -14,6 +15,8 @@ export interface PlanInput {
   handMadeUnits: Map<string, string[]>;
   /** Variable names present in each snapshot (temps already declared are not declared again). */
   snapshotVariables?: Map<string, string[]>;
+  /** Variable name -> type string (`parseExport().variables`) per asset: a delegate (`unsupported:mcdelegate`) is an event dispatcher, which is always kept. */
+  snapshotVariableTypes?: Map<string, Map<string, string>>;
   /** `<asset path> <unit id>` of units to re-plan although their IR hash is unchanged (compiler or stub lock changed). */
   forceReplan?: Set<string>;
   /** The backend's bp_apply feature `self_event_calls` (default true). Without it a self call to an event added in the same build cannot be applied. */
@@ -24,6 +27,8 @@ export interface PlanInput {
   createKinds?: string[];
   /** The backend writes class-manager rows (capability `classManagerRows`): a `@director` asset whose manifest has no `directorRow` for it re-runs the defaults pass. */
   directorRows?: boolean;
+  /** Assets (paths) of hybrid classes (the TS class merges with a `<X>_Manual` interface): hand-made members are kept there (design 13). */
+  hybrid?: Set<string>;
 }
 
 export interface PlanResult {
@@ -129,6 +134,8 @@ function fieldsStale(asset: IrModule["assets"][number], manifest: Manifest | nul
   return (manifest?.variables ?? []).some((m) => !m.name.startsWith("abfc_") && !fields.some((v) => v.name === m.name));
 }
 
+const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? "" : "s"}`;
+
 function unitHeight(u: IrUnit): number {
   return u.nodes.reduce((m, n) => Math.max(m, n.pos[1]), 0) + 300;
 }
@@ -213,17 +220,24 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
       });
     }
     if (retyped) continue;
+    // TS wins: an own field gone from the TS is removed from the asset (a record of it that is not in the asset any more is only dropped).
+    const removeVariables: string[] = [];
+    const forgetVariables: string[] = [];
     for (const mv of manifest?.variables ?? []) {
       if (mv.name.startsWith("abfc_") || fieldVars.some((v) => v.name === mv.name)) continue;
+      if (declared.has(mv.name)) removeVariables.push(mv.name);
+      else forgetVariables.push(mv.name);
       diagnostics.push({
         severity: "warning",
         code: "ABFC5011",
         asset: asset.path,
-        message: `own field ${mv.name} is no longer declared in TypeScript; the variable stays in ${asset.path.slice(asset.path.lastIndexOf("/") + 1)} (delete it in the Mod Editor).`,
+        message: `removed own field ${mv.name}: it is no longer declared in TypeScript, so the variable is removed from ${asset.path.slice(asset.path.lastIndexOf("/") + 1)}.`,
       });
     }
     const newFields = fieldVars.filter((v) => !declared.has(v.name));
 
+    /** What this build replaces or removes from the asset beyond its own changes (TS wins): reported once as ABFC5014. */
+    const report: string[] = [];
     const picked: Array<{ unit: IrUnit; removeNodes: string[] }> = [];
     /** Names of events that this build adds (no custom event in the stage yet). */
     const newEvents = new Set<string>();
@@ -234,26 +248,27 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
       if (mu && state === "staleStage" && builtGraphMatches(mu, snapshot)) state = "clean";
 
       if (!mu || state === "pendingApply") {
+        // TS wins: a hand-made event of the same name is replaced (the nodes only it reaches go with it); nothing is refused.
+        let handMadeNodes: string[] = [];
         if (!(mu?.adopt) && (handMade.includes(unit.name) || hasHandMadeEvent(snapshot, unit.name, unit.kind))) {
-          diagnostics.push({
-            severity: "error",
-            code: "ABFC5003",
-            asset: asset.path,
-            span: unit.origin,
-            message: `${unit.name} is declared in TypeScript but already exists as a hand-made event in ${asset.path.slice(asset.path.lastIndexOf("/") + 1)}.`,
-            fix: `run: abfc adopt ${asset.path} ${unit.kind === "override" ? "override:" : ""}${unit.name}`,
-          });
-          continue;
+          try {
+            handMadeNodes = analyzeAdoption(snapshot, unit.graph, unit.name, { kind: unit.kind === "override" ? "override" : "event" }).owned;
+          } catch {
+            // no entry node in the snapshot (the name comes from the `_Manual` interface only): nothing to remove
+          }
+          report.push(`${unit.id}: replaced the hand-made ${unit.kind === "override" ? "override" : "event"} of the same name${handMadeNodes.length > 0 ? ` (${plural(handMadeNodes.length, "node")})` : ""}`);
         }
         if (unit.kind === "event" && !hasHandMadeEvent(snapshot, unit.name)) newEvents.add(unit.name);
         // a manifest unit that was never applied records no tag, but may still have left some
-        picked.push({ unit, removeNodes: mu ? tagsOf(snapshot, mu.id, mu.graph) : [] });
+        picked.push({ unit, removeNodes: [...handMadeNodes, ...(mu ? tagsOf(snapshot, mu.id, mu.graph) : [])] });
         continue;
       }
 
-      const drift = driftDiagnostics(asset.path, [mu], snapshot, input.stage, spans);
+      // TS wins: an edited, missing-node or changed-adoption unit is replaced, never refused. The report names what was found.
+      const drift = driftDiagnostics(asset.path, [mu], snapshot, input.stage, spans, { severity: "warning" });
       if (drift.length > 0) {
-        diagnostics.push(...drift);
+        for (const d of drift) report.push(`${d.code}: ${d.message}`);
+        picked.push({ unit, removeNodes: [...mu.nodes.filter((n) => snapshot.has(n)), ...(mu.adopt?.nodes ?? []).filter((n) => snapshot.has(n)), ...tagsOf(snapshot, mu.id, mu.graph)] });
         continue;
       }
       if (state === "pendingAdoption" || state === "staleStage") {
@@ -281,9 +296,12 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
         const left = tagsOf(snapshot, mu.id, mu.graph);
         if (left.length > 0) leftoverTags.push({ graph: mu.graph, nodes: left });
       } else {
-        const drift = driftDiagnostics(asset.path, [mu], snapshot, input.stage, new Map<string, Span>());
-        if (drift.length > 0) diagnostics.push(...drift);
-        else forgetUnits.push(mu.id); // adopted hand-made nodes of a stale stage: nothing of abfc's to remove
+        const drift = driftDiagnostics(asset.path, [mu], snapshot, input.stage, new Map<string, Span>(), { severity: "warning" });
+        if (drift.length > 0) {
+          // TS wins: the removed unit goes although it was edited or lost nodes; the nodes still on the stage are removed.
+          for (const d of drift) report.push(`${d.code}: ${d.message}`);
+          removeUnits.push({ id: mu.id, graph: mu.graph, nodes: [...mu.nodes.filter((n) => snapshot.has(n)), ...tagsOf(snapshot, mu.id, mu.graph)] });
+        } else forgetUnits.push(mu.id); // adopted hand-made nodes of a stale stage: nothing of abfc's to remove
       }
     }
 
@@ -304,6 +322,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
 
     // A removed or renamed event that a node staying on the stage still calls. Unreal's compile would refuse that graph with a message
     // that names no TS line and the apply would be rolled back, so refuse before the apply and name the node, its graph and its owner.
+    const hybridAsset = input.hybrid?.has(asset.path) === true;
     const leaving = new Set<string>([...removeUnits.flatMap((r) => r.nodes), ...picked.flatMap((p) => p.removeNodes)]);
     for (const r of removeUnits) {
       if (!r.id.startsWith("event:")) continue;
@@ -312,6 +331,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
       for (const n of snapshot.values()) {
         if (leaving.has(n.name) || !n.cls.includes("K2Node_Call") || !callsOwnFunction(n, name)) continue;
         const owner = manifest?.units.find((m) => m.nodes.includes(n.name));
+        if (owner === undefined && !hybridAsset) continue; // TS wins: a hand-made node of a non-hybrid class goes with the sweep below
         const where = `${n.name} in graph ${n.graph ?? "?"}`;
         if (owner !== undefined) {
           diagnostics.push({
@@ -327,8 +347,8 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
             severity: "error",
             code: "ABFC5009",
             asset: asset.path,
-            message: `${name} is no longer declared in TypeScript, but the hand-made node ${where} still calls it.`,
-            fix: `point that node at another function or delete it in the Mod Editor, then run abfc build --resync; or declare ${name} again.`,
+            message: `${name} is no longer declared in TypeScript, but the hand-made node ${where} (kept: the class merges with its _Manual interface) still calls it.`,
+            fix: `point that node at another function or delete it in the Mod Editor; or declare ${name} again.`,
           });
         }
       }
@@ -351,6 +371,64 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
       const entry = removeTags.find((r) => r.graph === mu.graph);
       if (entry) entry.nodes.push(...orphans);
       else removeTags.push({ graph: mu.graph, nodes: orphans });
+    }
+
+    // TS wins, non-hybrid class: everything in the asset that no TS unit owns is removed (nodes, function graphs, member variables).
+    // Kept because no TS form exists: macros, event dispatchers, interface and override functions, disabled engine default events,
+    // the entry and result nodes of function graphs, components and the widget tree (they are not nodes or variables of a graph).
+    const removeGraphNodes: NonNullable<AssetPlan["removeGraphNodes"]> = [];
+    const removeFunctions: string[] = [];
+    if (!hybridAsset && snapshot.size > 0) {
+      const tsUnitIds = new Set(asset.units.map((u) => u.id));
+      const gone = new Set<string>([...leaving, ...removeTags.flatMap((r) => r.nodes)]);
+      const owned = new Set<string>();
+      for (const mu of manifest?.units ?? []) {
+        if (!tsUnitIds.has(mu.id)) continue;
+        for (const n of [...mu.nodes, ...(mu.adopt?.nodes ?? [])]) owned.add(n);
+      }
+      const delegates = new Set<string>();
+      for (const [name, type] of input.snapshotVariableTypes?.get(asset.path) ?? []) if (type.startsWith("unsupported:mcdelegate") || type.startsWith("unsupported:delegate")) delegates.add(name);
+      const functionGraphs = new Map<string, T3dNode>(); // graph -> its K2Node_FunctionEntry
+      const macroGraphs = new Set<string>();
+      for (const n of snapshot.values()) {
+        if (n.graph === null) continue;
+        if (n.cls.endsWith("K2Node_FunctionEntry")) functionGraphs.set(n.graph, n);
+        else if (n.cls.endsWith("K2Node_Tunnel")) macroGraphs.add(n.graph);
+      }
+      const dropGraphs = new Set<string>();
+      for (const [graph, entry] of functionGraphs) {
+        const tsFunction = asset.units.some((u) => u.graph === graph);
+        const inherited = entry.head.some((h) => h.startsWith("FunctionReference=") && h.includes("MemberParent=")); // interface or override function
+        if (tsFunction || inherited || delegates.has(graph) || graph === "UserConstructionScript") continue;
+        dropGraphs.add(graph);
+        removeFunctions.push(graph);
+        report.push(`removed the hand-made function ${graph}`);
+      }
+      const byGraph = new Map<string, string[]>();
+      for (const n of snapshot.values()) {
+        if (n.graph === null || macroGraphs.has(n.graph) && !functionGraphs.has(n.graph) || dropGraphs.has(n.graph)) continue;
+        if (gone.has(n.name) || owned.has(n.name)) continue;
+        if (n.cls.endsWith("K2Node_FunctionEntry") || n.cls.endsWith("K2Node_FunctionResult")) continue;
+        if (n.cls.endsWith("K2Node_Event") && n.head.includes("EnabledState=Disabled")) continue;
+        const tagOf = tagUnitOf(n);
+        if (tagOf !== null && tsUnitIds.has(tagOf)) continue;
+        (byGraph.get(n.graph) ?? byGraph.set(n.graph, []).get(n.graph)!).push(n.name);
+      }
+      for (const [graph, nodes] of byGraph) {
+        removeGraphNodes.push({ graph, nodes });
+        report.push(`removed ${plural(nodes.length, "hand-made node")} from ${graph} (${nodes.slice(0, 5).join(", ")}${nodes.length > 5 ? ", ..." : ""})`);
+      }
+      const fields = new Set(fieldVars.map((v) => v.name));
+      const handMadeVars: string[] = [];
+      for (const name of input.snapshotVariables?.get(asset.path) ?? []) {
+        if (fields.has(name) || removeVariables.includes(name) || delegates.has(name)) continue;
+        if (asset.units.some((u) => name.startsWith(`abfc_${u.name}_`))) continue;
+        handMadeVars.push(name);
+      }
+      if (handMadeVars.length > 0) {
+        removeVariables.push(...handMadeVars);
+        report.push(`removed the hand-made ${handMadeVars.length === 1 ? "variable" : "variables"} ${handMadeVars.join(", ")}`);
+      }
     }
 
     // Backends without `self_event_calls` cannot template a call to an event added in this very apply.
@@ -386,7 +464,19 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
         };
       }
     }
-    if (create === undefined && picked.length === 0 && newFields.length === 0 && defaults === undefined && removeUnits.length === 0 && forgetUnits.length === 0 && removeTags.length === 0) continue;
+    if (report.length > 0) {
+      diagnostics.push({
+        severity: "warning",
+        code: "ABFC5014",
+        asset: asset.path,
+        message: `${asset.path.slice(asset.path.lastIndexOf("/") + 1)}: TypeScript wins, this build replaces what was changed in the Mod Editor: ${report.join("; ")}.`,
+        fix: "to keep a change, move it into the .ts file before building.",
+      });
+    }
+    if (
+      create === undefined && picked.length === 0 && newFields.length === 0 && defaults === undefined && removeUnits.length === 0 && forgetUnits.length === 0 &&
+      removeTags.length === 0 && removeGraphNodes.length === 0 && removeVariables.length === 0 && removeFunctions.length === 0 && forgetVariables.length === 0
+    ) continue;
 
     const removedByGraph = new Map<string, Set<string>>();
     for (const r of removeUnits) {
@@ -395,6 +485,11 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
       removedByGraph.set(r.graph, set);
     }
     for (const r of removeTags) {
+      const set = removedByGraph.get(r.graph) ?? new Set<string>();
+      for (const name of r.nodes) set.add(name);
+      removedByGraph.set(r.graph, set);
+    }
+    for (const r of removeGraphNodes) {
       const set = removedByGraph.get(r.graph) ?? new Set<string>();
       for (const name of r.nodes) set.add(name);
       removedByGraph.set(r.graph, set);
@@ -446,6 +541,10 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
       ...(removeUnits.length > 0 ? { removeUnits } : {}),
       ...(forgetUnits.length > 0 ? { forgetUnits } : {}),
       ...(removeTags.length > 0 ? { removeTags } : {}),
+      ...(removeGraphNodes.length > 0 ? { removeGraphNodes } : {}),
+      ...(removeVariables.length > 0 ? { removeVariables } : {}),
+      ...(removeFunctions.length > 0 ? { removeFunctions } : {}),
+      ...(forgetVariables.length > 0 ? { forgetVariables } : {}),
     });
   }
 

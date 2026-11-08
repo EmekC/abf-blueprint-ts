@@ -194,6 +194,14 @@ export interface AssetPlan {
   removeTags?: Array<{ graph: string; nodes: string[] }>;
   /** Manifest units dropped without touching the stage (never applied, or adopted hand-made nodes). */
   forgetUnits?: string[];
+  /** TS wins: hand-made nodes (no unit of abfc's) removed from a graph of a non-hybrid class. */
+  removeGraphNodes?: Array<{ graph: string; nodes: string[] }>;
+  /** TS wins: member variables removed from the asset (hand-made ones of a non-hybrid class, and own fields gone from the TS). */
+  removeVariables?: string[];
+  /** TS wins: hand-made function graphs removed from a non-hybrid class. */
+  removeFunctions?: string[];
+  /** Own fields gone from the TS that were not in the asset any more: only the manifest record is dropped. */
+  forgetVariables?: string[];
   /** Class defaults to apply in pass 5 (plan item `defaults`); present only when they changed. */
   defaults?: { classPath: string; values: Record<string, string>; hash: string; classManagerRow?: string; director?: { asset: string; classPath: string; tag?: string } };
 }

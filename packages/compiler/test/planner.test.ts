@@ -60,7 +60,7 @@ function mu(over: Partial<ManifestUnit> = {}): ManifestUnit {
 
 const stage = { syncedAt: "T1" };
 
-test("a hand-made event of the same name with no manifest is ABFC5003", () => {
+test("a hand-made event of the same name with no manifest is replaced (TS wins): ABFC5014 warning, nothing is refused", () => {
   const snapshot = snapshotOf(node("CE_1", EVENT, [`CustomFunctionName="UpdateTarget"`]));
   const r = planBuild(ir, {
     manifests: new Map([[asset, null]]),
@@ -68,20 +68,23 @@ test("a hand-made event of the same name with no manifest is ABFC5003", () => {
     stage,
     handMadeUnits: new Map(),
   });
-  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5003"]);
-  assert.equal(r.diagnostics[0]!.severity, "error");
+  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5014"]);
+  assert.equal(r.diagnostics[0]!.severity, "warning");
   assert.equal(r.diagnostics[0]!.asset, asset);
-  assert.match(r.diagnostics[0]!.fix ?? "", /abfc adopt \/TestMod\/Relay\/BP_Relay UpdateTarget/);
-  assert.deepEqual(r.plan.assets, []);
+  assert.match(r.diagnostics[0]!.message, /replaced the hand-made event of the same name/);
+  assert.match(r.diagnostics[0]!.message, new RegExp(unit.id));
+  assert.deepEqual(r.plan.assets[0]!.units[0]!.removeNodes, ["CE_1"]);
+  assert.equal(r.plan.assets[0]!.removeGraphNodes, undefined); // the replaced entry is not listed twice
 
-  // the explicit hand-made list works the same
+  // the explicit hand-made list (the `_Manual` interface) with no entry in the snapshot: nothing to remove, still a warning-free plan
   const r2 = planBuild(ir, {
     manifests: new Map(),
     snapshots: new Map([[asset, snapshotOf()]]),
     stage,
     handMadeUnits: new Map([[asset, ["UpdateTarget"]]]),
   });
-  assert.deepEqual(r2.diagnostics.map((d) => d.code), ["ABFC5003"]);
+  assert.deepEqual(r2.diagnostics.map((d) => d.code), ["ABFC5014"]);
+  assert.deepEqual(r2.plan.assets[0]!.units[0]!.removeNodes, []);
 });
 
 test("a new unit in an empty asset is planned with origin (0, 600) and its temps", () => {
@@ -112,6 +115,7 @@ test("pendingAdoption plans the unit with the adopted nodes removed; the origin 
     snapshots: new Map([[asset, snapshot]]),
     stage,
     handMadeUnits: new Map(),
+    hybrid: new Set([asset]),
     snapshotVariables: new Map([[asset, ["abfc_UpdateTarget_t0"]]]),
   });
   assert.deepEqual(r.diagnostics, []);
@@ -123,7 +127,7 @@ test("pendingAdoption plans the unit with the adopted nodes removed; the origin 
   assert.deepEqual(r.plan.assets[0]!.graphNodes["EventGraph"]!.map((n) => n.name).sort(), ["CALL_1", "CE_1", "OTHER_1"]);
 });
 
-test("a changed adopted hand-made unit is ABFC5004 and nothing is planned", () => {
+test("a changed adopted hand-made unit is replaced (TS wins): ABFC5014 names ABFC5004", () => {
   const entry = node("CE_1", EVENT, [`CustomFunctionName="UpdateTarget"`]);
   const snapshot = snapshotOf(entry);
   const adopt = { entry: "CE_1", nodes: ["CE_1"], hash: "sha256:other", recordedAt: "2026-01-01T00:00:00Z", stageSyncedAt: null };
@@ -133,8 +137,9 @@ test("a changed adopted hand-made unit is ABFC5004 and nothing is planned", () =
     stage,
     handMadeUnits: new Map(),
   });
-  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5004"]);
-  assert.deepEqual(r.plan.assets, []);
+  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5014"]);
+  assert.match(r.diagnostics[0]!.message, /ABFC5004/);
+  assert.deepEqual(r.plan.assets[0]!.units[0]!.removeNodes, ["CE_1"]);
 });
 
 test("clean and the same irHash: up to date, nothing planned", () => {
@@ -171,7 +176,7 @@ test("clean but a different irHash: replaced, the owned nodes are removed", () =
   assert.deepEqual(r.plan.assets[0]!.units[0]!.removeNodes, ["N1"]);
 });
 
-test("an edited owned unit is ABFC5001, a missing owned node ABFC5002", () => {
+test("an edited owned unit and a missing owned node are replaced (TS wins): one ABFC5014 each, nothing is refused", () => {
   const n1 = node("N1", CALL, []);
   const manifest = manifestOf(mu({ irHash: unit.hash, nodes: ["N1"], assetHash: "sha256:stale", stageSyncedAt: "T1" }));
   const edited = planBuild(ir, {
@@ -180,8 +185,10 @@ test("an edited owned unit is ABFC5001, a missing owned node ABFC5002", () => {
     stage,
     handMadeUnits: new Map(),
   });
-  assert.deepEqual(edited.diagnostics.map((d) => d.code), ["ABFC5001"]);
-  assert.deepEqual(edited.plan.assets, []);
+  assert.deepEqual(edited.diagnostics.map((d) => d.code), ["ABFC5014"]);
+  assert.equal(edited.diagnostics[0]!.severity, "warning");
+  assert.match(edited.diagnostics[0]!.message, /ABFC5001/);
+  assert.deepEqual(edited.plan.assets[0]!.units[0]!.removeNodes, ["N1"]);
 
   const missing = planBuild(ir, {
     manifests: new Map([[asset, manifest]]),
@@ -189,7 +196,9 @@ test("an edited owned unit is ABFC5001, a missing owned node ABFC5002", () => {
     stage,
     handMadeUnits: new Map(),
   });
-  assert.deepEqual(missing.diagnostics.map((d) => d.code), ["ABFC5002"]);
+  assert.deepEqual(missing.diagnostics.map((d) => d.code), ["ABFC5014"]);
+  assert.match(missing.diagnostics[0]!.message, /ABFC5002/);
+  assert.deepEqual(missing.plan.assets[0]!.units[0]!.removeNodes, []); // nothing of it is left on the stage
 });
 
 // ---- Phase 2: class defaults, delegate owners, override units ----
@@ -320,18 +329,20 @@ test("a changed delegate target replans the unit that takes its delegate; the re
   assert.deepEqual(startChanged.plan.assets[0]!.entryNames, { "event:Scan": "Scan_1" }, "the untouched target is wired by its real entry name");
 });
 
-test("an override unit without a manifest: a hand-made enabled override is ABFC5003, a disabled default node is not", () => {
+test("an override unit without a manifest: a hand-made enabled override is replaced (ABFC5014), a disabled default node is kept", () => {
   const over = unitOf("override:ReceiveTick");
   const ev = (extra: string[]) => node("EV_1", "/Script/BlueprintGraph.K2Node_Event", [`EventReference=(MemberParent="x",MemberName="ReceiveTick")`, ...extra]);
   const run = (snapshot: Map<string, T3dNode>) =>
     planBuild(ir2, { manifests: new Map(), snapshots: new Map([[asset2, snapshot]]), stage, handMadeUnits: new Map() });
   const made = run(snapshotOf(ev([])));
-  const hit = made.diagnostics.find((d) => d.code === "ABFC5003");
-  assert.ok(hit && hit.span === over.origin);
-  assert.match(hit.fix ?? "", /abfc adopt \S+ override:ReceiveTick/);
+  const hit = made.diagnostics.find((d) => d.code === "ABFC5014");
+  assert.ok(hit);
+  assert.match(hit.message, /override:ReceiveTick: replaced the hand-made override of the same name/);
+  assert.deepEqual(made.plan.assets[0]!.units.find((u) => u.unit.id === over.id)!.removeNodes, ["EV_1"]);
   const disabled = run(snapshotOf(ev(["EnabledState=Disabled"])));
-  assert.ok(!disabled.diagnostics.some((d) => d.code === "ABFC5003"));
-  assert.ok(disabled.plan.assets[0]!.units.some((u) => u.unit.id === "override:ReceiveTick"));
+  assert.deepEqual(disabled.diagnostics, []);
+  assert.deepEqual(disabled.plan.assets[0]!.units.find((u) => u.unit.id === over.id)!.removeNodes, []);
+  assert.equal(disabled.plan.assets[0]!.removeGraphNodes, undefined, "the disabled engine default event is not swept");
 });
 
 test("several pending adoptions in one asset are applied in one build: each removes its own adopted nodes", () => {
@@ -408,12 +419,13 @@ test("a renamed event: the old unit's nodes and tag are removed, the new event a
   assert.deepEqual(a.forgetUnits ?? [], []);
 });
 
-test("an edited removed unit is ABFC5001 and nothing is removed", () => {
+test("an edited removed unit is removed anyway (TS wins): ABFC5014 names the edit, the nodes still on the stage go", () => {
   const snapshot = renameSnapshot();
-  const r = planBuild(irRenamed, renameInput(renameManifest(snapshot, { assetHash: "sha256:stale" }), snapshot));
-  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5001"]);
+  const r = planBuild(irRenamed, renameInput(renameManifest(snapshot, { assetHash: "sha256:stale" }), snapshot, { hybrid: new Set([asset]) }));
+  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5014"]);
   assert.equal(r.diagnostics[0]!.asset, asset);
-  assert.deepEqual(r.plan.assets[0]?.removeUnits ?? [], []);
+  assert.match(r.diagnostics[0]!.message, /ABFC5001/);
+  assert.deepEqual(r.plan.assets[0]?.removeUnits, [{ id: "event:A", graph: "EventGraph", nodes: ["A_1", "A_2", "CMT_A"] }]);
   assert.deepEqual(r.plan.assets[0]?.forgetUnits ?? [], []);
 });
 
@@ -430,13 +442,17 @@ test("a removed event still called by a unit that stays up to date is refused be
   assert.deepEqual(r.diagnostics[0]!.span, callerOfB.origin);
 });
 
-test("a removed event still called by a hand-made node is refused and the node is named", () => {
+test("a removed event still called by a hand-made node: hybrid class is refused naming the node, a non-hybrid class sweeps the node", () => {
   const hand = node("H_1", CALL, callsA);
   const snapshot = snapshotOf(node("A_1", CALL, []), node("A_2", CALL, []), tagNode("CMT_A", "event:A"), node("C_1", CALL, []), hand);
-  const r = planBuild(irRenamed, renameInput(renameManifest(snapshot), snapshot));
+  const r = planBuild(irRenamed, renameInput(renameManifest(snapshot), snapshot, { hybrid: new Set([asset]) }));
   assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5009"]);
-  assert.match(r.diagnostics[0]!.message, /the hand-made node H_1 in graph EventGraph still calls it/);
-  assert.match(r.diagnostics[0]!.fix ?? "", /abfc build --resync/);
+  assert.match(r.diagnostics[0]!.message, /the hand-made node H_1 in graph EventGraph .* still calls it/);
+  assert.doesNotMatch(r.diagnostics[0]!.fix ?? "", /resync|adopt/);
+
+  const swept = planBuild(irRenamed, renameInput(renameManifest(snapshot), snapshot));
+  assert.deepEqual(swept.diagnostics.map((d) => d.code), ["ABFC5014"]);
+  assert.deepEqual(swept.plan.assets[0]!.removeGraphNodes, [{ graph: "EventGraph", nodes: ["H_1"] }]);
 });
 
 test("a removed event whose caller is replanned in the same build is fine", () => {
@@ -458,7 +474,7 @@ test("a removed event declared again as another unit of the same name does not r
 
 test("a removed unit that was never applied is only forgotten", () => {
   const snapshot = renameSnapshot();
-  const r = planBuild(irRenamed, renameInput(renameManifest(snapshot, { assetHash: null, nodes: [], tag: null }), snapshot));
+  const r = planBuild(irRenamed, renameInput(renameManifest(snapshot, { assetHash: null, nodes: [], tag: null }), snapshot, { hybrid: new Set([asset]) }));
   assert.deepEqual(r.diagnostics, []);
   assert.deepEqual(r.plan.assets[0]!.forgetUnits, ["event:A"]);
   assert.deepEqual(r.plan.assets[0]!.removeUnits ?? [], []);
@@ -503,7 +519,7 @@ test("a re-planned unit removes its old tag comment and any orphan tag of the sa
     node("CMT_fake", COMMENT, [`NodeComment="see abfc:owned unit=${unit.id} src=x"`]),
   );
   const manifest = manifestOf(mu({ irHash: "sha256:old", nodes: ["N1"], tag: "CMT_cur", assetHash: unitStateHash(snapshot, ["N1"]), stageSyncedAt: "T1" }));
-  const r = planBuild(ir, { manifests: new Map([[asset, manifest]]), snapshots: new Map([[asset, snapshot]]), stage, handMadeUnits: new Map() });
+  const r = planBuild(ir, { manifests: new Map([[asset, manifest]]), snapshots: new Map([[asset, snapshot]]), stage, handMadeUnits: new Map(), hybrid: new Set([asset]) });
   assert.deepEqual(r.diagnostics, []);
   const u = r.plan.assets[0]!.units[0]!;
   assert.deepEqual([...u.removeNodes].sort(), ["CMT_cur", "CMT_old", "N1"]);
@@ -521,7 +537,7 @@ test("a tag comment is only removed from the graph of its unit", () => {
 function orphanSetup(over: Partial<ManifestUnit> = {}, extra: T3dNode[] = []) {
   const snapshot = snapshotOf(node("N1", CALL, []), tagNode("CMT_cur", unit.id), tagNode("CMT_orphan1", unit.id, "92f777f3"), tagNode("CMT_orphan2", unit.id, "de5b7500"), tagNode("CMT_ghost", "event:NotInManifest"), node("CMT_hand", COMMENT, ['NodeComment="note"']), ...extra);
   const manifest = manifestOf(mu({ irHash: unit.hash, nodes: ["N1"], tag: "CMT_cur", assetHash: unitStateHash(snapshot, ["N1"]), stageSyncedAt: "T1", ...over }));
-  const r = planBuild(ir, { manifests: new Map([[asset, manifest]]), snapshots: new Map([[asset, snapshot]]), stage, handMadeUnits: new Map() });
+  const r = planBuild(ir, { manifests: new Map([[asset, manifest]]), snapshots: new Map([[asset, snapshot]]), stage, handMadeUnits: new Map(), hybrid: new Set([asset]) });
   return r;
 }
 
@@ -584,10 +600,15 @@ test("an own field whose type changed is ABFC2047 and nothing is planned", () =>
   assert.deepEqual(r.plan.assets, []);
 });
 
-test("an own field removed from the TS is ABFC5011 and stays in the manifest", () => {
+test("an own field removed from the TS is removed from the asset (ABFC5011 warning); one the asset lacks is only forgotten", () => {
   const r = fieldPlan(ir, fieldManifest(["Gone", "int"]), ["Gone"]);
   assert.deepEqual(r.diagnostics.map((d) => [d.code, d.severity]), [["ABFC5011", "warning"]]);
+  assert.match(r.diagnostics[0]!.message, /removed own field Gone/);
+  assert.deepEqual(r.plan.assets[0]!.removeVariables, ["Gone"]);
   for (const a of r.plan.assets) assert.equal(a.variables.some((v) => v.name === "Gone"), false);
+  const absent = fieldPlan(ir, fieldManifest(["Gone", "int"]), []);
+  assert.equal(absent.plan.assets[0]!.removeVariables, undefined);
+  assert.deepEqual(absent.plan.assets[0]!.forgetVariables, ["Gone"]);
 });
 
 test("an asset whose only news is a field is still planned, with no units", () => {
@@ -712,4 +733,54 @@ test("a @struct missing from the stage is a fresh create even when its manifest 
   const present = planBuild(ir, { ...base, manifests, missing: new Set() });
   assert.deepEqual(present.diagnostics.map((d) => d.code), ["ABFC2046"]);
   assert.equal(present.plan.assets.length, 0);
+});
+
+// ---- TS wins: the sweep of hand-made content (non-hybrid classes) ----
+
+function sweepSetup(over: { hybrid?: boolean } = {}) {
+  const n1 = node("N1", CALL, []);
+  const fnEntry = (graph: string, extra: string[] = []): T3dNode => ({ name: `FE_${graph}`, cls: "/Script/BlueprintGraph.K2Node_FunctionEntry", graph, head: extra, pins: [] });
+  const snapshot = snapshotOf(
+    n1,
+    node("HAND_1", CALL, []),
+    node("HAND_2", EVENT, [`CustomFunctionName="MyOwnEvent"`]),
+    node("GHOST_1", "/Script/BlueprintGraph.K2Node_Event", [`EventReference=(MemberParent="x",MemberName="ReceiveBeginPlay")`, "EnabledState=Disabled"]),
+    tagNode("CMT_cur", unit.id),
+    fnEntry("HandFunc"),
+    { ...node("HF_1", CALL, []), graph: "HandFunc" },
+    fnEntry("OnPing"),
+    fnEntry("Iface", [`FunctionReference=(MemberParent=/Script/CoreUObject.Class'/Mod/BPI_X.BPI_X_C',MemberName="Iface")`]),
+    { name: "TUN_1", cls: "/Script/BlueprintGraph.K2Node_Tunnel", graph: "MyMacro", head: [], pins: [] },
+    { ...node("MAC_1", CALL, []), graph: "MyMacro" },
+  );
+  const manifest = manifestOf(mu({ irHash: unit.hash, nodes: ["N1"], tag: "CMT_cur", assetHash: unitStateHash(snapshot, ["N1"]), stageSyncedAt: "T1" }));
+  return planBuild(ir, {
+    manifests: new Map([[asset, manifest]]),
+    snapshots: new Map([[asset, snapshot]]),
+    stage,
+    handMadeUnits: new Map(),
+    snapshotVariables: new Map([[asset, ["Mine", "OnPing", "abfc_UpdateTarget_t0"]]]),
+    snapshotVariableTypes: new Map([[asset, new Map([["Mine", "int"], ["OnPing", "unsupported:mcdelegate"], ["abfc_UpdateTarget_t0", "int"]])]]),
+    ...(over.hybrid === true ? { hybrid: new Set([asset]) } : {}),
+  });
+}
+
+test("TS wins, non-hybrid: hand-made nodes, function graphs and variables are swept; dispatchers, macros, interface functions, ghosts and abfc tags stay", () => {
+  const r = sweepSetup();
+  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5014"]);
+  assert.equal(r.diagnostics[0]!.severity, "warning");
+  assert.match(r.diagnostics[0]!.message, /removed 2 hand-made nodes from EventGraph \(HAND_1, HAND_2\)/);
+  assert.match(r.diagnostics[0]!.message, /removed the hand-made function HandFunc/);
+  assert.match(r.diagnostics[0]!.message, /removed the hand-made variable Mine/);
+  const a = r.plan.assets[0]!;
+  assert.deepEqual(a.removeGraphNodes, [{ graph: "EventGraph", nodes: ["HAND_1", "HAND_2"] }]);
+  assert.deepEqual(a.removeFunctions, ["HandFunc"]);
+  assert.deepEqual(a.removeVariables, ["Mine"]);
+  assert.deepEqual(r.upToDate, [`${asset} ${unit.id}`]);
+});
+
+test("TS wins, hybrid class (the _Manual merge): nothing hand-made is swept", () => {
+  const r = sweepSetup({ hybrid: true });
+  assert.deepEqual(r.diagnostics, []);
+  assert.deepEqual(r.plan.assets, []);
 });

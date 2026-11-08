@@ -175,10 +175,12 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   const skipped = existing.filter((a) => !toRead.has(a.path));
   const snapshots = new Map<string, Map<string, T3dNode>>();
   const snapshotVariables = new Map<string, string[]>();
+  const snapshotVariableTypes = new Map<string, Map<string, string>>();
   for (const a of readAssets) {
     const { parsed } = await readAsset(ctx, backend, a.path);
     snapshots.set(a.path, parsed.nodes);
     snapshotVariables.set(a.path, parsed.variables.map((v) => v.name));
+    snapshotVariableTypes.set(a.path, new Map(parsed.variables.map((v) => [v.name, v.type])));
   }
   rec.record("build.read", since(tRead), true, readAssets.length);
 
@@ -199,7 +201,9 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     snapshots,
     stage,
     handMadeUnits: new Map(fe.hir.classes.map((c) => [c.path, c.manualUnits])),
+    hybrid: new Set(fe.hir.classes.filter((c) => c.hybrid).map((c) => c.path)),
     snapshotVariables,
+    snapshotVariableTypes,
     forceReplan,
     selfEventCalls: caps.selfEventCalls,
     missing,
@@ -332,7 +336,9 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
       else units.push(next);
       stagedUnits.push(`${p.unit.name}`);
     }
-    const variables = [...(old?.variables ?? [])];
+    // TS wins: variables removed from the asset (and own fields gone from the TS) leave the manifest too.
+    const goneVars = new Set([...(a.removeVariables ?? []), ...(a.forgetVariables ?? [])]);
+    const variables = (old?.variables ?? []).filter((v) => !goneVars.has(v.name));
     for (const v of a.variables) {
       const entry = { name: v.name, type: v.type, hash: sha256(`${v.name}:${v.type}:${v.flags.join(",")}`) };
       const at = variables.findIndex((x) => x.name === v.name);

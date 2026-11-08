@@ -353,6 +353,7 @@ class HirBuilder {
       events: [],
       fields: [],
       manualUnits: this.manualUnits(node),
+      hybrid: this.isHybrid(node),
       defaults,
       ...(classManagerRow !== undefined ? { classManagerRow } : {}),
       ...(director !== undefined ? { director } : {}),
@@ -699,6 +700,11 @@ class HirBuilder {
       return undefined;
     }
     return { node: m, kind, params: fi.params.map((p) => ({ name: p.pin, type: p.type })), paramSyms, overrideOf: fi.owner };
+  }
+
+  private isHybrid(node: ts.ClassDeclaration): boolean {
+    const sym = node.name ? this.checker.getSymbolAtLocation(node.name) : undefined;
+    return (sym?.declarations ?? []).some((d) => ts.isInterfaceDeclaration(d));
   }
 
   private manualUnits(node: ts.ClassDeclaration): string[] {

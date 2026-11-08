@@ -38,6 +38,10 @@ export interface BpApplyAssetSpec {
   /** Fields of a UserDefinedStruct (valid only with `create.class` UserDefinedStruct): `name` is `<friendly>_<index>_<guid>`. */
   struct_fields?: Array<{ name: string; friendly: string; guid: string; type: string }>;
   variables?: Array<{ name: string; type: string; flags: number }>;
+  /** Member variables to delete (TS wins: hand-made ones of a non-hybrid class, and own fields gone from the TS). */
+  remove_variables?: string[];
+  /** Function graphs to delete (TS wins: hand-made functions of a non-hybrid class). */
+  remove_functions?: string[];
   graphs?: BpGraphSpec[];
   raw?: Array<{ kind: "graph"; graph: string; text: string } | { kind: "python"; code: string }>;
   /** Backend 2.5.0 (bp_apply feature `class_manager_row`): write the class-manager row of a `@director` class after the Blueprints are saved. */
@@ -201,6 +205,14 @@ export function renderMainSpec(a: AssetPlan, caps: BackendCapabilities, profile:
     graphs.set(r.graph, g);
     for (const name of r.nodes) if (!g.remove!.includes(name)) g.remove!.push(name);
   }
+  // TS wins: hand-made nodes of a non-hybrid class go with the same apply.
+  for (const r of a.removeGraphNodes ?? []) {
+    const g = graphs.get(r.graph) ?? { graph: r.graph, remove: [], add: [], wires: [] };
+    graphs.set(r.graph, g);
+    for (const name of r.nodes) if (!g.remove!.includes(name)) g.remove!.push(name);
+  }
+  if ((a.removeVariables?.length ?? 0) > 0) spec.remove_variables = [...a.removeVariables!];
+  if ((a.removeFunctions?.length ?? 0) > 0) spec.remove_functions = [...a.removeFunctions!];
   spec.graphs = [...graphs.values()];
   return spec;
 }
@@ -378,7 +390,7 @@ export async function applyPlan(
 ): Promise<ApplyOutcome> {
   if (plan.assets.length === 0) return { ok: true, perAsset: [] };
   // Assets that only carry class defaults have no graph work: they take part in pass 5 only (new own fields still go through the main spec).
-  const unitAssets = plan.assets.filter((a) => a.create !== undefined || a.struct !== undefined || a.units.length > 0 || a.variables.length > 0 || (a.removeUnits?.length ?? 0) > 0 || (a.removeTags?.length ?? 0) > 0);
+  const unitAssets = plan.assets.filter((a) => a.create !== undefined || a.struct !== undefined || a.units.length > 0 || a.variables.length > 0 || (a.removeUnits?.length ?? 0) > 0 || (a.removeTags?.length ?? 0) > 0 || (a.removeGraphNodes?.length ?? 0) > 0 || (a.removeVariables?.length ?? 0) > 0 || (a.removeFunctions?.length ?? 0) > 0);
   if (unitAssets.length === 0) {
     const only: AssetApplyOutcome[] = plan.assets.map((a) => ({ asset: a.asset, nodeIds: {}, finalText: null, compile: [], tagName: null, tagNames: {}, defaultsApplied: false, defaultsWarnings: [] }));
     const added = await applyDefaultsPass(backend, plan, only, caps, o);

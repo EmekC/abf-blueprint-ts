@@ -24,6 +24,8 @@ export interface HirClass {
   fields: HirField[];
   /** Hand-made functions/events of the asset that the TS class sees through `<X>_Manual` (tag `@bpHandMade`). */
   manualUnits: string[];
+  /** The class symbol also has an `interface X extends X_Manual` declaration (design 13): the hand-made members are part of the class and are kept. */
+  hybrid: boolean;
   /** Class defaults from the `@blueprint` options (pin names -> T3D text); filled by the class-defaults pass. */
   defaults: Record<string, string>;
   /** Row asset path of the `classManagerRow` option (verified, not written). */

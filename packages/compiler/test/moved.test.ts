@@ -6,7 +6,7 @@ import type { HirClass, HirProgram, HirStruct, Manifest } from "../src/index.js"
 const span = (file: string) => ({ file, line: 3, col: 14, endLine: 3, endCol: 20 });
 
 const cls = (name: string, path: string, file: string, pathDerived = true): HirClass =>
-  ({ name, path, pathDerived, classPath: `${path}.${name}_C`, parent: "/Script/Engine.Actor", span: span(file), events: [], fields: [], manualUnits: [], defaults: {} }) as HirClass;
+  ({ name, path, pathDerived, classPath: `${path}.${name}_C`, parent: "/Script/Engine.Actor", span: span(file), events: [], fields: [], manualUnits: [], hybrid: false, defaults: {} }) as HirClass;
 
 const program = (classes: HirClass[], structs: HirStruct[] = []): HirProgram => ({ mod: "TestMod", classes, structs, classMeta: {}, diagnostics: [] });
 

@@ -120,7 +120,7 @@ Compiles the project and applies only the units whose TypeScript changed to a pr
 | Option | Meaning |
 | --- | --- |
 | `--resync` | Recreate the staging copy from the mod before building. Unpublished staged work of every project that targets the same mod is discarded. Use it after you changed the mod by hand, or when abfc reports a conflict with the real mod ([ABFC4020](errors.md#abfc4020)). |
-| `--drift` | Read and drift-check every owned asset, not only the changed ones. It finds edits made in the Mod Editor to units that did not change in TypeScript ([ABFC5001](errors.md#abfc5001)) at the cost of one read per asset. It does not change what is applied. Only `abfc build` accepts it. |
+| `--drift` | Read and drift-check every owned asset, not only the changed ones. Edits made in the Mod Editor to units that did not change in TypeScript are replaced too (TypeScript wins, [ABFC5014](errors.md#abfc5014)), at the cost of one read per asset. Only `abfc build` accepts it. |
 | `--keep-failed-stage` | After an Unreal compile failure keep the failed graphs in the staging copy for inspection. Without it abfc re-syncs the staging copy from the mod, which discards all unpublished staged work in every asset of the mod (like `--resync`), not only in the assets that failed to compile. abfc forgets the units that were never published, and the next build applies them again. If that re-sync fails, abfc warns with [ABFC4016](errors.md#abfc4016) and you run `abfc build --resync` before the next build. Also accepted by `abfc test` and `abfc publish`. |
 
 `build --json` result:
@@ -152,7 +152,7 @@ Builds (unless `--no-build`), compiles the tests of the project and runs each on
 abfc status [--resync]
 ```
 
-Reads every owned asset from the staging copy and prints one line per unit: `<asset> <unit> <state> <ir hash> <asset hash>`, then how many staged files differ from the mod. Editor edits to a unit abfc owns are reported as drift ([ABFC5001](errors.md#abfc5001)).
+Reads every owned asset from the staging copy and prints one line per unit: `<asset> <unit> <state> <ir hash> <asset hash>`, then how many staged files differ from the mod. Editor edits to a unit abfc owns are reported as warnings ([ABFC5001](errors.md#abfc5001)); the next build replaces them.
 
 `status --json` result: `{units: [{asset, unit, state, irHash, assetHash}], staging: {changed, added, removed, conflicts}}`.
 
@@ -184,7 +184,7 @@ Builds, then copies the built assets of the project's mod from the staging copy 
 | Option | Meaning |
 | --- | --- |
 | `--dry-run` | Print the would-publish list and stop before the copy. |
-| `--full` | Run the release checks first, in this order, stopping at the first failure: 1 stubs lock, 2 check and Blueprint-filter hits, 3 build with `--drift` semantics, 4 tests, 5 the mod audit of the staged copy ([ABFC7002](errors.md#abfc7002)), 6 upload file check, 7 the would-publish list, 8 the copy. There is no `abfc audit` command: `abfc publish --full --dry-run` runs gates 1 to 7 without copying. |
+| `--full` | Run the release checks first, in this order, stopping at the first failure: 1 stubs lock, 2 check and Blueprint-filter hits, 3 build with `--drift` semantics (editor changes are replaced, TypeScript wins), 4 tests, 5 the mod audit of the staged copy ([ABFC7002](errors.md#abfc7002)), 6 upload file check, 7 the would-publish list, 8 the copy. There is no `abfc audit` command: `abfc publish --full --dry-run` runs gates 1 to 7 without copying. |
 
 `publish --json` result: with `--dry-run` `{changed, added, dryRun, full}`; after a copy `{published, backup, route, reloadedInPlace, dirtyAfter, reloadedReferencers, skippedDirty, dirtyPublished, compileErrorsAfter}`. `--timings` prints the time of each gate.
 
@@ -242,7 +242,7 @@ A flag the command does not use is ignored, except for the three that are refuse
 | 0 | Success. Warnings never change the exit code. |
 | 1 | Your code or your project is wrong: TypeScript subset errors (`ABFC2xxx`), test and compile failures (`ABFC6xxx`), publish refusals (`ABFC7xxx` except 7005 and 7006), ownership problems that are not conflicts (`ABFC5008` and up), and the `abfc init` user errors `ABFC1040` to `ABFC1044` (nested project, no terminal, mod not found, no mods in the folder). |
 | 2 | The setup, the stubs or the backend is wrong, or the command line is malformed: environment and config errors (`ABFC1xxx`), stub errors (`ABFC3xxx`), backend errors (`ABFC4xxx`), `ABFC7006`, an unexpected failure (`ABFC4002`), and every usage error (unknown option, unknown command). |
-| 3 | A conflict that needs your decision: `ABFC1020` (project inside a mod folder), `ABFC4090`, ownership and drift conflicts `ABFC5001` to `ABFC5007` (an edit in the editor to something abfc owns, a dry adopt) and `ABFC7005` (publish refused because the editor is playing or has unsaved assets). |
+| 3 | A conflict that needs your decision: `ABFC1020` (project inside a mod folder), `ABFC4090`, adopt conflicts `ABFC5005` to `ABFC5007` (a dry adopt) and `ABFC7005` (publish refused because the editor is playing or has unsaved assets). |
 
 When a command reports several errors the exit code is the highest of them. The exact code of every diagnostic is in [errors.md](errors.md).
 

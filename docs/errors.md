@@ -985,47 +985,47 @@ Fix: report it with the run folder named in the message. Building a smaller unit
 
 ## 5xxx ownership and drift
 
-abfc only replaces what it built itself. It records which nodes of an asset belong to which unit; when the asset no longer matches the record, abfc stops instead of overwriting. Codes 5001-5007 need your decision and exit with 3; the rest exit with 1 (errors) or do not end the command (warnings). The workflow is described in [first-mod.md](first-mod.md) and the commands in [cli.md](cli.md).
+TypeScript wins: a build (and a publish, which builds) makes the Blueprint match the `.ts` file. What was changed in the Mod Editor is replaced, and in a class without a `_Manual` interface merge the hand-made nodes, function graphs and variables are removed; one ABFC5014 warning per asset lists what went. Event dispatchers, macros, components and the widget tree are kept. Codes 5001-5004 are only warnings now (`abfc status` previews them); 5005-5007 need your decision and exit with 3; the rest exit with 1 (errors) or do not end the command (warnings). The workflow is described in [first-mod.md](first-mod.md) and the commands in [cli.md](cli.md).
 
 ### ABFC5001
 
-Severity: error · Exit: 3
+Severity: warning (`abfc status`) · Exit: -
 
-Meaning: a unit that abfc built was edited in the Mod Editor since the last build, or the staged copy differs from what abfc applied. abfc will not overwrite it. The message counts the nodes and links that changed.
+Meaning: a unit that abfc built was edited in the Mod Editor since the last build, or the staged copy differs from what abfc applied. The next build replaces it (TypeScript wins); [ABFC5014](#abfc5014) lists it then. The message counts the nodes and links that changed.
 
 Typical cause: you changed, moved or reconnected a generated node in the Blueprint editor, or the stage was re-synced from a mod that holds a different version.
 
-Fix: undo the edit in the editor, or move the change into the `.ts` file and run `abfc adopt <asset> <unit> --yes --discard-editor-changes`. The next build then replaces the edited nodes.
+Fix: nothing is required. To keep the edit, move it into the `.ts` file before building.
 
 ### ABFC5002
 
-Severity: error · Exit: 3
+Severity: warning (`abfc status`); error · Exit 3 (`abfc adopt`)
 
-Meaning: nodes that abfc owns are missing from the asset, so the unit cannot be updated safely. The same code is used by `abfc adopt` when the unit to adopt does not exist in the asset.
+Meaning: nodes that abfc owns are missing from the asset. The next build applies the unit again (TypeScript wins). The same code is an error of `abfc adopt` when the unit to adopt does not exist in the asset.
 
 Typical cause: you deleted generated nodes in the editor, or the stage was re-synced from a mod that never had them.
 
-Fix: undo the deletion in the editor, or restore the stage with `abfc build --resync` after reverting the unit in the real mod. For `abfc adopt`, check the name of the event.
+Fix: nothing is required for a build. For `abfc adopt`, check the name of the event.
 
 ### ABFC5003
 
-Severity: error · Exit: 3
+Severity: warning (`abfc status`) · Exit: -
 
-Meaning: an event or override declared in TypeScript already exists in the asset as a hand-made event.
+Meaning: an event or override declared in TypeScript already exists in the asset as a hand-made event. The next build replaces it (TypeScript wins).
 
 Typical cause: the event was made in the Blueprint editor before it was written in TypeScript.
 
-Fix: run the `abfc adopt` command shown in the fix line, which takes the existing nodes over. Or rename the TypeScript method.
+Fix: nothing is required. To keep the hand-made event, rename the TypeScript method.
 
 ### ABFC5004
 
-Severity: error · Exit: 3
+Severity: warning (`abfc status`) · Exit: -
 
-Meaning: a hand-made unit that was adopted earlier changed in the real mod, so the recorded adoption no longer matches.
+Meaning: a hand-made unit that was adopted earlier changed in the real mod, so the recorded adoption no longer matches. The next build replaces it with the TypeScript unit.
 
 Typical cause: someone edited the adopted nodes in the editor after `abfc adopt` recorded them.
 
-Fix: review the change in the editor, then run `abfc adopt` again for this unit.
+Fix: nothing is required.
 
 ### ABFC5005
 
@@ -1071,7 +1071,7 @@ Fix: use the name of a comment box or of a node with no links, as listed in the 
 
 Severity: error · Exit: 1
 
-Meaning: a unit that is no longer declared in TypeScript is still called by another unit.
+Meaning: a unit that is no longer declared in TypeScript is still called by another unit, or (a class that merges with its `_Manual` interface) by a hand-made node that is kept.
 
 Typical cause: a method or event was deleted or renamed while a call to it remains.
 
@@ -1091,11 +1091,11 @@ Fix: nothing is required. Clean up the asset in the Mod Editor if you do not wan
 
 Severity: warning · Exit: -
 
-Meaning: a field that was declared in TypeScript before is gone, but the variable stays in the Blueprint.
+Meaning: a field that was declared in TypeScript before is gone, so the build removed the variable from the Blueprint.
 
 Typical cause: a property was deleted from the class.
 
-Fix: delete the variable in the Mod Editor, or declare the field again.
+Fix: nothing is required; declare the field again to get it back.
 
 ### ABFC5012
 
@@ -1116,6 +1116,16 @@ Meaning: the class-manager row that a previous build wrote for a `@director` cla
 Typical cause: the row name in `@director` was changed or removed.
 
 Fix: delete the old row in the Mod Editor.
+
+### ABFC5014
+
+Severity: warning · Exit: -
+
+Meaning: TypeScript wins. This build replaced or removed what was changed or made by hand in the Mod Editor in one Blueprint: edited or deleted generated units (with the old ABFC5001/5002/5004 details), a hand-made event of the same name as a TypeScript event, and, in a class without a `_Manual` interface merge, every other hand-made node (the count and the first five names per graph), function graph and variable. Event dispatchers, macros, components, the widget tree, interface functions and disabled engine default events are kept.
+
+Typical cause: you changed the Blueprint in the Mod Editor and did not move the change into the `.ts` file.
+
+Fix: nothing is required. To keep a change, move it into the `.ts` file before building; `abfc status` previews what the next build replaces. `abfc build --drift` and the build inside `abfc publish --full` read every owned asset, so they replace editor changes in unchanged assets too.
 
 ### ABFC5101
 
