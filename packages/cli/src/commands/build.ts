@@ -452,10 +452,13 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     const created = old?.created === true || a.create !== undefined;
     const cls = classByPath.get(a.asset);
     /** Pending stage-only renames/deletes survive the rewrite until a publish clears them. */
+    // A recreated asset (another family) or one the stage lost is planned without its manifest (`old` is null), but the paths the
+    // mod still holds from an earlier rename or move are read from disk: a publish deletes them.
+    const pending = old ?? readManifest(projectDir, a.asset);
     const carried = {
-      ...(old?.renamedFrom !== undefined ? { renamedFrom: old.renamedFrom } : {}),
-      ...(old?.publishAlso !== undefined ? { publishAlso: old.publishAlso } : {}),
-      ...(old?.retiredRows !== undefined ? { retiredRows: old.retiredRows } : {}),
+      ...(pending?.renamedFrom !== undefined ? { renamedFrom: pending.renamedFrom } : {}),
+      ...(pending?.publishAlso !== undefined ? { publishAlso: pending.publishAlso } : {}),
+      ...(pending?.retiredRows !== undefined ? { retiredRows: pending.retiredRows } : {}),
     };
     const finalManifest: Manifest = {
       asset: a.asset,

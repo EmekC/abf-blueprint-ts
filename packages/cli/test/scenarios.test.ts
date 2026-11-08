@@ -1,7 +1,7 @@
 // "Careless modder" scenarios on the fake backend: the regression tests of the live scenario runs (see docs/known-issues.md).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readManifest, readSourceMap } from "@abfc/compiler";
 import { OPS, TA, addParentStubs, tally, tallyOnly, withRig } from "./rig.js";
@@ -169,5 +169,30 @@ test("(S05) a rename or reparent that edits the asset's nodes is replaced withou
     assert.match(x.out, /reparented /);
     assert.doesNotMatch(x.out, /ABFC5014/);
     assert.ok(r.backend.applyLabels().length > afterRename, "the units were applied again");
+  });
+});
+
+test("(S06) recreating a moved class keeps the old path to delete on publish", async () => {
+  await withRig({ ...OPS, publishDeletes: true }, async (r) => {
+    addParentStubs(r.dir);
+    tallyOnly(r.dir, tally("BP_Tally"));
+    assert.equal((await r.run(["build"])).code, 0);
+    r.backend.markPublished();
+    // moved into a folder, then the family changes before anything was published
+    mkdirSync(join(r.dir, "src", "Sub"));
+    renameSync(join(r.dir, "src", "Tally.ts"), join(r.dir, "src", "Sub", "Tally.ts"));
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /renamed \/TestMod\/BP_Tally -> \/TestMod\/Sub\/BP_Tally/);
+    writeFileSync(join(r.dir, "src", "Sub", "Tally.ts"), tally("BP_Tally", "ActorComponent"), "utf8");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /recreating \/TestMod\/Sub\/BP_Tally/);
+    assert.equal(readManifest(r.dir, "/TestMod/Sub/BP_Tally")!.renamedFrom, TA, "the recreated asset still knows the path it moved from");
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /deleted Content\/BP_Tally\.uasset/);
+    assert.equal(r.backend.removedFiles.size, 0);
+    assert.equal(readManifest(r.dir, "/TestMod/Sub/BP_Tally")!.renamedFrom, undefined);
   });
 });
