@@ -74,6 +74,14 @@ export class BP_HelloAbfc extends Actor {
 
 It is an Actor Blueprint with an integer variable and one custom event. The test next to it spawns the actor, calls `Bump` twice and expects `Count` to be 2.
 
+A field can also start with a value. A literal initializer (a number, `true` or `false`, a string or an enum value of the field's type) becomes the variable's default in the Blueprint:
+
+```ts
+Speed: float = 2.5;
+```
+
+Change the number and the next `abfc build` updates the default of the existing variable; take the initializer away (`Speed!: float;`) and the default is cleared.
+
 ### Where the asset goes
 
 You never write the asset path. It comes from the folder of the file below `src`: `src\Samples\BP_HelloAbfc.ts` builds `/ExampleMod/Samples/BP_HelloAbfc`, and a file `src\Relays\MyCustomRelay.ts` with `class MyCustomRelay` would build `/ExampleMod/Relays/MyCustomRelay`. A file directly in `src` gives `/ExampleMod/<ClassName>`. Folder and class names may use ASCII letters, digits and `_` only. Moving a file later is a different asset path, which abfc refuses to guess; see [ABFC5012](errors.md#abfc5012).

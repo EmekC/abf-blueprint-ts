@@ -60,7 +60,7 @@ interface FNode {
 
 interface FAsset {
   path: string;
-  variables: Array<{ name: string; type: string }>;
+  variables: Array<{ name: string; type: string; default?: string }>;
   nodes: FNode[];
   /** Set for a UserDefinedStruct: its members as the apply spec gave them. */
   structFields?: Array<{ name: string; type: string }>;
@@ -92,7 +92,8 @@ interface SpecGraph {
 interface Spec {
   asset: string;
   create?: { class: string; parent: string; if_missing?: boolean };
-  variables?: Array<{ name: string; type: string; flags: number }>;
+  variables?: Array<{ name: string; type: string; flags: number; default?: string }>;
+  variable_defaults?: Record<string, string | null>;
   remove_variables?: string[];
   remove_functions?: string[];
   struct_fields?: Array<{ name: string; friendly: string; guid: string; type: string }>;
@@ -147,6 +148,8 @@ export interface FakeBackendOptions {
   reflectDefaults?: boolean;
   /** The class-manager row may carry `gameplay_tag` (`classManagerRowTag`; needs `classManagerRows`; default false). */
   classManagerRowTag?: boolean;
+  /** The backend has the bp_apply feature `variable_defaults` (`variableDefaults` capability; default false). */
+  variableDefaults?: boolean;
 }
 
 const ALL_ASSET_OPS = ["rename", "delete", "reparent", "recreate"];
@@ -250,7 +253,8 @@ function renderAsset(a: FAsset): string {
   const graphs = [...new Set(["EventGraph", ...a.nodes.map((n) => n.graph)])];
   const out = [`Begin Object Class=/Script/Engine.Blueprint Name="${name}" ExportPath="/Script/Engine.Blueprint'${bp}'"`];
   a.variables.forEach((v, i) => {
-    out.push(`   NewVariables(${i})=(VarName="${v.name}",VarType=(${renderVarType(v.type)}),PropertyFlags=0)`);
+    const def = v.default !== undefined ? `,DefaultValue="${v.default.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"` : "";
+    out.push(`   NewVariables(${i})=(VarName="${v.name}",VarType=(${renderVarType(v.type)}),PropertyFlags=0${def})`);
   });
   for (const g of graphs) {
     const nodes = a.nodes.filter((n) => n.graph === g);
@@ -445,6 +449,7 @@ export class FakeBackend implements Backend {
     capabilities.gameplayTags = o.gameplayTags === true;
     capabilities.reflectDefaults = o.reflectDefaults === true;
     capabilities.classManagerRowTag = o.classManagerRowTag === true && o.classManagerRows === true;
+    capabilities.variableDefaults = o.variableDefaults === true;
     if (o.structs === true) capabilities.createKinds = [...capabilities.createKinds, "UserDefinedStruct"];
     if (o.structs === true) capabilities.createKinds = [...capabilities.createKinds, "UserDefinedStruct"];
     this.infoValue = {
@@ -589,6 +594,11 @@ export class FakeBackend implements Backend {
   /** Names of the variables of an asset, in the stage. */
   variableNames(asset: string): string[] {
     return (this.assets.get(asset)?.variables ?? []).map((v) => v.name);
+  }
+
+  /** The default value text of a variable of an asset, in the stage (undefined: none). */
+  variableDefault(asset: string, name: string): string | undefined {
+    return this.assets.get(asset)?.variables.find((v) => v.name === name)?.default;
   }
 
   /** The type of a variable of an asset, in the stage. */
@@ -750,7 +760,13 @@ export class FakeBackend implements Backend {
         a.variables = a.variables.filter((x) => x.name !== name);
       }
       for (const v of spec.variables ?? []) {
-        if (!a.variables.some((x) => x.name === v.name)) a.variables.push({ name: v.name, type: v.type });
+        if (!a.variables.some((x) => x.name === v.name)) a.variables.push({ name: v.name, type: v.type, ...(v.default !== undefined ? { default: v.default } : {}) });
+      }
+      for (const [name, text] of Object.entries(spec.variable_defaults ?? {})) {
+        const x = a.variables.find((y) => y.name === name);
+        if (x === undefined) scripted.push({ asset: spec.asset, message: `cannot set the default of unknown variable ${name}` });
+        else if (text === null) delete x.default;
+        else x.default = text;
       }
       // a function graph is the nodes of that graph name in the fake
       for (const name of spec.remove_functions ?? []) {

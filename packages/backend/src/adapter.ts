@@ -37,7 +37,9 @@ export interface BpApplyAssetSpec {
   create?: { class: "Blueprint" | "WidgetBlueprint"; parent: string; if_missing: true } | { class: "UserDefinedStruct"; if_missing: true };
   /** Fields of a UserDefinedStruct (valid only with `create.class` UserDefinedStruct): `name` is `<friendly>_<index>_<guid>`. */
   struct_fields?: Array<{ name: string; friendly: string; guid: string; type: string }>;
-  variables?: Array<{ name: string; type: string; flags: number }>;
+  variables?: Array<{ name: string; type: string; flags: number; default?: string }>;
+  /** Backend bp_apply feature `variable_defaults`: change (text) or drop (null) the default of an existing variable in place. */
+  variable_defaults?: Record<string, string | null>;
   /** Member variables to delete (TS wins: hand-made ones of a non-hybrid class, and own fields gone from the TS). */
   remove_variables?: string[];
   /** Function graphs to delete (TS wins: hand-made functions of a non-hybrid class). */
@@ -160,6 +162,7 @@ export function renderMainSpec(a: AssetPlan, caps: BackendCapabilities, profile:
       name: v.name,
       type: v.type,
       flags: profile.variableFlags.base | (v.flags.includes("transient") ? profile.variableFlags.transient : 0),
+      ...(v.default !== undefined ? { default: v.default } : {}),
     }));
   }
   const graphs = new Map<string, BpGraphSpec>();
@@ -213,6 +216,7 @@ export function renderMainSpec(a: AssetPlan, caps: BackendCapabilities, profile:
   }
   if ((a.removeVariables?.length ?? 0) > 0) spec.remove_variables = [...a.removeVariables!];
   if ((a.removeFunctions?.length ?? 0) > 0) spec.remove_functions = [...a.removeFunctions!];
+  if (a.variableDefaults !== undefined && Object.keys(a.variableDefaults).length > 0) spec.variable_defaults = { ...a.variableDefaults };
   spec.graphs = [...graphs.values()];
   return spec;
 }
@@ -415,7 +419,7 @@ export async function applyPlan(
 ): Promise<ApplyOutcome> {
   if (plan.assets.length === 0) return { ok: true, perAsset: [] };
   // Assets that only carry class defaults have no graph work: they take part in pass 5 only (new own fields still go through the main spec).
-  const planned = plan.assets.filter((a) => a.create !== undefined || a.struct !== undefined || a.units.length > 0 || a.variables.length > 0 || (a.removeUnits?.length ?? 0) > 0 || (a.removeTags?.length ?? 0) > 0 || (a.removeGraphNodes?.length ?? 0) > 0 || (a.removeVariables?.length ?? 0) > 0 || (a.removeFunctions?.length ?? 0) > 0);
+  const planned = plan.assets.filter((a) => a.create !== undefined || a.struct !== undefined || a.units.length > 0 || a.variables.length > 0 || (a.removeUnits?.length ?? 0) > 0 || (a.removeTags?.length ?? 0) > 0 || (a.removeGraphNodes?.length ?? 0) > 0 || (a.removeVariables?.length ?? 0) > 0 || (a.removeFunctions?.length ?? 0) > 0 || Object.keys(a.variableDefaults ?? {}).length > 0);
   if (planned.length === 0) {
     const only: AssetApplyOutcome[] = plan.assets.map((a) => ({ asset: a.asset, nodeIds: {}, finalText: null, compile: [], tagName: null, tagNames: {}, defaultsApplied: false, defaultsWarnings: [] }));
     const added = await applyDefaultsPass(backend, plan, only, caps, o);

@@ -10,6 +10,7 @@ abfc uses semantic versioning for its command-line surface: the commands, their 
 
 ### Added
 
+- Own fields may have a literal initializer (`Speed: float = 2.5`); it becomes the Blueprint variable's default and changing it updates the default in place (backend feature `variable_defaults`, else warning ABFC2084).
 - Derived asset paths: a class gets its Blueprint asset path from its file and class name, with the `path:` keep-path quick fix (ABFC5012) for a moved file.
 - `@mod/` imports for classes of the mod being built.
 - Schema-2 `abf.config.json` and a user config file; `abfc init` creates a project and upgrades a schema-1 config.

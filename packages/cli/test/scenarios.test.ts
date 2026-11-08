@@ -454,3 +454,71 @@ test("(S19) adding a field adds a variable; removing it removes the variable (AB
     assert.equal(appliedSpecs(r).length, before);
   });
 });
+
+test("(S19b) a field initializer becomes the variable default; changing it updates the default in place; removing it clears it", async () => {
+  await withRig({ ...OPS, variableDefaults: true }, async (r) => {
+    const base = tally("BP_Tally").replace("import type { int }", "import type { int, float }");
+    tallyOnly(r.dir, base);
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+
+    const write = (fields: string): void =>
+      writeFileSync(join(r.dir, "src", "Tally.ts"), base.replace("  Total!: int;", `  Total!: int;\n${fields}`), "utf8");
+
+    write("  Speed: float = 2.5;\n  Armed: boolean = true;");
+    let before = appliedSpecs(r).length;
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(r.backend.variableDefault(TA, "Speed"), "2.5");
+    assert.equal(r.backend.variableDefault(TA, "Armed"), "true");
+    assert.equal(r.backend.variableDefault(TA, "Total"), undefined);
+    const added = appliedSpecs(r).slice(before).filter((s) => s.asset === TA);
+    assert.ok(added.some((s) => (s.variables ?? []).some((v: any) => v.name === "Speed" && v.default === "2.5")), JSON.stringify(added));
+    assert.ok(added.some((s) => (s.variables ?? []).some((v: any) => v.name === "Armed" && v.default === "true")), JSON.stringify(added));
+    assert.equal(readManifest(r.dir, TA)?.variables.find((v) => v.name === "Speed")?.default, "2.5");
+    x = await r.run(["build"]);
+    assert.match(x.out, /up to date/);
+
+    write("  Speed: float = 4;\n  Armed: boolean = true;");
+    before = appliedSpecs(r).length;
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    let specs = appliedSpecs(r).slice(before).filter((s) => s.asset === TA);
+    assert.ok(specs.some((s) => s.variable_defaults?.Speed === "4"), JSON.stringify(specs));
+    assert.ok(specs.every((s) => !(s.variables ?? []).some((v: any) => v.name === "Speed") && !(s.remove_variables ?? []).includes("Speed")), JSON.stringify(specs));
+    assert.equal(r.backend.variableDefault(TA, "Speed"), "4");
+    assert.equal(r.backend.variableDefault(TA, "Armed"), "true");
+    assert.equal(readManifest(r.dir, TA)?.variables.find((v) => v.name === "Speed")?.default, "4");
+    x = await r.run(["build"]);
+    assert.match(x.out, /up to date/);
+
+    write("  Speed!: float;\n  Armed: boolean = true;");
+    before = appliedSpecs(r).length;
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    specs = appliedSpecs(r).slice(before).filter((s) => s.asset === TA);
+    assert.ok(specs.some((s) => s.variable_defaults?.Speed === null), JSON.stringify(specs));
+    assert.equal(r.backend.variableDefault(TA, "Speed"), undefined);
+    assert.equal("default" in (readManifest(r.dir, TA)?.variables.find((v) => v.name === "Speed") ?? {}), false);
+    x = await r.run(["build"]);
+    assert.match(x.out, /up to date/);
+  });
+});
+
+test("(S19c) a backend without variable_defaults warns ABFC2084 for a changed default and leaves it as it is", async () => {
+  await withRig({ ...OPS }, async (r) => {
+    const base = tally("BP_Tally").replace("import type { int }", "import type { int, float }");
+    tallyOnly(r.dir, base);
+    const write = (fields: string): void =>
+      writeFileSync(join(r.dir, "src", "Tally.ts"), base.replace("  Total!: int;", `  Total!: int;\n${fields}`), "utf8");
+    write("  Speed: float = 2.5;");
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(r.backend.variableDefault(TA, "Speed"), "2.5", "a new variable carries its default without the capability");
+    write("  Speed: float = 4;");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC2084: .*Speed/);
+    assert.equal(r.backend.variableDefault(TA, "Speed"), "2.5");
+  });
+});

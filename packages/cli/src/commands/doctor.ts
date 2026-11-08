@@ -222,7 +222,7 @@ function printInfo(ctx: CliContext, info: BackendInfo): void {
   output.info(`  warm session: ${yn(c.warmSession)}, stage audit: ${yn(c.stageAudit)}, class-manager rows: ${yn(c.classManagerRows)}`);
   output.info(
     `  backend capabilities: asset ops: ${c.assetOps.length > 0 ? c.assetOps.join("/") : "no"}, publish deletions: ${yn(c.publishDeletes)}, ` +
-      `gameplay tags: ${yn(c.gameplayTags)}, reflect defaults: ${yn(c.reflectDefaults)}, class-manager row tag: ${yn(c.classManagerRowTag)} ` +
+      `gameplay tags: ${yn(c.gameplayTags)}, reflect defaults: ${yn(c.reflectDefaults)}, class-manager row tag: ${yn(c.classManagerRowTag)}, variable defaults: ${yn(c.variableDefaults)} ` +
       `(recommended server ${RECOMMENDED_BACKEND_VERSION})`,
   );
   output.info(`  extensions: ${info.extensions.length > 0 ? info.extensions.join(", ") : "(none)"}`);

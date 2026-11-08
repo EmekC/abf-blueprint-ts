@@ -89,7 +89,7 @@ Warnings and errors from the backend check use the codes below. `abfc doctor` ex
 | `capabilities.classManagerRows` | backend 2.5.0 or newer: `bp_apply` accepts the `class_manager_row` key, so `@director("RowName")` writes the class-manager row asset; without it the build warns and writes no row |
 | `capabilities.functionLocals` | always `false` today; abfc hoists temporaries into owned member variables instead |
 | `capabilities.userPureFunctions` | always `false` today; getters are impure functions |
-| `bpApply.features` | per-feature gates, for example `event_meta` (event tooltips, ABFC2071) and `self_event_calls` (ABFC4013) |
+| `bpApply.features` | per-feature gates, for example `event_meta` (event tooltips, ABFC2071), `self_event_calls` (ABFC4013) and `variable_defaults` (changing the default of an existing variable in place, ABFC2084) |
 | `class_manager_row` (`bp_apply` key, backend 2.5.0) | the row name from `@director`; the backend creates the row asset in the class-manager table of the mod if it is missing, with only the row name and the class reference set (no game-specific values), and updates the class reference otherwise |
 
 ## Diagnostics
