@@ -218,7 +218,7 @@ describe("exceptions", () => {
     assert.equal(committed.length, 1);
     assert.deepEqual(
       { rule: committed[0].rule, artifact: committed[0].artifact, entry: committed[0].entry, context: committed[0].context },
-      { rule: "name", artifact: "installer", entry: "abfc-setup-<version>.exe", context: "8d8384bf570c" },
+      { rule: "name", artifact: "installer", entry: "abfc-setup-<version>.exe", context: "41cc137abde8" },
     );
   });
 });
