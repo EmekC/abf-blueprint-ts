@@ -97,7 +97,9 @@ function isIntermediate(n: T3dNode): boolean {
  * they are not, and the backend cannot address them as graphs. Only nodes of this kind are ever swept.
  */
 function isGraphContent(n: T3dNode): boolean {
-  return n.cls.includes("/Script/BlueprintGraph.") || n.cls.endsWith("EdGraphNode_Comment");
+  // Judged by the short class name: K2 nodes also live in other editor modules (UMGEditor, EnhancedInputEditor, GameplayTasksEditor, ...).
+  const short = n.cls.slice(n.cls.lastIndexOf(".") + 1);
+  return short.startsWith("K2Node_") || short === "EdGraphNode_Comment";
 }
 
 /** Does the asset's class defaults pass need to run (hash or stage changed)? */

@@ -153,6 +153,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     owned: new Set(owned.map((a) => a.path)),
     manifests: listManifests(projectDir),
     assetOps: caps.assetOps,
+    directorRows: owned.flatMap((a) => (a.director !== undefined ? [a.director.asset] : [])),
   });
   rec.record("build.assetOps", since(tOps), assetOpsOutcome.ok);
   if (!assetOpsOutcome.ok) return false;

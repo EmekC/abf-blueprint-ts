@@ -10,6 +10,13 @@ const RESERVED = new Set([
   "eval", "export", "extends", "false", "finally", "for", "function", "if", "implements", "import", "in", "Infinity", "instanceof",
   "interface", "let", "NaN", "new", "null", "package", "private", "protected", "public", "return", "static", "super", "switch", "this",
   "throw", "true", "try", "typeof", "undefined", "var", "void", "while", "with", "yield", "globalThis",
+  // Globals of the ES2023 lib: `declare const Map` would merge with the lib's declaration (and `Map.Foo` would not type-check).
+  "AggregateError", "Array", "ArrayBuffer", "Atomics", "BigInt", "BigInt64Array", "BigUint64Array", "Boolean", "DataView", "Date",
+  "decodeURI", "decodeURIComponent", "encodeURI", "encodeURIComponent", "Error", "escape", "EvalError", "FinalizationRegistry",
+  "Float32Array", "Float64Array", "Function", "Int16Array", "Int32Array", "Int8Array", "isFinite", "isNaN", "Iterator", "JSON", "Map",
+  "Math", "Number", "Object", "parseFloat", "parseInt", "Promise", "Proxy", "RangeError", "ReferenceError", "Reflect", "RegExp", "Set",
+  "SharedArrayBuffer", "String", "Symbol", "SyntaxError", "TypeError", "Uint16Array", "Uint32Array", "Uint8Array", "Uint8ClampedArray",
+  "unescape", "URIError", "WeakMap", "WeakRef", "WeakSet",
 ]);
 
 const byText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);

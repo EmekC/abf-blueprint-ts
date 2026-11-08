@@ -211,7 +211,9 @@ async function reflectAndRead(ctx: CliContext, backend: Backend): Promise<number
     layout?.testkitDts ?? declarationOf("@abfc/testkit"),
     layout?.irDts,
   );
-  refreshTagsFile(ctx, []);
+  // The stage's own ini tags replace the old file's tags: a tag removed from the stage and the mod leaves tags.d.ts.
+  const stageNow = await backend.stageStatus(mod).catch(() => null);
+  refreshTagsFile(ctx, [], { stagingPath: stageNow?.stagingPath ?? null });
   recordRun(paths.runsFile, { at: at(), step: "stubs.emit", seconds: (clock() - t2) / 1000, ok: true, units: files.size, mode: "cold" });
 
   output.info(`stubs written to ${profileDir}`);

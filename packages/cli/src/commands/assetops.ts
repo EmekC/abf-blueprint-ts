@@ -70,6 +70,8 @@ export async function runAssetOps(
     owned: ReadonlySet<string>;
     manifests: readonly Manifest[];
     assetOps: readonly string[];
+    /** The class-manager rows the IR's current `@director`s name (a row that went back to its old value is in use again). */
+    directorRows?: readonly string[];
   },
 ): Promise<AssetOpsOutcome> {
   const { projectDir, paths, output } = ctx;
@@ -102,7 +104,10 @@ export async function runAssetOps(
   const repeatedRows = repeatedDeletes.flatMap((m) => (m.directorRow !== undefined && exists(m.directorRow) ? [m.directorRow] : []));
   // A row retired by a changed @director that is back on the stage (re-sync before the publish that deletes it): deleted again, unless a
   // class uses it (as its current row) or it is already deleted in this call.
-  const inUse = new Set(o.manifests.filter((m) => m.deleted !== true && m.directorRow !== undefined).map((m) => lower(m.directorRow!)));
+  const inUse = new Set([
+    ...o.manifests.filter((m) => m.deleted !== true && m.directorRow !== undefined).map((m) => lower(m.directorRow!)),
+    ...(o.directorRows ?? []).map(lower),
+  ]);
   const already = new Set([...rowDeletes.map((r) => r.row), ...repeatedRows].map(lower));
   const retiredAgain = [
     ...new Set(o.manifests.flatMap((m) => (can("delete") && m.deleted !== true ? (m.retiredRows ?? []).filter((row) => exists(row) && !inUse.has(lower(row)) && !already.has(lower(row))) : []))),

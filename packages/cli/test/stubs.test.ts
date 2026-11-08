@@ -211,6 +211,27 @@ test("abfc stubs: a backend without gameplayTags warns ABFC3012 and writes a tag
   }
 });
 
+test("abfc stubs: a stage-only tag comes from the stage's Config/Tags ini and leaves tags.d.ts once the stage no longer has it", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-stubs-"));
+  try {
+    const fake = setup(tmp, []);
+    const stageIni = "C:\\Stage\\Config\\Tags\\StageTags.ini";
+    fake.files[stageIni] = '[/Script/GameplayTags.GameplayTagsSettings]\r\n+GameplayTagList=(Tag="Stage.Only.Tag",DevComment="")\r\n';
+    const first = captureDeps(fake, () => fakeBackend(true, [], []));
+    first.deps.cwd = tmp;
+    assert.equal(await main(["stubs"], first.deps), 0, first.text());
+    const file = join(tmp, ".abfc", "tags.d.ts");
+    assert.match(readFileSync(file, "utf8"), /"Stage.Only.Tag": true/);
+    delete fake.files[stageIni];
+    const second = captureDeps(fake, () => fakeBackend(true, [], []));
+    second.deps.cwd = tmp;
+    assert.equal(await main(["stubs"], second.deps), 0, second.text());
+    assert.doesNotMatch(readFileSync(file, "utf8"), /Stage.Only.Tag/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 test("abfc stubs: an explicit mod asset list reads only those assets; scriptModules warns ABFC3010", async () => {
   const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-stubs-"));
   try {

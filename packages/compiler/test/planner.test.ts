@@ -847,16 +847,17 @@ test("TS wins, non-hybrid: components (SimpleConstructionScript), designer widge
   assert.deepEqual([...parsed.nodes.values()].map((n) => n.graph).sort(), ["Fade_Template", "SimpleConstructionScript", "WidgetTree"]);
   const snapshot = new Map(parsed.nodes);
   const hand = node("HAND_1", CALL, []);
+  const umg = node("HAND_UMG", "/Script/UMGEditor.K2Node_CreateWidget", []); // a K2 node of another editor module is a graph node too
   const r = planBuild(ir, {
     manifests: new Map([[asset, manifestOf()]]),
-    snapshots: new Map([[asset, new Map([...snapshot, [hand.name, hand]])]]),
+    snapshots: new Map([[asset, new Map([...snapshot, [hand.name, hand], [umg.name, umg]])]]),
     stage,
     handMadeUnits: new Map(),
     snapshotVariables: new Map([[asset, []]]),
     snapshotVariableTypes: new Map([[asset, new Map()]]),
   });
   const a = r.plan.assets[0]!;
-  assert.deepEqual(a.removeGraphNodes, [{ graph: "EventGraph", nodes: ["HAND_1"] }]); // only the real graph node goes
+  assert.deepEqual(a.removeGraphNodes, [{ graph: "EventGraph", nodes: ["HAND_1", "HAND_UMG"] }]); // only the real graph nodes go
   assert.equal(a.removeFunctions, undefined);
   const only = planBuild(ir, {
     manifests: new Map([[asset, manifestOf()]]),

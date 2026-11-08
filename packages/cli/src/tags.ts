@@ -27,8 +27,14 @@ export function iniTagsOf(host: CliContext["deps"]["host"], modDir: string | nul
 /**
  * Rewrites `.abfc/tags.d.ts` from the stored game list, the mod's ini tags and `added` (tags the last apply put into the stage's
  * list, which reach the mod only with `abfc publish`). Tags already in the file stay, so a stage-only tag does not vanish on the next build.
+ * `abfc stubs` passes `stagingPath` instead: it rebuilds the file from the game list, the mod's ini and the stage's own
+ * `Config/Tags/*.ini` (where a stage-only tag lives), so a tag that was removed everywhere also leaves the file. An empty or null
+ * `stagingPath` (no stage, or a backend that does not report it) then adds no stage tags.
  */
-export function refreshTagsFile(ctx: CliContext, added: string[]): void {
+export function refreshTagsFile(ctx: CliContext, added: string[], o: { stagingPath?: string | null } = {}): void {
   const game = readGameTags(win32.join(ctx.paths.stubsDir, ctx.env.profile.id));
-  writeTagsFile(ctx.projectDir, game, [...modIniTags(ctx), ...readTagsFileTags(ctx.projectDir), ...added]);
+  const fromStubs = o.stagingPath !== undefined;
+  const sp = o.stagingPath ?? "";
+  const stage = fromStubs && sp !== "" ? iniTagsOf(ctx.deps.host, sp) : [];
+  writeTagsFile(ctx.projectDir, game, [...modIniTags(ctx), ...(fromStubs ? stage : readTagsFileTags(ctx.projectDir)), ...added]);
 }
