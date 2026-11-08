@@ -233,6 +233,8 @@ Prints `abfc <version> (<exe|source install>, node <version>)` and exits 0. It w
 | `--version` | `abfc --version` only |
 | `--stdio`, `--clientProcessId` | lsp (accepted, ignored) |
 
+`build`, `test`, `publish`, `status`, `stubs` and `adopt` run one at a time per project: a second one started while the first is running stops with [ABFC4019](errors.md#abfc4019) before it touches the backend (the lock is `.abfc/lock.json`; a lock of a crashed run is replaced automatically).
+
 A flag the command does not use is ignored, except for the three that are refused with a usage error: `--drift` outside `build`, `--keep-failed-stage` outside `build`, `test` and `publish`, and `--watch` with `--json`. An unknown option is a usage error too.
 
 ## Exit codes

@@ -46,7 +46,7 @@ example-mod-ts/                   # TS project, its own git repo, linked to exac
   .vscode/tasks.json, extensions.json   # written by abfc init when absent
 ```
 
-No `package.json` and no `node_modules` are needed: the types of `@abfc/runtime` and `@abfc/testkit` come from the abfc install through `.abfc/tsconfig.paths.json` (section 18.8). A source install (npm or git) works the same way. `abfc init` (section 18.5) writes `.gitignore` with `.abfc/stubs/`, `.abfc/cache/`, `.abfc/sourcemap/`, `.abfc/sourcemaps/`, `.abfc/reports/`, `.abfc/runs.jsonl`, `.abfc/tsconfig.paths.json`, `node_modules/`.
+No `package.json` and no `node_modules` are needed: the types of `@abfc/runtime` and `@abfc/testkit` come from the abfc install through `.abfc/tsconfig.paths.json` (section 18.8). A source install (npm or git) works the same way. `abfc init` (section 18.5) writes `.gitignore` with `.abfc/stubs/`, `.abfc/cache/`, `.abfc/sourcemap/`, `.abfc/sourcemaps/`, `.abfc/reports/`, `.abfc/runs.jsonl`, `.abfc/lock.json`, `.abfc/tsconfig.paths.json`, `node_modules/`.
 
 ### 2.2 `abf.config.json` (project, committed)
 

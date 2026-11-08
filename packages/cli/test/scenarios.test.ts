@@ -1,7 +1,8 @@
 // "Careless modder" scenarios on the fake backend: the regression tests of the live scenario runs (see docs/known-issues.md).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readManifest, readSourceMap } from "@abfc/compiler";
 import { OPS, TA, addParentStubs, tally, tallyOnly, withRig } from "./rig.js";
@@ -839,5 +840,76 @@ test("(S27d) a deeper sourceRoot renames every class", async () => {
     assert.equal(x.code, 0, x.out);
     assert.match(x.out, /up to date/);
     assert.equal(r.backend.assetOpsCalls.length, 1);
+  });
+});
+
+const lockPath = (dir: string): string => join(dir, ".abfc", "lock.json");
+const writeLockFile = (dir: string, pid: number, startedAt = "2026-01-02T03:00:00.000Z", command = "build"): void => {
+  mkdirSync(join(dir, ".abfc"), { recursive: true });
+  writeFileSync(lockPath(dir), JSON.stringify({ pid, command, startedAt }), "utf8");
+};
+/** The id of a process that has already ended. */
+const deadPid = (): number => {
+  const r = spawnSync(process.execPath, ["-e", ""]);
+  assert.ok(r.pid !== undefined && r.pid > 0);
+  return r.pid;
+};
+
+test("(S29) a second run while the lock is held is ABFC4019; a stale lock is replaced", async () => {
+  await withRig({}, async (r) => {
+    tallyOnly(r.dir, tally("BP_Tally"));
+    // A normal run takes the lock and removes it again (also when it fails).
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.ok(!existsSync(lockPath(r.dir)), "the lock stays after a finished run");
+
+    // Held by a live process (this one): the run stops before the backend starts and leaves the lock alone.
+    const startedBefore = r.started.count;
+    writeLockFile(r.dir, process.pid);
+    for (const cmd of ["build", "status", "publish", "stubs", "adopt", "test"]) {
+      x = await r.run([cmd]);
+      assert.equal(x.code, 2, `${cmd}: ${x.out}`);
+      assert.ok(
+        x.out.includes(`ABFC4019: another abfc build is running in this project (process ${process.pid}, since 2026-01-02T03:00:00.000Z)`),
+        `${cmd}: ${x.out}`,
+      );
+    }
+    assert.equal(r.started.count, startedBefore, "the backend was started");
+    assert.ok(existsSync(lockPath(r.dir)), "the lock of the other run was removed");
+    // check and doctor do not take the lock.
+    x = await r.run(["check"]);
+    assert.equal(x.code, 0, x.out);
+
+    // A dead process: the lock is replaced silently and the run works.
+    writeLockFile(r.dir, deadPid());
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC4019/);
+    assert.ok(!existsSync(lockPath(r.dir)));
+
+    // A live id but a lock older than the age limit (a reused id after a crash) is stale too.
+    writeLockFile(r.dir, process.pid);
+    const old = new Date(Date.now() - 13 * 60 * 60 * 1000);
+    utimesSync(lockPath(r.dir), old, old);
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.ok(!existsSync(lockPath(r.dir)));
+
+    // An unreadable lock file: held while young, replaced when old.
+    mkdirSync(join(r.dir, ".abfc"), { recursive: true });
+    writeFileSync(lockPath(r.dir), "{ not json", "utf8");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 2, x.out);
+    assert.match(x.out, /ABFC4019: another abfc run is running/);
+    utimesSync(lockPath(r.dir), old, old);
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.ok(!existsSync(lockPath(r.dir)));
+
+    // A failing run removes its lock as well.
+    setConfig(r.dir, { mod: { name: "NoSuchMod" } });
+    x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.ok(!existsSync(lockPath(r.dir)), "the lock stays after a failed run");
   });
 });

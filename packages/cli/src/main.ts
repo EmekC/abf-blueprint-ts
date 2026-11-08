@@ -14,6 +14,8 @@ import { stubs } from "./commands/stubs.js";
 import { test } from "./commands/test.js";
 import { loadContext } from "./context.js";
 import type { CliContext, CliDeps } from "./context.js";
+import { acquireProjectLock, LOCKED_COMMANDS } from "./lock.js";
+import type { ProjectLock } from "./lock.js";
 import { Output } from "./output.js";
 import { ABFC_VERSION } from "./version.js";
 
@@ -125,8 +127,10 @@ export async function main(argv: string[], deps: CliDeps = defaultDeps()): Promi
   }
 
   let ctx: CliContext | null = null;
+  let lock: ProjectLock | null = null;
   try {
     ctx = loadContext(args, deps);
+    if (LOCKED_COMMANDS.includes(command)) lock = acquireProjectLock(ctx.projectDir, command, deps.now());
     await run(ctx);
     return ctx.output.finish();
   } catch (e) {
@@ -151,5 +155,7 @@ export async function main(argv: string[], deps: CliDeps = defaultDeps()): Promi
     });
     output.finish();
     return 2;
+  } finally {
+    lock?.release();
   }
 }

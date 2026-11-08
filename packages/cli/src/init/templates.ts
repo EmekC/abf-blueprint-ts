@@ -52,6 +52,7 @@ export const GITIGNORE_LINES: readonly string[] = [
   ".abfc/sourcemaps/",
   ".abfc/reports/",
   ".abfc/runs.jsonl",
+  ".abfc/lock.json",
   ".abfc/tsconfig.paths.json",
   ".abfc/tags.d.ts",
   "node_modules/",

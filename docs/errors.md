@@ -1015,6 +1015,16 @@ Typical cause: a source install with an old abf-mod-editor-mcp checkout.
 
 Fix: update the checkout to tag `v2.6.0` or newer, or use `abfc.exe`, which bundles a current backend. See [backend.md](backend.md).
 
+### ABFC4019
+
+Severity: error · Exit: 2
+
+Meaning: another `abfc build`, `test`, `publish`, `status`, `stubs` or `adopt` is running in the same project, so this run stopped before it started the backend. Two runs at once would write the same staged copy and the same manifests (a test with two builds at once showed one of them failing with a file-in-use error from the backend, and the stage copy being written by both). The message names the other run's command, process id and start time. abfc keeps the lock in `.abfc/lock.json` (listed in the `.gitignore` that `abfc init` writes); `abfc check`, `abfc doctor`, `abfc init` and the language server do not use it.
+
+Typical cause: a build started from the editor's task while a build in a terminal was still running, or two terminals.
+
+Fix: wait until the other run has finished, then run the command again. A lock left by a run that was killed is detected (its process no longer exists) and replaced by the next run, as is a lock older than 12 hours or an unreadable one older than 30 seconds. Only if abfc still reports a run that is certainly gone, delete `.abfc/lock.json`.
+
 ### ABFC4020
 
 Severity: warning (`abfc status`); error · Exit: 2 (only if the conflict remains after the staged copy was made again)
