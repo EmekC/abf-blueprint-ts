@@ -683,6 +683,15 @@ export class FakeBackend implements Backend {
     }
 
     (specs as Spec[]).forEach((spec, i) => {
+      // like Unreal: a class that a spec names must exist (created by an earlier spec of the call) or loading it fails
+      if (specError === null) {
+        const text = JSON.stringify(spec).toLowerCase();
+        for (const later of (specs as Spec[]).slice(i + 1)) {
+          if (later.create !== undefined && !work.has(later.asset) && text.includes(later.asset.toLowerCase() + ".")) {
+            specError = `RuntimeError: class ${later.asset}.${later.asset.split("/").pop()}_C is None`;
+          }
+        }
+      }
       if (!work.has(spec.asset) && spec.create !== undefined) {
         work.set(spec.asset, { path: spec.asset, variables: [], nodes: [], ...(spec.create.parent ? { parent: spec.create.parent } : {}) });
       }

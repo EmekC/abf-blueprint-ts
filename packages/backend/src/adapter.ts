@@ -380,6 +380,31 @@ async function applyDefaultsPass(backend: Backend, plan: ApplyPlan, perAsset: As
   return r.ok ? r.tagsAdded ?? [] : [];
 }
 
+/**
+ * Stable dependency order of specs: an asset comes after every other asset of the call whose path its spec mentions
+ * (`/Mod/Dir/Name.Name_C` in a variable type or node class, `/Mod/Dir/Name` as a parent). Assets in a cycle keep their relative order.
+ */
+export function dependencyOrder(items: Array<{ path: string; text: string }>): number[] {
+  const lower = items.map((x) => x.text.toLowerCase());
+  const mentions = (i: number, j: number): boolean => {
+    const p = items[j]!.path.toLowerCase();
+    for (const end of ['.', '"']) {
+      if (lower[i]!.includes(p + end)) return true;
+    }
+    return false;
+  };
+  const deps = items.map((_, i) => new Set(items.map((_, j) => j).filter((j) => j !== i && mentions(i, j))));
+  const out: number[] = [];
+  const done = new Set<number>();
+  while (out.length < items.length) {
+    let pick = items.findIndex((_, i) => !done.has(i) && [...deps[i]!].every((j) => done.has(j)));
+    if (pick < 0) pick = items.findIndex((_, i) => !done.has(i));
+    done.add(pick);
+    out.push(pick);
+  }
+  return out;
+}
+
 /** Applies the plan: one main pass (native pin types, or the two-phase fallback), then the tag pass, then the class-defaults pass (pass 5). */
 export async function applyPlan(
   backend: Backend,
@@ -390,13 +415,18 @@ export async function applyPlan(
 ): Promise<ApplyOutcome> {
   if (plan.assets.length === 0) return { ok: true, perAsset: [] };
   // Assets that only carry class defaults have no graph work: they take part in pass 5 only (new own fields still go through the main spec).
-  const unitAssets = plan.assets.filter((a) => a.create !== undefined || a.struct !== undefined || a.units.length > 0 || a.variables.length > 0 || (a.removeUnits?.length ?? 0) > 0 || (a.removeTags?.length ?? 0) > 0 || (a.removeGraphNodes?.length ?? 0) > 0 || (a.removeVariables?.length ?? 0) > 0 || (a.removeFunctions?.length ?? 0) > 0);
-  if (unitAssets.length === 0) {
+  const planned = plan.assets.filter((a) => a.create !== undefined || a.struct !== undefined || a.units.length > 0 || a.variables.length > 0 || (a.removeUnits?.length ?? 0) > 0 || (a.removeTags?.length ?? 0) > 0 || (a.removeGraphNodes?.length ?? 0) > 0 || (a.removeVariables?.length ?? 0) > 0 || (a.removeFunctions?.length ?? 0) > 0);
+  if (planned.length === 0) {
     const only: AssetApplyOutcome[] = plan.assets.map((a) => ({ asset: a.asset, nodeIds: {}, finalText: null, compile: [], tagName: null, tagNames: {}, defaultsApplied: false, defaultsWarnings: [] }));
     const added = await applyDefaultsPass(backend, plan, only, caps, o);
     return { ok: true, perAsset: only, ...(added.length > 0 ? { tagsAdded: added } : {}) };
   }
-  const specs =unitAssets.map((a) => renderMainSpec(a, caps, profile));
+  // The backend applies the specs in order and an asset names the classes it uses (variable types, call and cast nodes, the parent) by path:
+  // a class that is created in this very call must come before every asset that uses it.
+  const rendered = planned.map((a) => renderMainSpec(a, caps, profile));
+  const order = dependencyOrder(rendered.map((spec) => ({ path: spec.asset, text: JSON.stringify(spec) })));
+  const unitAssets = order.map((i) => planned[i]!);
+  const specs = order.map((i) => rendered[i]!);
   const refs = unitAssets.map((a, i) => patchRefs(a, specs[i]!, caps, profile));
   const needsFallback = !caps.pinTypes && refs.some((r) => r.length > 0);
 
