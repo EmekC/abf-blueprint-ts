@@ -61,7 +61,8 @@ export type SemanticTag =
   | { k: "call"; class?: string; function: string } | { k: "get" | "set"; name: string; class?: string }
   | { k: "event"; name: string; params?: IrParam[]; meta?: EventMeta } | { k: "override"; class: string; function: string }
   | { k: "branch" } | { k: "sequence" } | { k: "cast"; target: string } | { k: "self" }
-  | { k: "spawn" } | { k: "create_widget" } | { k: "call_dispatcher" | "bind_dispatcher"; name: string };
+  | { k: "spawn" } | { k: "create_widget" } | { k: "call_dispatcher" | "bind_dispatcher"; name: string }
+  | { k: "std_macro"; name: string };
 export type IrWire = [from: `${string}.${string}`, to: `${string}.${string}`]; // output first; "entry"/"result" reserved
 
 export interface Diagnostic {
@@ -99,6 +100,8 @@ export interface BackendCapabilities {
   warmSession: boolean; // can keep one editor process across operations
   /** The backend can type wildcard pins natively (`pin_types` on bp_apply nodes). */
   pinTypes: boolean;
+  /** bp_apply node kind `std_macro` (engine StandardMacros instances) AND pinTypes: loops lower to ForEachLoop/ForLoop. */
+  stdMacros: boolean;
   /** The backend types a cast's `Object` input pin itself (`cast_object_pin`). */
   castObjectPin: boolean;
   /** bp_apply feature `self_event_calls`: a self call to a custom event added in the same apply gets real pins. */

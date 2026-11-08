@@ -7,12 +7,13 @@ import type { LoadedProgram } from "./frontend/program.js";
 import { compileTests } from "./frontend/tests.js";
 import type { HirProgram } from "./hir.js";
 import { lower } from "./lower/index.js";
+import type { LowerOptions } from "./lower/index.js";
 import { listManifests } from "./ownership/manifest.js";
 import { movedClassDiagnostics } from "./ownership/moved.js";
 
 /** HIR -> IR, then IR validation. A validation problem is an ABFC2099 error and `ir` is null. */
-export function lowerChecked(hir: HirProgram, profile: Profile): { ir: IrModule | null; diagnostics: Diagnostic[] } {
-  const ir = lower(hir, profile);
+export function lowerChecked(hir: HirProgram, profile: Profile, opts?: LowerOptions): { ir: IrModule | null; diagnostics: Diagnostic[] } {
+  const ir = lower(hir, profile, opts);
   const problems = validateIrModule(ir);
   const diagnostics: Diagnostic[] = [];
   for (const p of problems) {

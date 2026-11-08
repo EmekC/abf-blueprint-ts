@@ -33,7 +33,7 @@ const CLS = profile.nodeClasses;
 export const RELAY_ASSET = "/TestMod/Relay/BP_Relay";
 
 const EXT_FEATURES = ["reflect", "compile_node_refs", "bp_read_seconds"];
-const EXEC_PINS = new Set(["execute", "then", "else", "CastFailed", "NotValid", "Valid", "Completed", "LoopBody"]);
+const EXEC_PINS = new Set(["execute", "then", "else", "CastFailed", "NotValid", "Valid", "Completed", "LoopBody", "Exec"]);
 
 interface FPin {
   id: string;
@@ -123,6 +123,8 @@ export interface FakeBackendOptions {
   stageAudit?: boolean;
   /** The initial asset also holds a hand-made engine override event (`ReceiveTick`, calling HideAll). */
   overrideEvent?: boolean;
+  /** Advertise the `std_macro` node kind (default: true only with `backendInfo`). */
+  stdMacros?: boolean;
   /** The initial asset also holds the unlinked node `SPARE_NODE` (to be removed with `--remove-node`). */
   spareNode?: boolean;
   /**
@@ -448,6 +450,7 @@ export class FakeBackend implements Backend {
     this.root = mkdtempSync(join(tmpdir(), "abfc-fake-backend-"));
     const tools = withInfo ? ALL_TOOLS : ALL_TOOLS.filter((t) => t !== "backend_info");
     const capabilities = capabilitiesFrom(tools, withInfo ? (fixInfo() as RawBackendInfo) : null, { features: EXT_FEATURES });
+    capabilities.stdMacros = o.stdMacros ?? capabilities.stdMacros;
     capabilities.stageAudit = o.stageAudit === true;
     capabilities.selfEventCalls = o.selfEventCalls !== false || o.advertiseSelfEventCalls === true;
     capabilities.eventMeta = o.eventMeta === true;
@@ -1040,6 +1043,8 @@ export class FakeBackend implements Backend {
         return CLS.branch;
       case "cast":
         return CLS.dynamicCast;
+      case "std_macro":
+        return "/Script/BlueprintGraph.K2Node_MacroInstance";
       case "node":
         return s.class ?? "";
       default:
@@ -1060,11 +1065,18 @@ export class FakeBackend implements Backend {
       head.push(`CustomFunctionName="${s.name ?? ""}"`);
     } else if (s.k === "cast") {
       head.push(`TargetType="${s.target ?? ""}"`);
+    } else if (s.k === "std_macro") {
+      const asset = "/Engine/EditorBlueprintResources/StandardMacros.StandardMacros";
+      head.push(`MacroGraphReference=(MacroGraph="/Script/Engine.EdGraph'${asset}:${s.name ?? ""}'",GraphBlueprint="/Script/Engine.Blueprint'${asset}'")`);
     } else {
       head.push(...(s.props ?? []));
     }
     const node: FNode = { name: `${shortOf(cls)}_${++this.counter}`, cls, graph, head, pins: [] };
     for (const w of wildcardPins(cls)) wildcardPin(getPin(node, w.name, w.dir), w.container);
+    if (s.k === "std_macro" && s.name === "ForEachLoop") {
+      wildcardPin(getPin(node, "Array", "in"), "Array");
+      wildcardPin(getPin(node, "Array Element", "out"), "None");
+    }
     if (cls === CLS.dynamicCast && castTyped) typePin(getPin(node, "Object", "in"), profile.castObjectPinType);
     for (const [pin, value] of Object.entries(s.set ?? {})) getPin(node, pin, "in").def = value;
     for (const [pin, path] of Object.entries(s.objects ?? {})) getPin(node, pin, "in").defObj = path;

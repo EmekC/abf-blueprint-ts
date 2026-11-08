@@ -15,7 +15,8 @@ function lowerFixture(): IrModule {
   const loaded = loadProgram(projectDir);
   const relay = loaded.files.classes.find((f) => f.fileName.endsWith("/Relay.ts"));
   assert.ok(relay);
-  return lower(buildHir(loaded, { mod: "TestMod" }, profile, [relay]), profile);
+  // the manual loop shape (counter temps) is what these plans are asserted on
+  return lower(buildHir(loaded, { mod: "TestMod" }, profile, [relay]), profile, { loopMacros: false });
 }
 
 const ir = lowerFixture();

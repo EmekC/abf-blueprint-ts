@@ -14,8 +14,10 @@ const pinOf = (end: string): string => end.slice(end.indexOf(".") + 1);
 export function assignPositions(unit: IrUnit, executePin = "execute"): void {
   const adj = new Map<string, string[]>();
   const execNodes = new Set<string>();
+  // a StandardMacros loop takes its exec input on `Exec`, not on the profile's execute pin
+  const macroIds = new Set(unit.nodes.filter((n) => n.sem?.k === "std_macro").map((n) => n.id));
   for (const [from, to] of unit.wires) {
-    if (pinOf(to) !== executePin) continue;
+    if (pinOf(to) !== executePin && !(macroIds.has(idOf(to)) && pinOf(to) === "Exec")) continue;
     const a = idOf(from);
     const b = idOf(to);
     execNodes.add(a);

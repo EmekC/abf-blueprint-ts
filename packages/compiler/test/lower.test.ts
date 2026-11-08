@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { unitHash, validateIrModule } from "@abfc/ir";
 import type { IrModule, IrNode, IrUnit, Profile } from "@abfc/ir";
 import { buildHir, loadProgram, lower } from "../src/index.js";
+import type { LowerOptions } from "../src/index.js";
 
 // compiled to packages/compiler/dist/test/ -> packages/compiler/test/fixtures/project and packages/env/profiles
 const projectDir = fileURLToPath(new URL("../../test/fixtures/project", import.meta.url));
@@ -13,16 +14,17 @@ const profilePath = fileURLToPath(new URL("../../../env/profiles/ue5.4.4-1050002
 const profile = JSON.parse(readFileSync(profilePath, "utf8")) as Profile;
 const config = { mod: "TestMod" };
 
-function lowerProject(dir: string): IrModule {
+function lowerProject(dir: string, opts?: LowerOptions): IrModule {
   const loaded = loadProgram(dir);
   const relay = loaded.files.classes.find((f) => f.fileName.endsWith("/Relay.ts"));
   assert.ok(relay);
   const hir = buildHir(loaded, config, profile, [relay]);
   assert.deepEqual(hir.diagnostics, []);
-  return lower(hir, profile);
+  return lower(hir, profile, opts);
 }
 
-const ir = lowerProject(projectDir);
+// the shared module keeps the manual loop shape (counter temps); the macro lowering has its own tests
+const ir = lowerProject(projectDir, { loopMacros: false });
 const unit: IrUnit = ir.assets[0]!.units[0]!;
 const node = (id: string): IrNode => {
   const n = unit.nodes.find((x) => x.id === id);
@@ -130,7 +132,7 @@ test("positions are non-negative and exec nodes flow left to right", () => {
 
 test("unitHash: stable across lowerings, ignores positions, changes with a literal", () => {
   assert.equal(unitHash(unit), unit.hash);
-  assert.equal(lowerProject(projectDir).assets[0]!.units[0]!.hash, unit.hash);
+  assert.equal(lowerProject(projectDir, { loopMacros: false }).assets[0]!.units[0]!.hash, unit.hash);
 
   // inside the package tree so that `@abfc/runtime` still resolves through the workspace node_modules
   const dir = mkdtempSync(join(fileURLToPath(new URL("./", import.meta.url)), "lower-"));
@@ -140,7 +142,7 @@ test("unitHash: stable across lowerings, ignores positions, changes with a liter
     const text = readFileSync(file, "utf8");
     assert.ok(text.includes("info.A === 0"));
     writeFileSync(file, text.replace("info.A === 0", "info.A === 1"));
-    const edited = lowerProject(dir).assets[0]!.units[0]!;
+    const edited = lowerProject(dir, { loopMacros: false }).assets[0]!.units[0]!;
     assert.notEqual(edited.hash, unit.hash);
     const real = edited.nodes.filter((n) => n.sem?.k === "call" && n.sem.function === "EqualEqual_DoubleDouble");
     assert.deepEqual(real.map((n) => n.pinDefaults?.B), ["1.0", "0.0"]);
@@ -205,12 +207,12 @@ test("cast guard: a branch mixing the failed cast with other exits still checks 
 const phase2Dir = fileURLToPath(new URL("../../test/fixtures/phase2", import.meta.url));
 const loaded2 = loadProgram(phase2Dir);
 
-function lowerPhase2(name: string): IrModule {
+function lowerPhase2(name: string, opts?: LowerOptions): IrModule {
   const sf = loaded2.files.classes.find((f) => f.fileName.endsWith(`/${name}`));
   assert.ok(sf, `${name} is a root file`);
   const hir = buildHir(loaded2, config, profile, [sf]);
   assert.deepEqual(hir.diagnostics, []);
-  return lower(hir, profile);
+  return lower(hir, profile, opts);
 }
 
 /** Small query helpers over one unit. */
@@ -230,7 +232,7 @@ function kit(u: IrUnit) {
 }
 
 const directorIr = lowerPhase2("Director.ts");
-const counterIr = lowerPhase2("Counter.ts");
+const counterIr = lowerPhase2("Counter.ts", { loopMacros: false }); // manual loop shape; the macro lowering has its own tests
 const dUnit = (id: string): IrUnit => {
   const x = directorIr.assets[0]!.units.find((u) => u.id === id);
   assert.ok(x, `unit ${id}`);
@@ -665,4 +667,245 @@ test("optional stub parameters: an omitted or undefined argument sets no pin", (
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ---- loops: StandardMacros ForEachLoop / ForLoop instances and the manual fallback ----
+
+const macroModule = lowerProject(projectDir);
+const macroUnit: IrUnit = macroModule.assets[0]!.units[0]!;
+const macroNodes = (u: IrUnit, name?: string): IrNode[] =>
+  u.nodes.filter((n) => n.sem?.k === "std_macro" && (name === undefined || n.sem.name === name));
+const sweepUnit = (m: IrModule): IrUnit => m.assets[0]!.units.find((x) => x.id === "event:Sweep")!;
+const tempNames = (m: IrModule): string[] => m.assets[0]!.variables.filter((v) => v.temp).map((v) => v.name);
+
+/** Lowers a Counter whose only event is `Sweep` with the given body; returns the module (default options unless given). */
+function lowerSweep(body: string, opts?: LowerOptions, prepare?: (dir: string) => void): IrModule {
+  // inside the package tree so that `@abfc/runtime` still resolves through the workspace node_modules
+  const dir = mkdtempSync(join(fileURLToPath(new URL("./", import.meta.url)), "lower-"));
+  try {
+    cpSync(phase2Dir, dir, { recursive: true });
+    prepare?.(dir);
+    const file = join(dir, "src", "Counter.ts");
+    const text = readFileSync(file, "utf8");
+    const start = text.indexOf("  @event\n  Sweep");
+    assert.ok(start > 0);
+    writeFileSync(file, `${text.slice(0, start)}  @event\n  Sweep(): void {\n${body}\n  }\n}\n`);
+    const loaded = loadProgram(dir);
+    const sf = loaded.files.classes.find((f) => f.fileName.endsWith("/Counter.ts"));
+    assert.ok(sf);
+    const hir = buildHir(loaded, config, profile, [sf]);
+    assert.deepEqual(hir.diagnostics, []);
+    const mod = lower(hir, profile, opts);
+    assert.deepEqual(validateIrModule(mod), []);
+    return mod;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("for..of without return lowers to a ForEachLoop instance: no counter temp, element from the macro", () => {
+  assert.deepEqual(validateIrModule(macroModule), []);
+  assert.deepEqual(tempNames(macroModule).filter((n) => n.startsWith("abfc_UpdateTarget_i")), []);
+  const loops = macroNodes(macroUnit);
+  assert.equal(loops.length, 1);
+  const m = loops[0]!;
+  assert.deepEqual(m.sem, { k: "std_macro", name: "ForEachLoop" });
+  assert.equal(m.t3d.class, "/Script/BlueprintGraph.K2Node_MacroInstance");
+  assert.ok(m.t3d.props.some((p) => p.includes("StandardMacros:ForEachLoop'")));
+  assert.ok(m.t3d.props.some((p) => p.includes("GraphBlueprint=")));
+  // the same array type the manual loop uses for Array_Length, and its element type
+  assert.equal(m.pinTypes?.Array, "array:object:/Game/Fake/WBP_Show.WBP_Show_C");
+  assert.equal(m.pinTypes?.["Array Element"], "object:/Game/Fake/WBP_Show.WBP_Show_C");
+  assert.deepEqual(Object.keys(m.pinTypes ?? {}).sort(), ["Array", "Array Element"]);
+
+  const wires = macroUnit.wires;
+  const into = (to: string): string[] => wires.filter((w) => w[1] === to).map((w) => w[0]);
+  const from = (f: string): string[] => wires.filter((w) => w[0] === f).map((w) => w[1]);
+  // the array comes from the Widgets variable get
+  const arrSrc = into(`${m.id}.Array`);
+  assert.equal(arrSrc.length, 1);
+  assert.ok(macroUnit.nodes.some((n) => n.sem?.k === "get" && n.sem.name === "Widgets" && arrSrc[0] === `${n.id}.Widgets`));
+  // exec: the previous statement runs into Exec; the body is wired from LoopBody; the elements are the macro's element pin
+  const execSources = into(`${m.id}.Exec`); // the not-taken exits of the preceding early-return checks
+  assert.ok(execSources.length > 0);
+  assert.ok(execSources.every((s) => s.endsWith(".else")), execSources.join(","));
+  const show = macroUnit.nodes.find((n) => n.sem?.k === "call" && n.sem.function === "Show")!;
+  const bodyEntry = from(`${m.id}.LoopBody`);
+  assert.equal(bodyEntry.length, 1);
+  const valid = macroUnit.nodes.find((n) => n.sem?.k === "call" && n.sem.function === "IsValid" && wires.some((w) => w[0] === `${m.id}.Array Element` && w[1].startsWith(`${n.id}.`)));
+  assert.ok(valid, "the validity check reads the macro element");
+  assert.ok(wires.some((w) => w[0] === `${m.id}.Array Element` && w[1].startsWith(`${show.id}.`)), "the call target is the macro element");
+  assert.equal(into(`${m.id}.Array Index`).length, 0);
+  assert.equal(from(`${m.id}.Array Index`).length, 0);
+  // Completed continues with the statement after the loop; the end of the body is not wired back
+  const visible = macroUnit.nodes.find((n) => n.sem?.k === "set" && n.sem.name === "Visible")!;
+  assert.deepEqual(from(`${m.id}.Completed`), [`${visible.id}.execute`]);
+  assert.ok(!wires.some((w) => w[1] === `${m.id}.Exec` && w[0].startsWith(`${visible.id}.`)));
+  // the loop-head branch of the manual shape is gone: one branch fewer than the manual lowering
+  const branches = (u: IrUnit): number => u.nodes.filter((n) => n.sem?.k === "branch").length;
+  assert.equal(branches(macroUnit), branches(unit) - 1);
+});
+
+test("the macro lowering is stable (unitHash) and the manual fallback keeps the old shape", () => {
+  assert.equal(lowerProject(projectDir).assets[0]!.units[0]!.hash, macroUnit.hash);
+  assert.equal(unitHash(macroUnit), macroUnit.hash);
+  assert.notEqual(macroUnit.hash, unit.hash);
+  const manual = lowerProject(projectDir, { loopMacros: false }).assets[0]!.units[0]!;
+  assert.equal(manual.hash, unit.hash);
+  assert.equal(manual.nodes.length, 52);
+  assert.equal(manual.wires.length, 74);
+  assert.equal(macroNodes(manual).length, 0);
+  assert.ok(lowerProject(projectDir, { loopMacros: true }).assets[0]!.units[0]!.nodes.some((n) => n.sem?.k === "std_macro"));
+});
+
+test("for..of with a return in the body keeps the manual counter loop", () => {
+  const body = [
+    "    for (const pot of this.Pots) {",
+    "      if (!isValid(pot)) return;",
+    "      this.Count = this.Count + 1;",
+    "    }",
+  ].join("\n");
+  const mod = lowerSweep(body);
+  const u = sweepUnit(mod);
+  assert.equal(macroNodes(u).length, 0);
+  assert.deepEqual(tempNames(mod), ["abfc_Sweep_i0"]);
+  // a return deeper in a nested loop counts too
+  const nested = lowerSweep([
+    "    for (const pot of this.Pots) {",
+    "      for (const n of this.Names) {",
+    "        if (this.Armed) return;",
+    "      }",
+    "    }",
+  ].join("\n"));
+  assert.equal(macroNodes(sweepUnit(nested)).length, 0);
+  assert.deepEqual(tempNames(nested), ["abfc_Sweep_i0", "abfc_Sweep_i1"]);
+});
+
+test("nested for..of: two ForEachLoop nodes, the inner one is entered from the outer body", () => {
+  const mod = lowerSweep([
+    "    for (const pot of this.Pots) {",
+    "      for (const n of this.Names) {",
+    "        this.Count = this.Count + 1;",
+    "      }",
+    "    }",
+  ].join("\n"));
+  const u = sweepUnit(mod);
+  assert.equal(tempNames(mod).length, 0);
+  const loops = macroNodes(u, "ForEachLoop");
+  assert.equal(loops.length, 2);
+  const [outer, inner] = loops as [IrNode, IrNode];
+  assert.equal(outer.pinTypes?.["Array Element"], "object:/Game/Fake/BP_FakePot.BP_FakePot_C");
+  assert.equal(inner.pinTypes?.["Array Element"], "name");
+  const k = kit(u);
+  assert.ok(k.has(`${outer.id}.LoopBody`, `${inner.id}.Exec`));
+  // the inner Completed continues the outer body (the count set), the outer Completed ends the event
+  const set = k.sets("Count")[0]!;
+  assert.ok(k.has(`${inner.id}.LoopBody`, `${set.id}.execute`));
+  assert.equal(u.wires.filter((w) => w[0] === `${inner.id}.Completed`).length, 0);
+  assert.equal(u.wires.filter((w) => w[0] === `${outer.id}.Completed`).length, 0);
+  assert.equal(u.wires.filter((w) => w[1] === `${outer.id}.Exec`).length, 1);
+});
+
+test("counted for loops lower to ForLoop: literal bound, inclusive bound, computed bound", () => {
+  // for (let j = 0; j < 3; j = j + 1): LastIndex is the folded literal
+  const lit = lowerSweep("    for (let j = 0; j < 3; j = j + 1) {\n      this.Names.push(nameOf(\"Slot\"));\n    }");
+  const lu = sweepUnit(lit);
+  assert.equal(tempNames(lit).length, 0);
+  const loop = macroNodes(lu, "ForLoop");
+  assert.equal(loop.length, 1);
+  assert.deepEqual(loop[0]!.pinDefaults, { FirstIndex: "0", LastIndex: "2" });
+  assert.equal(loop[0]!.pinTypes, undefined);
+  assert.ok(loop[0]!.t3d.props.some((p) => p.includes("StandardMacros:ForLoop'")));
+  const lk = kit(lu);
+  assert.equal(lk.calls("Subtract_IntInt").length, 0);
+  const bodyWires = lu.wires.filter((w) => w[0] === `${loop[0]!.id}.LoopBody`);
+  assert.equal(bodyWires.length, 1, "the body hangs off LoopBody");
+  assert.match(bodyWires[0]![1], /\.execute$/);
+  assert.equal(lu.wires.filter((w) => w[0] === `${loop[0]!.id}.Completed`).length, 0, "nothing follows the loop");
+
+  // i <= this.Count: LastIndex is wired from the getter, no Subtract; `i++` is the same as `i = i + 1`; the counter is the Index pin
+  const incl = lowerSweep("    for (let i = 1; i <= this.Count; i++) {\n      this.Names.push(nameOf(\"Slot\"));\n      this.Count = this.Count + i;\n    }");
+  const iu = sweepUnit(incl);
+  const ik = kit(iu);
+  const il = macroNodes(iu, "ForLoop")[0]!;
+  assert.deepEqual(il.pinDefaults, { FirstIndex: "1" });
+  assert.equal(ik.calls("Subtract_IntInt").length, 0);
+  const lastSrc = ik.into(`${il.id}.LastIndex`);
+  assert.equal(lastSrc.length, 1);
+  assert.ok(iu.nodes.some((n) => n.sem?.k === "get" && n.sem.name === "Count" && lastSrc[0] === `${n.id}.Count`));
+  const adds = ik.calls("Add_IntInt");
+  assert.equal(adds.length, 1);
+  assert.ok(ik.has(`${il.id}.Index`, `${adds[0]!.id}.A`) || ik.has(`${il.id}.Index`, `${adds[0]!.id}.B`), "the counter is read from Index");
+
+  // i < this.Pots.length: LastIndex = Subtract(length, 1)
+  const comp = lowerSweep("    for (let i = 0; i < this.Pots.length; i++) {\n      this.Count = i;\n    }");
+  const cu = sweepUnit(comp);
+  const ck = kit(cu);
+  const cl = macroNodes(cu, "ForLoop")[0]!;
+  assert.deepEqual(cl.pinDefaults, { FirstIndex: "0" });
+  const sub = ck.calls("Subtract_IntInt");
+  assert.equal(sub.length, 1);
+  assert.deepEqual(sub[0]!.pinDefaults, { B: "1" });
+  assert.ok(ck.has(`${sub[0]!.id}.ReturnValue`, `${cl.id}.LastIndex`));
+  const len = cu.nodes.find((n) => n.t3d.class === profile.nodeClasses.callArrayFunction)!;
+  assert.ok(ck.has(`${len.id}.ReturnValue`, `${sub[0]!.id}.A`));
+  const setCount = ck.sets("Count")[0]!;
+  assert.ok(ck.has(`${cl.id}.Index`, `${setCount.id}.Count`), "the body reads the counter from Index");
+  assert.ok(ck.has(`${cl.id}.LoopBody`, `${setCount.id}.execute`));
+});
+
+test("other counted loops keep the manual lowering", () => {
+  const cases: Record<string, string> = {
+    decrement: "    for (let i = this.Pots.length - 1; i >= 0; i--) {\n      this.Count = i;\n    }",
+    "other condition": "    for (let i = 0; i < 3 && this.Armed; i++) {\n      this.Count = i;\n    }",
+    "not equal": "    for (let i = 0; i !== 3; i++) {\n      this.Count = i;\n    }",
+    "return in the body": "    for (let i = 0; i < 3; i++) {\n      if (this.Armed) return;\n      this.Count = i;\n    }",
+    "bound reads the counter": "    for (let i = 0; i < this.Pots.length - i; i++) {\n      this.Count = i;\n    }",
+  };
+  for (const [name, body] of Object.entries(cases)) {
+    let mod: IrModule;
+    try {
+      mod = lowerSweep(body);
+    } catch (e) {
+      assert.fail(`${name}: ${String(e)}`);
+    }
+    assert.equal(macroNodes(sweepUnit(mod)).length, 0, name);
+    assert.deepEqual(tempNames(mod), ["abfc_Sweep_i0"], name);
+  }
+});
+
+test("a macro loop is laid out right of the node that enters it, the body right of the macro", () => {
+  const mod = lowerSweep("    for (const pot of this.Pots) {\n      this.Count = this.Count + 1;\n    }\n    this.Armed = true;");
+  const u = sweepUnit(mod);
+  const loop = macroNodes(u)[0]!;
+  const k = kit(u);
+  const entry = u.nodes.find((n) => n.sem?.k === "event")!;
+  assert.ok(k.has(`${entry.id}.then`, `${loop.id}.Exec`));
+  const bodySet = k.sets("Count")[0]!;
+  const after = k.sets("Armed")[0]!;
+  assert.ok(loop.pos[0] > entry.pos[0], "macro right of the entry");
+  assert.ok(bodySet.pos[0] > loop.pos[0], "body right of the macro");
+  assert.ok(after.pos[0] > loop.pos[0], "the continuation right of the macro");
+});
+
+/** Gives the fixture pot an int member with Blueprint metadata, so that an optional chain can produce an int. */
+function typedPlain(dir: string): void {
+  const file = join(dir, ".abfc", "stubs", "test", "Game", "Fake", "BP_FakePot.d.ts");
+  const text = readFileSync(file, "utf8");
+  const old = "  /** A member without Blueprint metadata (negative test). */\n  Plain: int;";
+  assert.ok(text.includes(old));
+  writeFileSync(file, text.replace(old, "  /**\n   * @bpPath /Game/Fake/BP_FakePot.BP_FakePot_C:Plain\n   * @bpType int\n   */\n  Plain: int;"));
+}
+
+test("a counted loop whose start value has null exits: every exit runs into the ForLoop Exec", () => {
+  const mod = lowerSweep("    for (let i = this.Pots[0]?.Plain; i < 3; i++) {\n      this.Count = i;\n    }\n    this.Armed = true;", undefined, typedPlain);
+  const u = sweepUnit(mod);
+  const loop = macroNodes(u, "ForLoop")[0]!;
+  assert.ok(loop);
+  // evaluating the start value (an optional chain) is part of entering the loop: both the valid and the invalid exit run into Exec, none skips it
+  const k = kit(u);
+  const branch = u.nodes.find((n) => n.sem?.k === "branch")!;
+  assert.deepEqual(k.into(`${loop.id}.Exec`).sort(), [`${branch.id}.else`, `${branch.id}.then`]);
+  assert.equal(k.into(`${loop.id}.FirstIndex`).length, 1);
+  assert.equal(u.wires.filter((w) => w[0] === `${loop.id}.Completed`).length, 1);
 });

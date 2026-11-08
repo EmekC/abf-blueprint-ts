@@ -21,7 +21,7 @@ export function lowerFixture(): IrModule {
   if (relay === undefined) throw new Error("fixture Relay.ts not found");
   const hir = buildHir(loaded, { mod: "TestMod" }, profile, [relay]);
   if (hir.diagnostics.length > 0) throw new Error("fixture has diagnostics: " + JSON.stringify(hir.diagnostics));
-  return lower(hir, profile);
+  return lower(hir, profile, { loopMacros: false }); // the manual loop shape these tests assert
 }
 
 export const ir: IrModule = lowerFixture();

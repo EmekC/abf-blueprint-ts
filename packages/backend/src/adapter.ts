@@ -66,7 +66,7 @@ function refused(n: IrNode, what: string): AbfcError {
 export function effectivePinTypes(n: IrNode, caps: BackendCapabilities, profile: Profile): Record<string, string> {
   const entries = Object.entries(n.pinTypes ?? {});
   if (entries.length === 0) return {};
-  if (n.sem?.k === "self" || /K2Node_MacroInstance$/.test(n.t3d.class)) throw refused(n, "on a self/macro node");
+  if (n.sem?.k === "self" || (/K2Node_MacroInstance$/.test(n.t3d.class) && n.sem?.k !== "std_macro")) throw refused(n, "on a self/macro node");
   const out: Record<string, string> = {};
   for (const [pin, type] of entries) {
     if (
@@ -122,6 +122,9 @@ function toBpNode(unit: IrUnit, n: IrNode, origin: [number, number], caps: Backe
         break;
       case "call_dispatcher":
       case "bind_dispatcher":
+        out.name = s.name;
+        break;
+      case "std_macro":
         out.name = s.name;
         break;
       default:

@@ -925,8 +925,37 @@ test("(h) native pin types: one main bp_apply call, no phase B, no pin_types on 
     const nodes: Array<Record<string, any>> = main0.graphs[0].add;
     assert.equal(nodes.filter((n) => n.k === "cast").length, 2);
     assert.equal(nodes.filter((n) => n.k === "cast" && n.pin_types !== undefined).length, 0);
-    assert.equal(nodes.filter((n) => n.pin_types !== undefined).length, 3);
+    // the For Each Loop macro node and two more typed nodes (the loop no longer needs Array_Length / Get a copy)
+    assert.equal(nodes.filter((n) => n.pin_types !== undefined).length, 2);
     assert.equal(r.backend.tools().filter((t) => t === "backend_info").length >= 1, true);
+  });
+});
+
+test("(h2) a backend with std_macro gets a For Each Loop macro node and no counter variable; a rebuild is up to date", async () => {
+  await withRig({ backendInfo: true, handMadeEvent: false }, async (r) => {
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC2088/);
+    const macros = r.backend.nodeNames(RELAY_ASSET).filter((n) => n.startsWith("K2Node_MacroInstance"));
+    assert.equal(macros.length, 1);
+    assert.ok(r.backend.nodeHead(RELAY_ASSET, macros[0]!).some((l) => l.includes("StandardMacros.StandardMacros:ForEachLoop'")));
+    assert.equal(r.backend.variableNames(RELAY_ASSET).filter((v) => v.startsWith("abfc_UpdateTarget_i")).length, 0);
+    const applies = r.backend.applyLabels().length;
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /up to date/);
+    assert.equal(r.backend.applyLabels().length, applies, "a second build applies nothing");
+  });
+});
+
+test("(h3) a backend without std_macro: ABFC2088 once, the loops are built with the counter variable and no macro node", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    const x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC2088/);
+    assert.equal(countOf(x.out, "ABFC2088"), 1);
+    assert.equal(r.backend.nodeNames(RELAY_ASSET).filter((n) => n.startsWith("K2Node_MacroInstance")).length, 0);
+    assert.ok(r.backend.variableNames(RELAY_ASSET).some((v) => v.startsWith("abfc_UpdateTarget_i")));
   });
 });
 

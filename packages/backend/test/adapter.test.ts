@@ -80,6 +80,30 @@ test("effectivePinTypes refuses what the backend refuses", () => {
   assert.deepEqual(effectivePinTypes({ ...base, pinTypes: { A: "array:int" } }, c, profile), { A: "array:int" });
 });
 
+test("a std_macro node renders its name and wildcard pin types; a raw macro instance still throws", () => {
+  const macro: IrNode = {
+    id: "loop0",
+    t3d: { class: "/Script/BlueprintGraph.K2Node_MacroInstance", props: ["MacroGraphReference=(MacroGraph=\"x\")"] },
+    sem: { k: "std_macro", name: "ForEachLoop" },
+    pinTypes: { Array: "array:name", "Array Element": "name" },
+    pos: [0, 0],
+    origin: unit.origin,
+  };
+  const c = caps(true, true);
+  assert.deepEqual(effectivePinTypes(macro, c, profile), { Array: "array:name", "Array Element": "name" });
+  const withMacro = {
+    ...asset,
+    units: asset.units.map((pu, i) => i !== 0 ? pu : { ...pu, unit: { ...pu.unit, nodes: [...pu.unit.nodes, macro] } }),
+  };
+  const spec = renderMainSpec(withMacro, c, profile).graphs![0]!.add.find((n) => n.k === "std_macro");
+  assert.ok(spec);
+  assert.equal(spec.name, "ForEachLoop");
+  assert.deepEqual(spec.pin_types, { Array: "array:name", "Array Element": "name" });
+  assert.equal("class" in spec, false);
+  const { sem: _sem, ...raw } = macro;
+  assert.throws(() => effectivePinTypes(raw, c, profile), AbfcError);
+});
+
 test("event meta is emitted only with the event_meta capability", () => {
   const meta = { tooltip: "Does it.", category: "Cat" };
   const metaAsset = {

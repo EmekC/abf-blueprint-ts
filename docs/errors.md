@@ -777,6 +777,16 @@ Typical cause: an older abf-mod-editor-mcp backend.
 
 Fix: update the backend ([backend.md](backend.md)); `abfc doctor` shows `variable defaults: yes` once it can. Or set the default in the Mod Editor.
 
+### ABFC2088
+
+Severity: warning · Exit: 0
+
+Meaning: the backend has no bp_apply node kind `std_macro`, so the loops of the project are built as counter loops (a Branch, a back-edge and an owned counter variable `abfc_<event>_i<n>`) instead of Unreal's For Each Loop / For Loop macro nodes. The result behaves the same; the graph is just bigger.
+
+Typical cause: an older abf-mod-editor-mcp backend.
+
+Fix: update the backend ([backend.md](backend.md)); the loops are rebuilt as macro nodes by the next build.
+
 ### ABFC2099
 
 Severity: error · Exit: 1
