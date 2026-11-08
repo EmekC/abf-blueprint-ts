@@ -18,6 +18,7 @@ import { BackendSession, Recorder, compileFrontend, emitAll, lockDiagnostics, si
 import { runBuild } from "./build.js";
 import { runCheck } from "./check.js";
 import { runTests } from "./test.js";
+import { SLOW_BACKEND_HINT } from "../progress.js";
 
 /** Files below the helper folders of the headless route are never part of a publish. */
 const isHelperFile = (f: string): boolean => /(^|[\\/])(_McpTest|_McpTmp)([\\/]|$)/.test(f);
@@ -69,8 +70,19 @@ export async function publish(ctx: CliContext): Promise<number> {
   const rec = new Recorder(ctx);
   const session = new BackendSession(ctx, rec);
   const t0 = performance.now();
+  const tally: PublishTally = { listed: 0, published: 0 };
   try {
-    return ctx.args.flags.full ? await publishFull(ctx, rec, session) : await publishFast(ctx, rec, session);
+    const code = ctx.args.flags.full ? await publishFull(ctx, rec, session, tally) : await publishFast(ctx, rec, session, tally);
+    if (ctx.args.flags.dryRun && code === 0) {
+      ctx.progress.summary(true, "Dry run finished", `${tally.listed} file(s) listed, nothing copied`);
+    } else if (code === 0 && tally.listed === 0) {
+      ctx.progress.summary(true, "Nothing to publish");
+    } else if (code === 0) {
+      ctx.progress.summary(true, "Published", `${tally.published} file(s) to ${ctx.env.modDir.value ?? ctx.config.mod.name}`);
+    } else {
+      ctx.progress.summary(false, "Publish stopped", "see the errors above");
+    }
+    return code;
   } finally {
     rec.record("publish.total", since(t0), ctx.output.exitCode() === 0);
     await session.close();
@@ -84,24 +96,38 @@ const fail = (ctx: CliContext): number => ctx.output.exitCode() || 1;
 type PendingDelete = { manifest: string; kind: "tombstone" | "renamed" | "rows"; files: string[] };
 type PublishList = { changed: string[]; added: string[]; deleted: string[]; config: string[]; pending: PendingDelete[]; alsoOf: string[]; syncedAt: string | null };
 
+interface PublishTally {
+  listed: number;
+  published: number;
+}
+
+/** The "Listing files to publish" step: prints the would-publish list and returns it. */
+function listStep(ctx: CliContext, stage: StageStatus | null | (() => Promise<StageStatus | null>), tally: PublishTally): Promise<PublishList> {
+  return ctx.progress.run("Listing files to publish", async () => wouldPublish(ctx, typeof stage === "function" ? await stage() : stage), {
+    done: (l) => {
+      tally.listed = l.changed.length + l.added.length + l.config.length + l.deleted.length;
+      return `${tally.listed} file(s) to publish`;
+    },
+  });
+}
+
 /** Build, list, copy. */
-async function publishFast(ctx: CliContext, rec: Recorder, session: BackendSession): Promise<number> {
+async function publishFast(ctx: CliContext, rec: Recorder, session: BackendSession, tally: PublishTally): Promise<number> {
   const { output, config, args } = ctx;
   const mod = config.mod.name;
   if (!(await runBuild(ctx, session, rec))) return fail(ctx);
 
   const t = performance.now();
   const { backend, info } = await session.open();
-  const stage = await backend.stageStatus(mod);
-  const list = wouldPublish(ctx, stage);
+  const list = await listStep(ctx, () => backend.stageStatus(mod), tally);
   rec.record("publish.list", since(t));
 
   if (args.flags.dryRun) return output.exitCode();
-  return copyToMod(ctx, rec, backend, list, "publish.copy", info.capabilities.publishDeletes, info.capabilities.liveTags);
+  return copyToMod(ctx, rec, backend, list, "publish.copy", info.capabilities.publishDeletes, info.capabilities.liveTags, tally);
 }
 
 /** The release checks, then the same copy. */
-async function publishFull(ctx: CliContext, rec: Recorder, session: BackendSession): Promise<number> {
+async function publishFull(ctx: CliContext, rec: Recorder, session: BackendSession, tally: PublishTally): Promise<number> {
   const { output, config, args, env } = ctx;
   const mod = config.mod.name;
 
@@ -148,10 +174,18 @@ async function publishFull(ctx: CliContext, rec: Recorder, session: BackendSessi
       fix: "audit the mod in the editor after the changes are published by hand.",
     });
   }
-  const report = await backend.audit(mod);
-  const copy = (report.raw as { audited_copy?: unknown } | null)?.audited_copy;
-  const wrongCopy = report.ok && stageAudit && copy !== undefined && copy !== "stage";
-  const auditOk = report.ok && !wrongCopy;
+  const { report, copy, wrongCopy, auditOk } = await ctx.progress.run(
+    "Auditing the staged copy",
+    async (s) => {
+      const report = await backend.audit(mod);
+      const copy = (report.raw as { audited_copy?: unknown } | null)?.audited_copy;
+      const wrongCopy = report.ok && stageAudit && copy !== undefined && copy !== "stage";
+      const auditOk = report.ok && !wrongCopy;
+      if (!auditOk) s.fail("Audit did not pass");
+      return { report, copy, wrongCopy, auditOk };
+    },
+    { slowHint: SLOW_BACKEND_HINT, done: () => "Audit passed" },
+  );
   rec.record("gate.5", since(t), auditOk);
   if (!auditOk) {
     output.diag({
@@ -167,26 +201,34 @@ async function publishFull(ctx: CliContext, rec: Recorder, session: BackendSessi
 
   // gate 6: upload file check on the real mod folder and the stage folder (read-only)
   t = performance.now();
-  const stage = await backend.stageStatus(mod);
-  const listFiles = ctx.deps.listFiles ?? walkFolder;
-  const folders: Array<[string, string]> = [];
-  if (env.modDir.value !== null) folders.push(["mod", env.modDir.value]);
-  if (stage !== null && stage.stagingPath !== "") folders.push(["stage", stage.stagingPath]);
-  let uploadOk = true;
-  for (const [label, dir] of folders) {
-    if (emitAll(ctx, uploadFileDiagnostics(label, listFiles(dir)))) uploadOk = false;
-  }
+  const { stage, uploadOk } = await ctx.progress.run(
+    "Checking upload files",
+    async (s) => {
+      const stage = await backend.stageStatus(mod);
+      const listFiles = ctx.deps.listFiles ?? walkFolder;
+      const folders: Array<[string, string]> = [];
+      if (env.modDir.value !== null) folders.push(["mod", env.modDir.value]);
+      if (stage !== null && stage.stagingPath !== "") folders.push(["stage", stage.stagingPath]);
+      let uploadOk = true;
+      for (const [label, dir] of folders) {
+        if (emitAll(ctx, uploadFileDiagnostics(label, listFiles(dir)))) uploadOk = false;
+      }
+      if (!uploadOk) s.fail("Upload file check found problems");
+      return { stage, uploadOk };
+    },
+    { slowHint: SLOW_BACKEND_HINT, done: () => "Upload file check passed" },
+  );
   rec.record("gate.6", since(t), uploadOk);
   if (!uploadOk) return fail(ctx);
 
   // gate 7: the would-publish list
   t = performance.now();
-  const list = wouldPublish(ctx, stage);
+  const list = await listStep(ctx, stage, tally);
   rec.record("gate.7", since(t));
 
   if (args.flags.dryRun) return output.exitCode();
   // gate 8: bp_publish for the owned assets of the list
-  return copyToMod(ctx, rec, backend, list, "gate.8", info.capabilities.publishDeletes, info.capabilities.liveTags);
+  return copyToMod(ctx, rec, backend, list, "gate.8", info.capabilities.publishDeletes, info.capabilities.liveTags, tally);
 }
 
 /** Prints the would-publish list: files of the stage that differ from the mod, limited to assets that hold owned units or adoptions. */
@@ -253,7 +295,16 @@ function wouldPublish(ctx: CliContext, stage: StageStatus | null): PublishList {
 }
 
 /** `bp_publish` for the owned assets of the list, with a grant for the project's own mod. */
-async function copyToMod(ctx: CliContext, rec: Recorder, backend: Backend, list: PublishList, step: string, canDelete: boolean, liveTags: boolean): Promise<number> {
+async function copyToMod(
+  ctx: CliContext,
+  rec: Recorder,
+  backend: Backend,
+  list: PublishList,
+  step: string,
+  canDelete: boolean,
+  liveTags: boolean,
+  tally: PublishTally,
+): Promise<number> {
   const { output, config } = ctx;
   const mod = config.mod.name;
   // Removed files are deleted from the mod only by a backend that can (publishDeletes); otherwise they stay and the user deletes them.
@@ -269,7 +320,8 @@ async function copyToMod(ctx: CliContext, rec: Recorder, backend: Backend, list:
   const files = [...list.changed, ...list.added, ...deleting];
   if (files.length + list.config.length === 0) {
     finishPending(ctx, list, canDelete, null);
-    output.info("nothing to publish.");
+    tally.listed = 0;
+    output.info("nothing to publish.", "dim");
     return output.exitCode();
   }
   // The backend strips file extensions, so `Config/Tags/<Mod>Tags.ini` names the tag list (published as a file of the mod).
@@ -281,7 +333,15 @@ async function copyToMod(ctx: CliContext, rec: Recorder, backend: Backend, list:
   ];
   const grant = grantPublish(mod);
   const t = performance.now();
-  const r = await (canDelete ? backend.publish(mod, assets, grant, { deleteRemoved: true }) : backend.publish(mod, assets, grant));
+  const r = await ctx.progress.run(
+    `Publishing ${assets.length} asset(s) to ${mod}`,
+    async (s) => {
+      const res = await (canDelete ? backend.publish(mod, assets, grant, { deleteRemoved: true }) : backend.publish(mod, assets, grant));
+      if (!res.ok) s.fail("Publish refused");
+      return res;
+    },
+    { slowHint: SLOW_BACKEND_HINT, done: (res) => `Published ${res.published.length} file(s)` },
+  );
   rec.record(step, since(t), r.ok);
 
   if (!r.ok) {
@@ -313,7 +373,8 @@ async function copyToMod(ctx: CliContext, rec: Recorder, backend: Backend, list:
     writeManifest(ctx.projectDir, { ...m, classDefaultsPublished: true });
   }
   finishPending(ctx, list, canDelete, r);
-  output.info("published:");
+  tally.published = r.published.length;
+  output.info("published:", "ok");
   if (r.published.length === 0) output.info(`  ${r.message}`);
   for (const f of r.published) output.info(`  ${f}`);
   for (const f of r.deleted) output.info(`  deleted ${f}`);

@@ -3,6 +3,7 @@ import type { AdoptionAnalysis, Manifest, ManifestUnit } from "@abfc/compiler";
 import { unitStateHash } from "@abfc/ir";
 import { UsageError } from "../args.js";
 import type { CliContext } from "../context.js";
+import { SLOW_BACKEND_HINT } from "../progress.js";
 import { BackendSession, COMPILER_ID, Recorder, pruneManifestsToStage, readAsset } from "./common.js";
 import { ensureStage } from "./stage.js";
 
@@ -53,9 +54,13 @@ export async function adopt(ctx: CliContext): Promise<number> {
   const session = new BackendSession(ctx, rec);
   try {
     const { backend } = await session.open("adopt.backendStart");
-    const { status: stage, resynced } = await ensureStage(backend, env, config, { resync: args.flags.resync, warn: (d) => output.diag(d) });
+    const { status: stage, resynced } = await ensureStage(backend, env, config, {
+      resync: args.flags.resync,
+      warn: (d) => output.diag(d),
+      progress: ctx.progress,
+    });
     if (resynced) await pruneManifestsToStage(ctx, backend, config.mod.name);
-    const { parsed } = await readAsset(ctx, backend, asset);
+    const { parsed } = await ctx.progress.run(`Reading ${asset}`, () => readAsset(ctx, backend, asset), { slowHint: SLOW_BACKEND_HINT });
 
     let analysis: AdoptionAnalysis;
     try {
@@ -127,7 +132,8 @@ export async function adopt(ctx: CliContext): Promise<number> {
     if (at >= 0) manifest.units[at] = fresh;
     else manifest.units.push(fresh);
     const file = writeManifest(projectDir, manifest);
-    output.info(`recorded in ${file}`);
+    output.info(`recorded in ${file}`, "ok");
+    ctx.progress.summary(true, `Adopted ${unitId}`);
     return output.exitCode();
   } finally {
     await session.close();
