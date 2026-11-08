@@ -294,6 +294,62 @@ test("(b1r) a failed compile in one asset re-syncs the whole stage: unpublished 
   });
 });
 
+test("(b1s) build --resync drops the unpublished unit from the manifest and applies it again: no ABFC5002 loop (P3)", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    const builtNodes = readManifest(r.dir, RELAY_ASSET)!.units[0]!.nodes;
+    assert.ok(builtNodes.length > 0);
+    const first = r.backend.applyLabels().length;
+
+    // the fake stage forgets the never published unit, as a real re-sync from the mod does
+    x = await r.run(["build", "--resync"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC5002/);
+    assert.doesNotMatch(x.out, /--resync/);
+    assert.match(x.out, /applied .*UpdateTarget/);
+    assert.ok(r.backend.applyLabels().length > first, "the unit was applied again");
+    const held = r.backend.nodeNames(RELAY_ASSET);
+    assert.ok(readManifest(r.dir, RELAY_ASSET)!.units[0]!.nodes.every((n) => held.includes(n)));
+
+    // and the next plain build has nothing left to do
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /up to date/);
+  });
+});
+
+test("(b1t) status --resync prunes the manifest to the re-synced stage; the next build applies the unit without ABFC5002", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    x = await r.run(["status", "--resync"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC5002/);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.units.length, 0, "the unpublished unit is forgotten");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC5002/);
+    assert.match(x.out, /applied .*UpdateTarget/);
+  });
+});
+
+test("(b1u) a published unit survives build --resync (the mod holds its nodes)", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    r.backend.markPublished();
+    const nodes = readManifest(r.dir, RELAY_ASSET)!.units[0]!.nodes;
+    const first = r.backend.applyLabels().length;
+    x = await r.run(["build", "--resync"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC50/);
+    assert.match(x.out, /up to date/);
+    assert.equal(r.backend.applyLabels().length, first, "nothing is applied again");
+    assert.deepEqual(readManifest(r.dir, RELAY_ASSET)!.units[0]!.nodes, nodes);
+  });
+});
+
 test("(b1p) a published unit that is changed and fails to compile keeps the entry for the nodes the mod still holds", async () => {
   await withRig({ handMadeEvent: false }, async (r) => {
     let x = await r.run(["build"]);

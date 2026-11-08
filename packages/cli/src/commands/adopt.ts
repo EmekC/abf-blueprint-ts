@@ -3,7 +3,7 @@ import type { AdoptionAnalysis, Manifest, ManifestUnit } from "@abfc/compiler";
 import { unitStateHash } from "@abfc/ir";
 import { UsageError } from "../args.js";
 import type { CliContext } from "../context.js";
-import { BackendSession, COMPILER_ID, Recorder, readAsset } from "./common.js";
+import { BackendSession, COMPILER_ID, Recorder, pruneManifestsToStage, readAsset } from "./common.js";
 import { ensureStage } from "./stage.js";
 
 /**
@@ -45,7 +45,8 @@ export async function adopt(ctx: CliContext): Promise<number> {
   const session = new BackendSession(ctx, rec);
   try {
     const { backend } = await session.open("adopt.backendStart");
-    const stage = await ensureStage(backend, env, config, { resync: args.flags.resync });
+    const { status: stage, resynced } = await ensureStage(backend, env, config, { resync: args.flags.resync });
+    if (resynced) await pruneManifestsToStage(ctx, backend, config.mod.name);
     const { parsed } = await readAsset(ctx, backend, asset);
 
     let analysis: AdoptionAnalysis;

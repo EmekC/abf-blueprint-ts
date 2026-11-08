@@ -21,6 +21,7 @@ import type { ManualAsset } from "@abfc/stubgen";
 import type { CliContext } from "../context.js";
 import { recordRun } from "../runs.js";
 import { refreshTagsFile } from "../tags.js";
+import { pruneManifestsToStage } from "./common.js";
 import { ensureStage } from "./stage.js";
 
 /** Folders of the mod's Content that are never stubbed. */
@@ -91,7 +92,8 @@ async function reflectAndRead(ctx: CliContext, backend: Backend): Promise<number
   const owned = ownedSets(ctx.projectDir);
   const t0 = clock();
   if (assetList.length > 0) {
-    await ensureStage(backend, env, config, { resync: ctx.args.flags.resync });
+    const { resynced } = await ensureStage(backend, env, config, { resync: ctx.args.flags.resync });
+    if (resynced) await pruneManifestsToStage(ctx, backend, mod);
     for (const asset of assetList) {
       try {
         const snap = await backend.read(mod, asset);

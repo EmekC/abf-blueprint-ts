@@ -32,7 +32,10 @@ import {
   hasError,
   lockDiagnostics,
   missingInStage,
+  previousNames,
+  pruneManifestsToStage,
   readAsset,
+  sourceMapOf,
   since,
 } from "./common.js";
 import { refreshTagsFile } from "../tags.js";
@@ -62,26 +65,6 @@ function invert(nodeIds: Record<string, string>): Record<string, string> {
   return out;
 }
 
-/** Source map of one asset: spans from the IR, real names from `names` (`<unit id>/<IR node id>` -> real). */
-function sourceMapOf(asset: IrAsset, names: Record<string, string>): SourceMapFile {
-  const units: SourceMapFile["units"] = {};
-  for (const u of asset.units) {
-    const nodes: SourceMapFile["units"][string]["nodes"] = {};
-    for (const n of u.nodes) nodes[n.id] = { span: n.origin, real: names[nodeKey(u, n.id)] ?? null };
-    units[u.id] = { span: u.origin, nodes };
-  }
-  return { asset: asset.path, units };
-}
-
-/** Names recorded by earlier builds for units this build did not touch. */
-function previousNames(manifest: Manifest | null): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const u of manifest?.units ?? []) {
-    for (const [irId, real] of Object.entries(u.nodeIds)) out[`${u.id}/${irId}`] = real;
-  }
-  return out;
-}
-
 /** What maps an apply or compile message back to a call: spec node id -> `<unit id>/<IR node id>`, and the TS spans of calls to owned functions. */
 function callMaps(asset: IrAsset): { specIds: Record<string, string>; ownCalls: Record<string, Span[]> } {
   const specIds: Record<string, string> = {};
@@ -103,50 +86,6 @@ function errorDiagnostics(
   const sm = sourceMapOf(irAsset, outcome.nodeIds);
   const { specIds, ownCalls } = callMaps(irAsset);
   return mapCompileMessages(asset.asset, outcome.compile, sm, invert(outcome.nodeIds), specIds, ownCalls);
-}
-
-/**
- * After a failed Unreal compile and a successful re-sync: the stage holds only what the mod holds, so the unpublished work of
- * every asset of the mod is gone, not only that of the assets this build applied. The manifests and source maps go back to the
- * state from before this build (`manifests`, read before any write), minus the units whose nodes the re-synced stage does not
- * hold (never published, so the next build applies them again instead of reporting their nodes as missing, ABFC5002).
- * Units this build removed come back with the stage and are tracked again; a published unit this build re-applied keeps the node
- * names the mod still holds. Adopted units keep their entry. Best effort per asset: a failure leaves that manifest as it is.
- */
-async function restoreManifestsAfterResync(
-  ctx: CliContext,
-  backend: Backend,
-  o: { mod: string; manifests: ReadonlyMap<string, Manifest | null>; appliedAssets: readonly string[]; ir: IrModule; owned: readonly IrAsset[] },
-): Promise<void> {
-  const { projectDir } = ctx;
-  const applied = new Set(o.appliedAssets);
-  const assets = new Set(o.appliedAssets);
-  for (const m of listManifests(projectDir)) if (m.asset.startsWith(`/${o.mod}/`)) assets.add(m.asset);
-  for (const asset of assets) {
-    try {
-      const current = readManifest(projectDir, asset);
-      const base = o.manifests.get(asset) ?? current;
-      if (base === null || base.structFieldsHash !== undefined) continue;
-      let units = base.units;
-      if (units.length > 0) {
-        let held: Set<string>;
-        try {
-          held = new Set((await readAsset(ctx, backend, asset)).parsed.nodes.keys());
-        } catch {
-          // unreadable stage: do not treat it as empty (that would drop published units), keep this manifest as it is
-          continue;
-        }
-        units = base.units.filter((u) => u.adopt !== null || u.nodes.every((n) => held.has(n)));
-      }
-      if (!applied.has(asset) && units.length === base.units.length) continue;
-      const restored: Manifest = { ...base, units };
-      writeManifest(projectDir, restored);
-      const irAsset = o.owned.find((a) => a.path === asset) ?? o.ir.assets.find((a) => a.path === asset);
-      if (irAsset !== undefined) writeSourceMap(projectDir, sourceMapOf(irAsset, previousNames(restored)));
-    } catch {
-      // the manifest stays as it is; the next build reports what it finds
-    }
-  }
 }
 
 /**
@@ -203,7 +142,9 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   if (emitAll(ctx, featureGates({ ...ir, assets: [...structAssets, ...owned] }, caps))) return false;
 
   const tStage = performance.now();
-  const stage = await ensureStage(backend, env, config, { resync: args.flags.resync });
+  const { status: stage, resynced } = await ensureStage(backend, env, config, { resync: args.flags.resync });
+  // A stage copied from the mod again holds no unpublished work: the manifests follow before anything is planned from them.
+  if (resynced) await pruneManifestsToStage(ctx, backend, mod, { ir, owned });
   rec.record("build.stage", since(tStage));
   // A class whose asset is not in the stage yet is created by the apply: it is not read, its manifest (if any) is ignored, every unit is planned.
   const missing = missingInStage(ctx, stage.stagingPath, [...structAssets, ...owned].filter((a) => a.create !== undefined).map((a) => a.path));
@@ -488,7 +429,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
       try {
         await backend.stage(env.modDir.value, { discardChanges: true });
         stageResynced = true;
-        await restoreManifestsAfterResync(ctx, backend, { mod, manifests, appliedAssets, ir, owned });
+        await pruneManifestsToStage(ctx, backend, mod, { base: manifests, appliedAssets, ir, owned });
         output.info("the stage was re-synced from the mod: all unpublished changes in the staged copy were discarded; the next build applies the units again (--keep-failed-stage keeps them for inspection)");
       } catch (e) {
         output.diag({

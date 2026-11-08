@@ -1,12 +1,13 @@
 // Pieces shared by check, build, test, status, adopt and publish: timings, lock check, frontend, backend session.
 import { win32 } from "node:path";
+import { nodeKey } from "@abfc/backend";
 import type { Backend } from "@abfc/backend";
-import { buildHir, listManifests, loadProgram, lowerChecked, movedClassDiagnostics } from "@abfc/compiler";
-import type { CompilerProjectConfig, HirProgram, LoadedProgram } from "@abfc/compiler";
+import { buildHir, listManifests, loadProgram, lowerChecked, movedClassDiagnostics, readManifest, readSourceMap, writeManifest, writeSourceMap } from "@abfc/compiler";
+import type { CompilerProjectConfig, HirProgram, LoadedProgram, Manifest, SourceMapFile } from "@abfc/compiler";
 import { AbfcError } from "@abfc/env";
 import type { ProjectConfig } from "@abfc/env";
 import { parseExport } from "@abfc/ir";
-import type { BackendInfo, Diagnostic, IrModule, T3dExport } from "@abfc/ir";
+import type { BackendInfo, Diagnostic, IrAsset, IrModule, T3dExport } from "@abfc/ir";
 import { checkLock, readLock } from "@abfc/stubgen";
 import type { CliContext } from "../context.js";
 import { backendInfoDiagnostics } from "./backend-version.js";
@@ -175,3 +176,89 @@ export async function readAsset(ctx: CliContext, backend: Backend, asset: string
 }
 
 export const shortHash = (h: string | null): string => (h === null || h === "" ? "-" : h.replace(/^sha256:/, "").slice(0, 8));
+
+/** real node name -> `<unit id>/<IR node id>` for the units recorded in a manifest (the node names a source map keeps). */
+export function previousNames(manifest: Manifest | null): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const u of manifest?.units ?? []) {
+    for (const [irId, real] of Object.entries(u.nodeIds)) out[`${u.id}/${irId}`] = real;
+  }
+  return out;
+}
+
+/** Source map of one asset: spans from the IR, real names from `names` (`<unit id>/<IR node id>` -> real). */
+export function sourceMapOf(asset: IrAsset, names: Record<string, string>): SourceMapFile {
+  const units: SourceMapFile["units"] = {};
+  for (const u of asset.units) {
+    const nodes: SourceMapFile["units"][string]["nodes"] = {};
+    for (const n of u.nodes) nodes[n.id] = { span: n.origin, real: names[nodeKey(u, n.id)] ?? null };
+    units[u.id] = { span: u.origin, nodes };
+  }
+  return { asset: asset.path, units };
+}
+
+/**
+ * After the stage was re-synced from the mod (`--resync`, the automatic re-sync after a failed compile, a stage created from
+ * scratch): the stage holds only what the mod holds, so the unpublished work of every asset of the mod is gone. The manifests
+ * (and source maps) are brought back in line: units whose nodes the stage does not hold are dropped (they were never published,
+ * so the next build applies them again instead of reporting their nodes as missing, ABFC5002, with a fix that pointed back to
+ * `--resync`). Adopted units keep their entry (a build replays the adoption); tombstones, `renamedFrom` and every other manifest
+ * field stay. `o.base` is the state of the manifests from before the build wrote anything (the failed-compile path); without it
+ * the manifests on disk are the base. `o.appliedAssets` always get their base manifest back (a failed build wrote a half-applied
+ * one). Units this build removed come back with the stage and are tracked again; a published unit this build re-applied keeps
+ * the node names the mod still holds. Best effort per asset: an unreadable stage or a write failure leaves that manifest as it is.
+ */
+export async function pruneManifestsToStage(
+  ctx: CliContext,
+  backend: Backend,
+  mod: string,
+  o: {
+    base?: ReadonlyMap<string, Manifest | null>;
+    appliedAssets?: readonly string[];
+    ir?: IrModule;
+    owned?: readonly IrAsset[];
+  } = {},
+): Promise<void> {
+  const { projectDir } = ctx;
+  const appliedAssets = o.appliedAssets ?? [];
+  const applied = new Set(appliedAssets);
+  const assets = new Set(appliedAssets);
+  for (const m of listManifests(projectDir)) if (m.asset.startsWith(`/${mod}/`)) assets.add(m.asset);
+  for (const asset of assets) {
+    try {
+      const current = readManifest(projectDir, asset);
+      const base = o.base?.get(asset) ?? current;
+      if (base === null || base.structFieldsHash !== undefined) continue;
+      let units = base.units;
+      if (units.length > 0) {
+        let held: Set<string>;
+        try {
+          held = new Set((await readAsset(ctx, backend, asset)).parsed.nodes.keys());
+        } catch {
+          // unreadable stage: do not treat it as empty (that would drop published units), keep this manifest as it is
+          continue;
+        }
+        units = base.units.filter((u) => u.adopt !== null || u.nodes.every((n) => held.has(n)));
+      }
+      if (!applied.has(asset) && units.length === base.units.length) continue;
+      const restored: Manifest = { ...base, units };
+      writeManifest(projectDir, restored);
+      const irAsset = o.owned?.find((a) => a.path === asset) ?? o.ir?.assets.find((a) => a.path === asset);
+      if (irAsset !== undefined) {
+        writeSourceMap(projectDir, sourceMapOf(irAsset, previousNames(restored)));
+        continue;
+      }
+      // No IR here (status, stubs, adopt): the dropped units keep their spans in the source map but lose their node names.
+      const sm = readSourceMap(projectDir, asset);
+      if (sm === null) continue;
+      const kept = new Set(units.map((u) => u.id));
+      for (const [id, u] of Object.entries(sm.units)) {
+        if (kept.has(id)) continue;
+        for (const n of Object.values(u.nodes)) n.real = null;
+      }
+      writeSourceMap(projectDir, sm);
+    } catch {
+      // the manifest stays as it is; the next build reports what it finds
+    }
+  }
+}
