@@ -396,6 +396,8 @@ export class FakeBackend implements Backend {
   assetOpsError: string | null = null;
   /** Files of the stage that are gone from it but still in the mod (deleted or renamed-away assets); `staging_status` lists them as `removed`. A resync forgets them. */
   readonly removedFiles = new Set<string>();
+  /** Files `staging_status` lists as conflicts (the real mod changed since the sync); a resync (`discardChanges`) clears them. */
+  stageConflicts: string[] = [];
   /** The raw JSON of the audit result. */
   auditRaw: unknown = { audited_copy: "stage" };
   /** Pretend the server runs a warm session: read, apply and compile results say `warm: true` (`lastWarm`). */
@@ -478,6 +480,47 @@ export class FakeBackend implements Backend {
     p.def = value;
   }
 
+  /** Adds a member variable by hand (as the Mod Editor would). */
+  addHandMadeVariable(asset: string, name: string, type: string): void {
+    const a = this.assets.get(asset);
+    if (a === undefined) throw new Error(`fake stage: no asset ${asset}`);
+    a.variables.push({ name, type });
+  }
+
+  /** Adds a function graph by hand: a function entry node in a graph of that name. */
+  addHandMadeFunction(asset: string, graph: string): string {
+    const a = this.assets.get(asset);
+    if (a === undefined) throw new Error(`fake stage: no asset ${asset}`);
+    const entry: FNode = { name: `K2Node_FunctionEntry_${++this.counter}`, cls: "/Script/BlueprintGraph.K2Node_FunctionEntry", graph, head: ["NodePosX=0", "NodePosY=0"], pins: [] };
+    a.nodes.push(entry);
+    return entry.name;
+  }
+
+  /** Adds a custom event and a call node after it to the event graph by hand; returns both node names. */
+  addHandMadeEvent(asset: string, eventName: string): string[] {
+    const a = this.assets.get(asset);
+    if (a === undefined) throw new Error(`fake stage: no asset ${asset}`);
+    const idx = ++this.counter;
+    const ev = handMade(`K2Node_CustomEvent_${idx}`, CLS.customEvent, [`CustomFunctionName="${eventName}"`], 0, 1200 + idx);
+    const call = handMade(`K2Node_CallFunction_${idx}`, CLS.callFunction, ['FunctionReference=(MemberName="HideAll")'], 300, 1200 + idx);
+    getPin(ev, "then", "out");
+    getPin(call, "execute", "in");
+    getPin(call, "then", "out");
+    connect(ev, "then", call, "execute");
+    a.nodes.push(ev, call);
+    return [ev.name, call.name];
+  }
+
+  /** Names of the variables of an asset, in the stage. */
+  variableNames(asset: string): string[] {
+    return (this.assets.get(asset)?.variables ?? []).map((v) => v.name);
+  }
+
+  /** Names of the function graphs (graphs with a function entry node) of an asset, in the stage. */
+  functionNames(asset: string): string[] {
+    return (this.assets.get(asset)?.nodes ?? []).filter((n) => n.cls.endsWith("K2Node_FunctionEntry")).map((n) => n.graph);
+  }
+
   /**
    * Adds a copy of the comment node `tag` with another `ir=` hash, as an older build left behind when it re-planned a unit.
    * Returns the new node's name.
@@ -513,7 +556,10 @@ export class FakeBackend implements Backend {
   async stage(_modDir: string, o: { discardChanges: boolean }): Promise<StageReport> {
     this.calls.push({ tool: "staging_sync" });
     if (o.discardChanges && this.options.failResync === true) throw new Error("fake staging_sync failed");
-    if (o.discardChanges) this.resynced = true;
+    if (o.discardChanges) {
+      this.resynced = true;
+      this.stageConflicts = [];
+    }
     if (!this.staged || (o.discardChanges && !this.keepAssetsOnSync)) {
       this.assets =
         this.published !== null
@@ -542,7 +588,7 @@ export class FakeBackend implements Backend {
       changed: this.hideChanged ? [] : [...this.changed, ...this.extraChanged],
       added: ["Content/_McpTmp/Scratch.uasset"],
       removed: [...this.removedFiles],
-      conflicts: [],
+      conflicts: [...this.stageConflicts],
     };
   }
 

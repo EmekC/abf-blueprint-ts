@@ -480,7 +480,7 @@ Each owned unit gets one `EdGraphNode_Comment` around its region: `abfc:owned un
 
 Drift check (every build, before apply): `read()` each asset with owned units, recompute `assetHash`, and compare.
 - Equal: the unit is safe to replace.
-- Different: `ABFC5001: BP_PotInfoRelay event UpdateTarget was edited in the editor since the last build (3 nodes changed, 1 link added). abfc will not overwrite it. Undo the edit in the editor, or move it into src/PotInfoRelay.ts and run "abfc adopt ... --discard-editor-changes".` There is no silent force flag.
+- Different: The unit is replaced (TypeScript wins): the build prints the warning ABFC5014 naming what was replaced ("BP_PotInfoRelay: event UpdateTarget was edited in the editor, 3 nodes changed"); a change you want to keep goes into src/PotInfoRelay.ts first. `abfc status` previews it as ABFC5001.
 - An owned node is missing: same error (`ABFC5002`).
 - A foreign node links into an owned unit (for example a hand-made call to `UpdateTarget`): allowed, and recorded so the link is restored after replacement. The call references the event by name, so recreating it keeps the link valid.
 - A removed or renamed owned event that a node staying on the stage still calls (a unit the build does not re-plan, or a hand-made node): `ABFC5009: X is no longer declared in TypeScript, but <node> in graph <graph> (unit <id>) still calls it.` It is refused before the apply, because Unreal's compile would refuse the graph without naming a TS line. Redeclaring X as another unit of the same name is not reported. This is only the backstop; the frontend reports the call itself (next bullet).

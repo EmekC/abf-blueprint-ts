@@ -92,7 +92,7 @@ async function reflectAndRead(ctx: CliContext, backend: Backend): Promise<number
   const owned = ownedSets(ctx.projectDir);
   const t0 = clock();
   if (assetList.length > 0) {
-    const { resynced } = await ensureStage(backend, env, config, { resync: ctx.args.flags.resync });
+    const { resynced } = await ensureStage(backend, env, config, { resync: ctx.args.flags.resync, warn: (d) => ctx.output.diag(d) });
     if (resynced) await pruneManifestsToStage(ctx, backend, mod);
     for (const asset of assetList) {
       try {

@@ -321,7 +321,7 @@ export function publishRefusal(mod: string, r: PublishResult): Diagnostic[] {
     case "conflicts":
       return d(
         "ABFC7005",
-        "the mod's files changed outside abfc since the stage was synced (for example saved in the Mod Editor): run abfc build --resync, then abfc publish again.",
+        "the mod's files changed outside abfc since the stage was synced (for example saved in the Mod Editor): run abfc publish again (the build copies the mod again by itself); if it keeps happening, close programs that write to the mod folder.",
       );
     case "editor refused": {
       const why = r.editorReason ?? r.message;

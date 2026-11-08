@@ -119,7 +119,7 @@ Compiles the project and applies only the units whose TypeScript changed to a pr
 
 | Option | Meaning |
 | --- | --- |
-| `--resync` | Recreate the staging copy from the mod before building. Unpublished staged work of every project that targets the same mod is discarded. Use it after you changed the mod by hand, or when abfc reports a conflict with the real mod ([ABFC4020](errors.md#abfc4020)). |
+| `--resync` | Recreate the staging copy from the mod before building. Unpublished staged work of every project that targets the same mod is discarded. Rarely needed: when the real mod changed since the staging copy was made (for example saved in the Mod Editor), abfc copies it again by itself and says so ([ABFC4017](errors.md#abfc4017)). |
 | `--drift` | Read and drift-check every owned asset, not only the changed ones. Edits made in the Mod Editor to units that did not change in TypeScript are replaced too (TypeScript wins, [ABFC5014](errors.md#abfc5014)), at the cost of one read per asset. Only `abfc build` accepts it. |
 | `--keep-failed-stage` | After an Unreal compile failure keep the failed graphs in the staging copy for inspection. Without it abfc re-syncs the staging copy from the mod, which discards all unpublished staged work in every asset of the mod (like `--resync`), not only in the assets that failed to compile. abfc forgets the units that were never published, and the next build applies them again. If that re-sync fails, abfc warns with [ABFC4016](errors.md#abfc4016) and you run `abfc build --resync` before the next build. Also accepted by `abfc test` and `abfc publish`. |
 
@@ -152,7 +152,7 @@ Builds (unless `--no-build`), compiles the tests of the project and runs each on
 abfc status [--resync]
 ```
 
-Reads every owned asset from the staging copy and prints one line per unit: `<asset> <unit> <state> <ir hash> <asset hash>`, then how many staged files differ from the mod. Editor edits to a unit abfc owns are reported as warnings ([ABFC5001](errors.md#abfc5001)); the next build replaces them.
+Reads every owned asset from the staging copy and prints one line per unit: `<asset> <unit> <state> <ir hash> <asset hash>`, then how many staged files differ from the mod. Editor edits to a unit abfc owns are reported as warnings ([ABFC5001](errors.md#abfc5001)); the next build replaces them. A real mod that changed since the staging copy was made is reported as a warning ([ABFC4020](errors.md#abfc4020)); status never copies it again.
 
 `status --json` result: `{units: [{asset, unit, state, irHash, assetHash}], staging: {changed, added, removed, conflicts}}`.
 
@@ -162,7 +162,7 @@ Reads every owned asset from the staging copy and prints one line per unit: `<as
 abfc adopt <asset> <unit> [--remove-node <name>]... [--yes] [--discard-editor-changes] [--resync]
 ```
 
-Records a hand-made event (`UpdateTarget` or `event:UpdateTarget`) or engine override (`override:ReceiveTick`) of an existing Blueprint as owned by abfc, so that a class in TypeScript can take it over. It never applies anything. Without `--yes` it only prints what it would record and exits 3 with [ABFC5006](errors.md#abfc5006). A unit that abfc already applied is refused with [ABFC5007](errors.md#abfc5007) unless `--discard-editor-changes` is given.
+Deprecated ([ABFC5015](errors.md#abfc5015)): not needed any more, because `abfc build` replaces a hand-made event of the same name as a TypeScript unit. Records a hand-made event (`UpdateTarget` or `event:UpdateTarget`) or engine override (`override:ReceiveTick`) of an existing Blueprint as owned by abfc, so that a class in TypeScript can take it over. It never applies anything. Without `--yes` it only prints what it would record and exits 3 with [ABFC5006](errors.md#abfc5006). A unit that abfc already applied is refused with [ABFC5007](errors.md#abfc5007) unless `--discard-editor-changes` is given.
 
 | Option | Meaning |
 | --- | --- |

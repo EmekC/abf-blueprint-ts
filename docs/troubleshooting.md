@@ -82,7 +82,7 @@ The extension shows one message when no abfc is found and does not retry. It sea
 - **Play In Editor is running.** Stop it in the Mod Editor and publish again.
 - **Unsaved assets in the open Mod Editor.** Save or revert them in the editor first.
 - **Locked files.** Another program, or an asset editor tab, holds the file; close the tab or the program.
-- **The mod's files changed outside abfc since the last sync** (for example saved in the Mod Editor). Run `abfc build --resync` and publish again. This discards stage work that was not yet published.
+- **The mod's files changed outside abfc since the last sync** (for example saved in the Mod Editor). Run `abfc publish` again: the build copies the mod again by itself (ABFC4017) and applies the TypeScript on top, so only edits made by hand to what the TypeScript owns are replaced.
 
 [ABFC7006](errors.md#abfc7006) means the Mod Editor did not respond: close any dialog in it, run only one Mod Editor, and try again. abfc never closes your Mod Editor or clicks in it.
 

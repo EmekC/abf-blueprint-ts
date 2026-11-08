@@ -941,7 +941,7 @@ Meaning: a unit needs an event to supply a delegate, and that event is neither i
 
 Typical cause: the event belongs to a unit that was removed, or that failed to build in an earlier run.
 
-Fix: declare the event in TypeScript again, or remove the use of it, then run `abfc build`. If the event comes from a hand-made unit, adopt it first (`abfc adopt`).
+Fix: declare the event in TypeScript again, or remove the use of it, then run `abfc build`. If the event is a hand-made one in the Blueprint, declare it in TypeScript under the same name: the build replaces the hand-made event (TypeScript wins).
 
 ### ABFC4016
 
@@ -953,15 +953,25 @@ Typical cause: the mod folder is locked, the backend stopped responding or the d
 
 Fix: run `abfc build --resync` before the next build. That discards all unpublished work in the staged copy, in every asset of the mod and not only the assets that failed to compile; the next build applies the units again. `--keep-failed-stage` keeps the failed stage for inspection instead (see [cli.md](cli.md)).
 
+### ABFC4017
+
+Severity: warning · Exit: -
+
+Meaning: the real mod changed since abfc made its staged copy, so abfc copied the mod again before it went on (`abfc build`, `abfc test`, `abfc publish`, `abfc stubs`). The message lists up to 10 of the files. The TypeScript is applied on top of the fresh copy (TypeScript wins).
+
+Typical cause: you saved the mod in the Mod Editor, or published by hand, after the stage was made.
+
+Fix: nothing is required. The staged copy only holds abfc's own work, which the build generates again from the TypeScript. Edits you made by hand in the Mod Editor to what the TypeScript owns are replaced and reported as [ABFC5014](errors.md#abfc5014).
+
 ### ABFC4020
 
-Severity: error · Exit: 2
+Severity: warning (`abfc status`); error · Exit: 2 (only if the conflict remains after the staged copy was made again)
 
-Meaning: the staged copy of the mod conflicts with the real mod, so abfc will not write on top of it.
+Meaning: `abfc status` found that the real mod changed since the staged copy was made. Status never discards anything; the next `abfc build` copies the mod again ([ABFC4017](errors.md#abfc4017)). As an error it means the conflict was still there after that copy.
 
-Typical cause: the mod's files changed after the stage was made, for example the mod was saved in the Mod Editor, or published by hand.
+Typical cause: the mod's files changed after the stage was made, for example the mod was saved in the Mod Editor, or published by hand. As an error: another program is writing to the mod folder.
 
-Fix: run `abfc build --resync`. It replaces the staged copy with the real mod and discards unpublished work in the stage, which the next build applies again.
+Fix: nothing for the warning. For the error, close the programs that write to the mod folder, then run the command again.
 
 ### ABFC4090
 
@@ -1127,6 +1137,16 @@ Typical cause: you changed the Blueprint in the Mod Editor and did not move the 
 
 Fix: nothing is required. To keep a change, move it into the `.ts` file before building; `abfc status` previews what the next build replaces. `abfc build --drift` and the build inside `abfc publish --full` read every owned asset, so they replace editor changes in unchanged assets too.
 
+### ABFC5015
+
+Severity: warning · Exit: -
+
+Meaning: `abfc adopt` is not needed any more. `abfc build` replaces a hand-made event or override of the same name as a TypeScript unit on its own (TypeScript wins, [ABFC5014](errors.md#abfc5014)). The command still works and is kept for compatibility.
+
+Typical cause: you ran `abfc adopt`, as older versions of the documentation advised.
+
+Fix: declare the event in TypeScript and run `abfc build`. Use `abfc adopt` only if you want the hand-made nodes to stay as they are until the first build.
+
 ### ABFC5101
 
 Severity: warning · Exit: -
@@ -1273,7 +1293,7 @@ Meaning: the backend refused to copy the files because the mod or the open Mod E
 
 Typical cause: you saved the mod in the Mod Editor after the stage was made, or left an asset editor tab open.
 
-Fix: the fix line names the case. Typical steps: `abfc build --resync` after the mod changed, save or revert the assets in the Mod Editor, stop Play In Editor, or close the asset tabs, then run `abfc publish` again. abfc never closes your Mod Editor.
+Fix: the fix line names the case. Typical steps: run `abfc publish` again after the mod changed (the build copies the mod again by itself), save or revert the assets in the Mod Editor, stop Play In Editor, or close the asset tabs, then run `abfc publish` again. abfc never closes your Mod Editor.
 
 ### ABFC7006
 

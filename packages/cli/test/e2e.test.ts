@@ -857,7 +857,8 @@ test("(f9) a refusal of bp_publish becomes a diagnostic with a specific fix and 
       conflicts: ["Content/Relay/BP_Relay.uasset: changed"],
     });
     assert.equal(x.code, 3, x.out);
-    assert.match(x.out, /abfc build --resync/);
+    assert.match(x.out, /run abfc publish again/);
+    assert.doesNotMatch(x.out, /--resync/);
 
     x = await refuse({ refused: "editor unreachable", message: "The editor did not answer" });
     assert.equal(x.code, 2, x.out);
@@ -1775,6 +1776,106 @@ test("a class whose asset is not in the stage is created once, then built like a
     x = await r.run(["build"]);
     assert.equal(x.code, 0, x.out);
     assert.equal(r.backend.applyLabels().length, again, "a second build is up to date");
+  });
+});
+
+// ---- TS wins (A8): sweep of a non-hybrid class, hybrid class keeps hand-made members, automatic re-sync on a conflict ----
+
+const syncCount = (backend: FakeBackend): number => backend.calls.filter((c) => c.tool === "staging_sync").length;
+
+test("(A8-2) a hand-made event, variable and function graph on a non-hybrid asset are removed by the next build (ABFC5014, remove lists in the spec)", async () => {
+  await withRig({}, async (r) => {
+    rmSync(join(r.dir, "src", "Relay.ts"));
+    rmSync(join(r.dir, "src", "Relay.test.ts"));
+    writeFileSync(join(r.dir, "src", "Tally.ts"), TALLY, "utf8");
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.deepEqual(r.backend.variableNames(TALLY_ASSET), ["Total"]);
+
+    const handNodes = r.backend.addHandMadeEvent(TALLY_ASSET, "MyOwnEvent");
+    r.backend.addHandMadeVariable(TALLY_ASSET, "Mine", "int");
+    r.backend.addHandMadeFunction(TALLY_ASSET, "HandFn");
+    const before = appliedSpecs(r).length;
+
+    // nothing changed in TypeScript: only --drift reads the asset and finds the hand-made content
+    x = await r.run(["build", "--drift"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC5014/);
+    assert.match(x.out, /MyOwnEvent|hand-made/);
+    assert.doesNotMatch(x.out, /abfc adopt|--resync/);
+    const specs = appliedSpecs(r).slice(before).filter((s: any) => s.asset === TALLY_ASSET);
+    assert.ok(specs.some((s: any) => (s.remove_variables ?? []).includes("Mine")), JSON.stringify(specs.map((s: any) => s.remove_variables)));
+    assert.ok(specs.some((s: any) => (s.remove_functions ?? []).includes("HandFn")));
+    const removed = specs.flatMap((s: any) => (s.graphs ?? []).flatMap((g: any) => g.remove ?? []));
+    for (const n of handNodes) assert.ok(removed.includes(n), `${n} removed`);
+    assert.deepEqual(r.backend.variableNames(TALLY_ASSET), ["Total"]);
+    assert.deepEqual(r.backend.functionNames(TALLY_ASSET), []);
+    const held = r.backend.nodeNames(TALLY_ASSET);
+    for (const n of handNodes) assert.ok(!held.includes(n), `${n} is gone from the stage`);
+    assert.ok(readManifest(r.dir, TALLY_ASSET)!.units.every((u) => u.nodes.every((n) => held.includes(n))), "the built unit stays");
+
+    // and the next drift build has nothing left to replace
+    x = await r.run(["build", "--drift"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC5014/);
+  });
+});
+
+test("(A8-4) a hybrid class (the _Manual merge) keeps its hand-made variable, function graph and events", async () => {
+  await withRig({}, async (r) => {
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    r.backend.addHandMadeVariable(RELAY_ASSET, "Mine", "int");
+    r.backend.addHandMadeFunction(RELAY_ASSET, "HandFn");
+    const before = appliedSpecs(r).length;
+    x = await r.run(["build", "--drift"]);
+    assert.equal(x.code, 0, x.out);
+    const specs = appliedSpecs(r).slice(before);
+    assert.ok(specs.every((s: any) => s.remove_variables === undefined && s.remove_functions === undefined), JSON.stringify(specs));
+    assert.ok(r.backend.variableNames(RELAY_ASSET).includes("Mine"));
+    assert.ok(r.backend.functionNames(RELAY_ASSET).includes("HandFn"));
+    assert.ok(r.backend.nodeNames(RELAY_ASSET).includes("K2Node_CustomEvent_1"), "the hand-made OtherEvent stays");
+    assert.doesNotMatch(x.out, /hand-made (variable|function)/);
+  });
+});
+
+test("(A8-3) a conflict with the real mod: status only warns (ABFC4020); build re-syncs the stage by itself (ABFC4017) and applies the TypeScript again", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    const syncs = syncCount(r.backend);
+    r.backend.stageConflicts = ["Content/Relay/BP_Relay.uasset"];
+
+    x = await r.run(["status"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC4020/);
+    assert.match(x.out, /BP_Relay\.uasset/);
+    assert.equal(syncCount(r.backend), syncs, "status never re-syncs");
+
+    const before = r.backend.applyLabels().length;
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC4017/);
+    assert.match(x.out, /BP_Relay\.uasset/);
+    assert.doesNotMatch(x.out, /ABFC4020|--resync/);
+    assert.equal(syncCount(r.backend), syncs + 1);
+    assert.ok(r.backend.applyLabels().length > before, "the unit was applied to the fresh copy");
+    const held = r.backend.nodeNames(RELAY_ASSET);
+    assert.ok(readManifest(r.dir, RELAY_ASSET)!.units[0]!.nodes.every((n) => held.includes(n)));
+
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /up to date/);
+    assert.doesNotMatch(x.out, /ABFC4017/);
+  });
+});
+
+test("(A8-5) abfc adopt prints the deprecation warning ABFC5015 and still works", async () => {
+  await withRig({}, async (r) => {
+    const x = await r.run(["adopt", RELAY_ASSET, "UpdateTarget", "--yes"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC5015/);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.units[0]!.id, "event:UpdateTarget");
   });
 });
 

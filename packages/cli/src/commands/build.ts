@@ -142,7 +142,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   if (emitAll(ctx, featureGates({ ...ir, assets: [...structAssets, ...owned] }, caps))) return false;
 
   const tStage = performance.now();
-  const { status: stage, resynced } = await ensureStage(backend, env, config, { resync: args.flags.resync });
+  const { status: stage, resynced } = await ensureStage(backend, env, config, { resync: args.flags.resync, warn: (d) => output.diag(d) });
   // A stage copied from the mod again holds no unpublished work: the manifests follow before anything is planned from them.
   if (resynced) await pruneManifestsToStage(ctx, backend, mod, { ir, owned });
   rec.record("build.stage", since(tStage));

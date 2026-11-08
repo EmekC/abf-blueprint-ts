@@ -11,7 +11,7 @@ export async function status(ctx: CliContext): Promise<number> {
   const session = new BackendSession(ctx, rec);
   try {
     const { backend } = await session.open("status.backendStart");
-    const { status: stage, resynced } = await ensureStage(backend, env, config, { resync: args.flags.resync });
+    const { status: stage, resynced } = await ensureStage(backend, env, config, { resync: args.flags.resync, onConflict: "report", warn: (d) => output.diag(d) });
     if (resynced) await pruneManifestsToStage(ctx, backend, config.mod.name);
     const rows: Array<{ asset: string; unit: string; state: string; irHash: string | null; assetHash: string | null }> = [];
 
