@@ -42,6 +42,12 @@ export interface Manifest {
   classDefaultsHash?: string;
   /** `StageStatus.syncedAt` of the stage the class defaults were applied to (a resync discards them). */
   classDefaultsStageSyncedAt?: string | null;
+  /**
+   * The class defaults recorded above reached the mod (a publish copied the asset while the stage still held the sync they were
+   * applied to). A later re-sync copies from the mod, so they are still there and the pass does not run again; cleared (absent)
+   * whenever a defaults pass applies new ones.
+   */
+  classDefaultsPublished?: true;
   /** Asset path of the class-manager row abfc wrote for this class's `@director` (set after a defaults pass whose backend wrote the row). */
   directorRow?: string;
   /** Hash of the fields of a mod-defined struct (`structFieldsHash`) the struct was created with; absent for a Blueprint asset. */

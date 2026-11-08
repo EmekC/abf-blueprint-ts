@@ -498,6 +498,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
       variables,
       ...(classDefaultsHash !== undefined ? { classDefaultsHash } : {}),
       ...(classDefaultsStageSyncedAt !== undefined ? { classDefaultsStageSyncedAt } : {}),
+      ...(!defaultsDone && old?.classDefaultsPublished === true ? { classDefaultsPublished: true as const } : {}),
       ...(directorRow !== undefined ? { directorRow } : {}),
       ...(retiredUnpublished.length > 0 ? { retiredUnpublished } : {}),
       ...(source !== undefined ? { source } : {}),

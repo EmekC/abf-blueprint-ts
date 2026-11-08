@@ -82,7 +82,7 @@ const fail = (ctx: CliContext): number => ctx.output.exitCode() || 1;
 
 /** What a publish still owes the mod besides new content: per manifest, the stage's removed files it wants deleted. */
 type PendingDelete = { manifest: string; kind: "tombstone" | "renamed" | "rows"; files: string[] };
-type PublishList = { changed: string[]; added: string[]; deleted: string[]; config: string[]; pending: PendingDelete[]; alsoOf: string[] };
+type PublishList = { changed: string[]; added: string[]; deleted: string[]; config: string[]; pending: PendingDelete[]; alsoOf: string[]; syncedAt: string | null };
 
 /** Build, list, copy. */
 async function publishFast(ctx: CliContext, rec: Recorder, session: BackendSession): Promise<number> {
@@ -249,7 +249,7 @@ function wouldPublish(ctx: CliContext, stage: StageStatus | null): PublishList {
   for (const f of deleted) output.info(`  deleted ${f}`);
   if (changed.length + added.length + config.length + deleted.length === 0) output.info("  (nothing)");
   output.json({ changed, added, deleted, config, dryRun: args.flags.dryRun, full: args.flags.full });
-  return { changed, added, deleted, config, pending, alsoOf };
+  return { changed, added, deleted, config, pending, alsoOf, syncedAt: stage?.syncedAt ?? null };
 }
 
 /** `bp_publish` for the owned assets of the list, with a grant for the project's own mod. */
@@ -304,6 +304,13 @@ async function copyToMod(ctx: CliContext, rec: Recorder, backend: Backend, list:
     } else {
       writeManifest(ctx.projectDir, rest);
     }
+  }
+  // Class defaults applied to the stage's current sync are in the mod now: a later re-sync brings them back (the planner keeps them).
+  for (const asset of assets) {
+    const m = readManifest(ctx.projectDir, asset);
+    if (m === null || m.classDefaultsHash === undefined || m.classDefaultsPublished === true) continue;
+    if (list.syncedAt === null || (m.classDefaultsStageSyncedAt ?? null) !== list.syncedAt) continue;
+    writeManifest(ctx.projectDir, { ...m, classDefaultsPublished: true });
   }
   finishPending(ctx, list, canDelete, r);
   output.info("published:");

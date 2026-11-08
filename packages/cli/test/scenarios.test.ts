@@ -1,7 +1,7 @@
 // "Careless modder" scenarios on the fake backend: the regression tests of the live scenario runs (see docs/known-issues.md).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readManifest, readSourceMap } from "@abfc/compiler";
 import { OPS, TA, addParentStubs, tally, tallyOnly, withRig } from "./rig.js";
@@ -520,5 +520,53 @@ test("(S19c) a backend without variable_defaults warns ABFC2084 for a changed de
     assert.equal(x.code, 0, x.out);
     assert.match(x.out, /warning ABFC2084: .*Speed/);
     assert.equal(r.backend.variableDefault(TA, "Speed"), "2.5");
+  });
+});
+
+const withDirector = (dir: string, row: string, tag?: string): void => {
+  const file = join(dir, "src", "Relay.ts");
+  const text = readFileSync(file, "utf8").replace(/@director\([^\n]*\)\n/, "");
+  const withImport = text.includes("director") ? text : `import { director } from "@abfc/runtime";\n${text}`;
+  const args = tag === undefined ? `"${row}"` : `"${row}", "${tag}"`;
+  writeFileSync(file, withImport.replace("@blueprint(", `@director(${args})\n@blueprint(`), "utf8");
+};
+const defaultsPasses = (r: { backend: { calls: Array<{ tool: string; label?: string }> } }): number =>
+  r.backend.calls.filter((c) => c.tool === "bp_apply" && c.label === "defaults").length;
+
+test("(S12b) published class defaults are not applied again after a re-sync; unpublished ones are", async () => {
+  await withRig({ handMadeEvent: false, classManagerRows: true }, async (r) => {
+    withDirector(r.dir, "EntityDirector_Test");
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(defaultsPasses(r), 1);
+
+    // not published yet: the editor saves the asset, the re-sync drops the stage's defaults, so the pass runs again
+    r.backend.stageStale = ["Content/Relay/BP_Relay.uasset"];
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC4017/);
+    assert.equal(defaultsPasses(r), 2, "unpublished defaults are re-applied after a re-sync");
+
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    r.backend.markPublished();
+    assert.equal(readManifest(r.dir, "/TestMod/Relay/BP_Relay")?.classDefaultsPublished, true);
+
+    // published: another re-sync brings them back from the mod, nothing is applied and nothing is left to publish
+    r.backend.stageStale = ["Content/Relay/BP_Relay.uasset"];
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC4017/);
+    assert.equal(defaultsPasses(r), 2, "published defaults are not applied again");
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /nothing to publish/);
+
+    // a changed tag is a changed defaults state: the pass runs and the published flag is cleared until the next publish
+    withDirector(r.dir, "EntityDirector_Test", "ClassManager.EntityDirector.Other");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(defaultsPasses(r), 3);
+    assert.equal(readManifest(r.dir, "/TestMod/Relay/BP_Relay")?.classDefaultsPublished, undefined);
   });
 });

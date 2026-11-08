@@ -116,7 +116,9 @@ function defaultsStale(asset: IrModule["assets"][number], manifest: Manifest | n
   if (manifest?.directorRow !== undefined && asset.director === undefined) return true;
   if (asset.classDefaults === undefined && asset.classManagerRow === undefined && asset.director === undefined) return false;
   const hash = classDefaultsHash(asset.classDefaults ?? {}, asset.classManagerRow, asset.director?.asset, asset.director?.tag);
-  if (manifest?.classDefaultsHash !== hash || (manifest.classDefaultsStageSyncedAt ?? null) !== stage.syncedAt) return true;
+  if (manifest?.classDefaultsHash !== hash) return true;
+  // A re-sync discards unpublished defaults only: published ones come back with the mod's copy.
+  if ((manifest.classDefaultsStageSyncedAt ?? null) !== stage.syncedAt && manifest.classDefaultsPublished !== true) return true;
   // The backend can write class-manager rows now but the last pass only verified the row (or wrote another one): run the pass again.
   return directorRows && asset.director !== undefined && manifest.directorRow !== asset.director.asset;
 }
