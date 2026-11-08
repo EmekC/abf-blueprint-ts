@@ -149,6 +149,7 @@ test("stage and stageStatus", async () => {
       added: [],
       removed: ["Content/B.uasset"],
       conflicts: [],
+      stale: [],
     });
   });
 });
