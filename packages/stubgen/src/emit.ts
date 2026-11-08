@@ -1,5 +1,6 @@
 // Reflection JSON -> .d.ts stubs (design 5.1). Pure: no file or network access.
 import type { Profile } from "@abfc/ir";
+import { CURATED_DEFAULTS } from "./curated.js";
 import { describeFunction, loadDescriptions } from "./describe.js";
 import { classFilterTag, memberFilterTags } from "./filter.js";
 import type { FilterRules } from "./filter.js";
@@ -199,7 +200,7 @@ function renderClass(
         if (/WorldContext/.test(p.name)) worldContext = true;
         continue;
       }
-      const dflt = p.dir === "in" ? f.meta?.defaults?.[p.name] : undefined;
+      const dflt = p.dir === "in" ? (f.meta?.defaults?.[p.name] ?? CURATED_DEFAULTS[`${path}:${f.name}`]?.[p.name]) : undefined;
       (p.dir === "in" ? ins : outs).push({ pin: p.name, grammar: grammarOfPin(p), ...(dflt === undefined ? {} : { default: dflt }) });
     }
     if (latent) mt.push("@bpLatent");

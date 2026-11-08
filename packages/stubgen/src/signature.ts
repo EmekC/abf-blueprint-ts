@@ -7,7 +7,7 @@ export interface SigPin {
   /** Real pin name. */
   pin: string;
   grammar: string;
-  /** Default text of the pin from the engine's `CPP_Default_*` metadata (backend 2.6.0); undefined = no C++ default. */
+  /** Default text of the pin from the engine's metadata (backend 2.6.0: the parameter-name key, then `CPP_Default_*`) or the curated zero defaults (curated.ts); undefined = no default. */
   default?: string;
 }
 

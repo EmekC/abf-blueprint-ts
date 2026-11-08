@@ -7,7 +7,7 @@ import { UOBJECT_PATH, ident, memberKey, moduleSpecifier, stubFile, tsIdent } fr
 import { isUnsupported, normalizeGrammar, refsOfGrammar, tsOfGrammar, unsupportedLabel } from "./typemap.js";
 import type { TypeRef } from "./typemap.js";
 
-export const STUBGEN_VERSION = "0.4.0";
+export const STUBGEN_VERSION = "0.5.0";
 
 export interface ManualPin {
   name: string;
