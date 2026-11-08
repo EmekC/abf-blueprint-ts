@@ -128,16 +128,18 @@ You do not have to remember the names: in VS Code, inside a class body, type `Re
 
 ### Director with a gameplay tag
 
-A director is an actor the game starts for you when its gameplay tag is present in the class manager. Name the row and the tag:
+A director is a component (`ActorComponent`) that the game adds to its AI director when play begins, when its gameplay tag is present in the class manager. Name the row and the tag:
 
 ```ts
 import { blueprint, director } from "@abfc/runtime";
-import { Actor } from "/Script/Engine";
+import { ActorComponent } from "/Script/Engine";
 
 @director("MyDirector", ClassManager.EntityDirector.MyDirector)
 @blueprint()
-export class BP_MyDirector extends Actor {}
+export class BPC_MyDirector extends ActorComponent {}
 ```
+
+To see it run, use Play In Editor (Play or Simulate) in the Mod Editor on its default map: during play the World Outliner lists `Abiotic_AIDirector` with your class among its components (for example `BPC_MyDirector_C_0`), next to the game's own directors. Another parent than ActorComponent is [ABFC2089](errors.md#abfc2089).
 
 Typing `ClassManager.EntityDirector.` in your editor lists every tag the game and your mod know (they come from `abfc stubs`); a string such as `"ClassManager.EntityDirector.MyDirector"` works as well and autocompletes. A tag the mod does not have yet is created: the build adds it to the mod's tag list (`Config/Tags/ExampleModTags.ini`), `abfc publish` publishes the file, and an open Mod Editor is told about the new tag at publish (only when that fails, [ABFC7015](errors.md#abfc7015) asks you to restart it). Tags a build adds stay in the list even if you remove the director later, because the list is shared mod content. Without a tag the row starts nothing ([ABFC2079](errors.md#abfc2079)).
 

@@ -2412,6 +2412,19 @@ test("(A11-4c) a backend without liveTags: the tag list published live gives ABF
   });
 });
 
+test("(A11-4d) publish --json carries the tag registration result", async () => {
+  await withRig({ handMadeEvent: false, classManagerRows: true, classManagerRowTag: true, gameplayTags: true, liveTags: true }, async (r) => {
+    addDirector(r.dir, "EntityDirector_Test", DIRECTOR_TAG);
+    r.backend.publishResult = { ...r.backend.publishResult, route: "live-reload", tagsRegistered: [DIRECTOR_TAG], tagsStrategy: "settings" };
+    const x = await r.run(["publish", "--json"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /"tagsRegistered":\s*\[\s*"ClassManager\.EntityDirector\.Test"\s*\]/);
+    assert.match(x.out, /"tagsUnregistered":\s*\[\s*\]/);
+    assert.match(x.out, /"tagsStrategy":\s*"settings"/);
+    assert.match(x.out, /"tagsError":\s*null/);
+  });
+});
+
 test("(A11-5) a changed @director row deletes the old row on the stage and the next publish removes its file", async () => {
   await withRig({ ...OPS, handMadeEvent: false, classManagerRows: true, publishDeletes: true }, async (r) => {
     addDirector(r.dir, "EntityDirector_Test");

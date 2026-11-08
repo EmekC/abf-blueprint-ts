@@ -777,6 +777,16 @@ Typical cause: an older abf-mod-editor-mcp backend.
 
 Fix: update the backend ([backend.md](backend.md)); `abfc doctor` shows `variable defaults: yes` once it can. Or set the default in the Mod Editor.
 
+### ABFC2089
+
+Severity: warning · Exit: -
+
+Meaning: a `@director` class does not derive from ActorComponent. The game starts directors by adding each class-manager director as a component of its AI director actor when play begins, so an Actor (or other) class is never started, although its row and tag are correct.
+
+Typical cause: `extends Actor` copied from an actor example.
+
+Fix: `extends ActorComponent` (or a component class). The build creates the asset again when abfc made it and its family changes (Actor to ActorComponent); a hand-made asset needs the reparent ([ABFC2048](#abfc2048)).
+
 ### ABFC2099
 
 Severity: error · Exit: 1

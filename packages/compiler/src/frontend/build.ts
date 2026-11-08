@@ -335,6 +335,10 @@ class HirBuilder {
       this.sink.error("ABFC2065", `${name} extends UserWidget: add kind: "widget" to @blueprint`, node.name ?? node);
     }
     const director = this.directorOf(node, widget || parentIsWidget, classManagerRowNode);
+    if (director !== undefined && !this.derivesFromComponent(parentType0)) {
+      const dec = (ts.getDecorators(node) ?? []).find((d) => runtimeName(this.checker, d.expression) === "director")!;
+      this.sink.warning("ABFC2089", `${name} has @director but does not derive from ActorComponent: the game adds every director as a component of its AI director, so ${parentIsActor ? "an Actor" : "this"} class is never started. Extend ActorComponent.`, dec);
+    }
     if (!(ts.getDecorators(node) ?? []).some((d) => runtimeName(this.checker, d.expression) === "director") && classManagerRow !== undefined && classManagerRowNode !== undefined && pathContextOf(node.getSourceFile())?.migrationHints === true) {
       this.sink.warning("ABFC2076", `classManagerRow is deprecated; use @director("${classManagerRow.slice(classManagerRow.lastIndexOf("/") + 1)}")`, classManagerRowNode);
       this.sink.diagnostics[this.sink.diagnostics.length - 1]!.fix = "replace classManagerRow with @director (quick fix)";
@@ -669,6 +673,11 @@ class HirBuilder {
   /** True when the class or one of its base classes is an engine Actor (`@bpPath /Script/<Module>.Actor`). */
   private derivesFromActor(type: ts.Type): boolean {
     return this.derivesWhere(type, (p) => /^\/Script\/[^.]+\.Actor$/.test(p));
+  }
+
+  /** True when the class or one of its base classes is an engine ActorComponent (`@bpPath /Script/<Module>.ActorComponent`). */
+  private derivesFromComponent(type: ts.Type): boolean {
+    return this.derivesWhere(type, (p) => /^\/Script\/[^.]+\.ActorComponent$/.test(p));
   }
 
   /** True when the class or one of its base classes has `@bpPath <classPath>`. */
