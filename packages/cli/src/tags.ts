@@ -5,9 +5,12 @@ import type { CliContext } from "./context.js";
 
 /** The tags of the real mod's `Config/Tags/*.ini`; empty when the mod folder is unknown or has none. */
 export function modIniTags(ctx: CliContext): string[] {
-  const modDir = ctx.env.modDir.value;
+  return iniTagsOf(ctx.deps.host, ctx.env.modDir.value);
+}
+
+/** The same from a host and a mod folder (`abfc init` has no context yet). */
+export function iniTagsOf(host: CliContext["deps"]["host"], modDir: string | null): string[] {
   if (modDir === null) return [];
-  const host = ctx.deps.host;
   const dir = win32.join(modDir, "Config", "Tags");
   if (!host.exists(dir)) return [];
   const out: string[] = [];

@@ -201,6 +201,8 @@ Typical cause: an existing `tsconfig.json` was kept by `abfc init`, or the `exte
 
 Fix: add `"extends": "./.abfc/tsconfig.paths.json"` at the top of `tsconfig.json`; the `@mod/` imports need it.
 
+The same code also reports a kept `tsconfig.json` that sets its own `"files"`. That list replaces the `"files": ["./tags.d.ts"]` of the extended `.abfc/tsconfig.paths.json`, so the generated gameplay tag constants (`.abfc/tags.d.ts`) are no longer part of the program. Add `"./.abfc/tags.d.ts"` to the `"files"` of `tsconfig.json`, or list it in `"include"`.
+
 ### ABFC1044
 
 Severity: error · Exit: 1

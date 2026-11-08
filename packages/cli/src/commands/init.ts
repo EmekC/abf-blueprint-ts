@@ -39,6 +39,8 @@ import {
   tasksJsonText,
 } from "../init/templates.js";
 import { Output } from "../output.js";
+import { renderTagsDts } from "@abfc/stubgen";
+import { iniTagsOf } from "../tags.js";
 import { doctor } from "./doctor.js";
 import { stubs } from "./stubs.js";
 
@@ -416,6 +418,16 @@ function buildPlan(s: Session, sel: Selection): Plan {
         ),
       );
     }
+    if (/"files"\s*:/.test(text)) {
+      warnings.push(
+        envWarning(
+          1043,
+          'tsconfig.json has its own "files", which replaces the "files" of ./.abfc/tsconfig.paths.json (the generated .abfc/tags.d.ts).',
+          [],
+          'add "./.abfc/tags.d.ts" to the "files" of tsconfig.json (or list it in "include"), or the director() tag constants do not resolve.',
+        ),
+      );
+    }
     if (/@abfc\/ts-plugin/.test(text)) {
       warnings.push(
         envWarning(
@@ -427,6 +439,11 @@ function buildPlan(s: Session, sel: Selection): Plan {
       );
     }
   }
+
+  // .abfc/tags.d.ts: the constants of the mod's own Config/Tags ini (also with --no-stubs); an existing file is kept, because
+  // `abfc stubs` and `abfc build` own it from then on and it holds the game's tags too
+  if (host.exists(at(".abfc/tags.d.ts"))) add(".abfc/tags.d.ts", "kept", null);
+  else add(".abfc/tags.d.ts", "written", renderTagsDts(iniTagsOf(host, sel.mod.dir)));
 
   // .gitignore: missing lines are appended
   const giAbs = at(".gitignore");

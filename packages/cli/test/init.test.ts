@@ -42,6 +42,7 @@ test("init --mod moda --yes writes the project files, the sample and the user co
   assert.equal(code, 0, s.cap.text());
   const inTarget = s.cap.writes.filter((p) => p !== USER_CONFIG).map(rel).sort();
   assert.deepEqual(inTarget, [
+    ".abfc/tags.d.ts",
     ".gitignore",
     ".vscode/extensions.json",
     ".vscode/tasks.json",
@@ -272,6 +273,35 @@ test("an existing tsconfig with the ts-plugin and no extends is left alone with 
   assert.match(out, /warning ABFC1043: tsconfig\.json does not extend/);
   assert.match(out, /warning ABFC1043: tsconfig\.json still loads @abfc\/ts-plugin/);
   assert.match(out, /kept\s+tsconfig\.json/);
+});
+
+test("init --no-stubs writes .abfc/tags.d.ts with the mod's ini tags; an existing file is kept", async () => {
+  const modsDir = win32.dirname(setup().fake.modDir);
+  const ini = '[/Script/GameplayTags.GameplayTagsSettings]\r\n+GameplayTagList=(Tag="Mod.Own.Tag",DevComment="")\r\n';
+  const s = setup({ [win32.join(modsDir, "ModA", "Config", "Tags", "ExampleTags.ini")]: ini });
+  assert.equal(await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs"], s.cap.deps), 0, s.cap.text());
+  assert.match(read(s, ".abfc", "tags.d.ts"), /"Mod\.Own\.Tag": true/);
+  assert.match(read(s, ".abfc", "tags.d.ts"), /declare const Mod\b/);
+  assert.match(s.cap.text(), /written\s+\.abfc\/tags\.d\.ts/);
+  // a second run keeps what `abfc stubs` / `abfc build` may have extended
+  const again = setup({
+    [win32.join(modsDir, "ModA", "Config", "Tags", "ExampleTags.ini")]: ini,
+    [win32.join(TARGET, ".abfc", "tags.d.ts")]: "// game tags too\n",
+  });
+  assert.equal(await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs"], again.cap.deps), 0, again.cap.text());
+  assert.equal(read(again, ".abfc", "tags.d.ts"), "// game tags too\n");
+  assert.match(again.cap.text(), /kept\s+\.abfc\/tags\.d\.ts/);
+});
+
+test("init warns ABFC1043 when the kept tsconfig.json has its own files (it replaces the inherited .abfc/tags.d.ts)", async () => {
+  const s = setup({
+    [win32.join(TARGET, "tsconfig.json")]: JSON.stringify({ extends: "./.abfc/tsconfig.paths.json", files: ["src/main.ts"] }),
+  });
+  assert.equal(await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs"], s.cap.deps), 0, s.cap.text());
+  assert.match(s.cap.text(), /warning ABFC1043: tsconfig\.json has its own "files"/);
+  const plain = setup({ [win32.join(TARGET, "tsconfig.json")]: JSON.stringify({ extends: "./.abfc/tsconfig.paths.json" }) });
+  assert.equal(await main(["init", TARGET, "--mod", "ModA", "--yes", "--no-stubs"], plain.cap.deps), 0, plain.cap.text());
+  assert.doesNotMatch(plain.cap.text(), /has its own "files"/);
 });
 
 test("an existing .gitignore only gets the missing lines appended", async () => {
