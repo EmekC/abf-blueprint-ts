@@ -395,3 +395,62 @@ test("(S14) a field whose variable the Mod Editor retyped (renamed class) is rec
     assert.doesNotMatch(x.out, /ABFC5014/);
   });
 });
+
+test("(S20) a retyped field is recreated, its units are re-applied and the next build is up to date", async () => {
+  await withRig({ ...OPS }, async (r) => {
+    tallyOnly(r.dir, tally("BP_Tally"));
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.deepEqual(r.backend.variableNames(TA).filter((n) => !n.startsWith("abfc_")), ["Total"]);
+    const before = appliedSpecs(r).length;
+
+    // Total: int -> float (the event parameter follows so the assignment type-checks)
+    writeFileSync(join(r.dir, "src", "Tally.ts"), tally("BP_Tally").replace("import type { int }", "import type { int, float }").replace("Total!: int;", "Total!: float;").replace("Bump(by: int)", "Bump(by: float)"), "utf8");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC2047: .*changed the type of own field Total \(int -> float\): the variable is recreated/);
+    const specs = appliedSpecs(r).slice(before).filter((s) => s.asset === TA);
+    assert.ok(specs.some((s) => (s.remove_variables ?? []).includes("Total")), JSON.stringify(specs));
+    assert.ok(specs.some((s) => (s.variables ?? []).some((v: any) => v.name === "Total" && /float|real|double/.test(v.type))), JSON.stringify(specs));
+    assert.ok(specs.some((s) => (s.graphs ?? []).length > 0), "the unit is applied again");
+    assert.equal(r.backend.variableType(TA, "Total").includes("int"), false);
+    assert.equal(readManifest(r.dir, TA)?.variables.find((v) => v.name === "Total")?.type.includes("int"), false);
+
+    const again = appliedSpecs(r).length;
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC2047/);
+    assert.equal(appliedSpecs(r).length, again, "nothing is applied again");
+  });
+});
+
+test("(S19) adding a field adds a variable; removing it removes the variable (ABFC5011) and the next build is up to date", async () => {
+  await withRig({ ...OPS }, async (r) => {
+    tallyOnly(r.dir, tally("BP_Tally"));
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    writeFileSync(join(r.dir, "src", "Tally.ts"), tally("BP_Tally").replace("  Total!: int;", "  Total!: int;\n  Armed!: boolean;"), "utf8");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.deepEqual(r.backend.variableNames(TA).filter((n) => !n.startsWith("abfc_")).sort(), ["Armed", "Total"]);
+    x = await r.run(["build"]);
+    assert.match(x.out, /up to date/);
+
+    writeFileSync(join(r.dir, "src", "Tally.ts"), tally("BP_Tally"), "utf8");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC5011: removed own field Armed/);
+    assert.deepEqual(r.backend.variableNames(TA).filter((n) => !n.startsWith("abfc_")), ["Total"]);
+    x = await r.run(["build"]);
+    assert.doesNotMatch(x.out, /ABFC5011/);
+    assert.match(x.out, /up to date/);
+
+    // a field with a default is refused with a clear message and nothing is applied
+    const before = appliedSpecs(r).length;
+    writeFileSync(join(r.dir, "src", "Tally.ts"), tally("BP_Tally").replace("  Total!: int;", "  Total!: int;\n  Speed: number = 2.5;"), "utf8");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 1, x.out);
+    assert.match(x.out, /error ABFC2047: field Speed: an own field is declared as `Name!: Type;`/);
+    assert.equal(appliedSpecs(r).length, before);
+  });
+});

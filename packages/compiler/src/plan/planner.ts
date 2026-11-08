@@ -240,9 +240,11 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
     const declared = new Set(input.snapshotVariables?.get(asset.path) ?? []);
     const spans = new Map<string, Span>(asset.units.map((u) => [u.id, u.origin]));
 
-    // Own fields: a changed type is refused before any apply; a field gone from the TS stays in the asset (and the manifest).
+    // Own fields: a changed type recreates the variable (TS wins; every unit of the asset is re-planned, its get/set nodes carry the old
+    // pin type); a field gone from the TS is removed from the asset (below).
     const fieldVars = asset.variables.filter((v) => v.temp !== true);
-    let retyped = false;
+    const retypedFields = new Set<string>();
+    const removeVariables: string[] = [];
     for (const v of fieldVars) {
       const mv = manifest?.variables.find((m) => m.name === v.name);
       if (mv === undefined || mv.type === v.type) continue;
@@ -250,19 +252,17 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
       // renamed on the stage, which fixed the variable up, and an earlier build stopped before the manifest followed).
       const onStage = input.snapshotVariableTypes?.get(asset.path)?.get(v.name);
       if (onStage !== undefined && onStage.toLowerCase() === v.type.toLowerCase()) continue;
-      retyped = true;
+      retypedFields.add(v.name);
+      if (declared.has(v.name)) removeVariables.push(v.name);
       diagnostics.push({
-        severity: "error",
+        severity: "warning",
         code: "ABFC2047",
         asset: asset.path,
         span: v.origin,
-        message: `changing the type of own field ${v.name} (${mv.type} -> ${v.type}) is not supported yet.`,
-        fix: "keep the type, or rename the field (the old variable stays in the asset until you delete it in the Mod Editor).",
+        message: `changed the type of own field ${v.name} (${mv.type} -> ${v.type}): the variable is recreated; values set on placed instances are reset.`,
       });
     }
-    if (retyped) continue;
     // TS wins: an own field gone from the TS is removed from the asset (a record of it that is not in the asset any more is only dropped).
-    const removeVariables: string[] = [];
     const forgetVariables: string[] = [];
     for (const mv of manifest?.variables ?? []) {
       if (mv.name.startsWith("abfc_") || fieldVars.some((v) => v.name === mv.name)) continue;
@@ -291,7 +291,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
         message: `TypeScript wins: the variable ${v.name} had the type ${onStage} in the asset (changed in the Mod Editor); it is recreated as ${v.type}.`,
       });
     }
-    const newFields = fieldVars.filter((v) => !declared.has(v.name) || retypedInAsset.has(v.name));
+    const newFields = fieldVars.filter((v) => !declared.has(v.name) || retypedInAsset.has(v.name) || retypedFields.has(v.name));
 
     /** What this build replaces or removes from the asset beyond its own changes (TS wins): reported once as ABFC5014. */
     const report: string[] = [];
@@ -332,7 +332,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
       }
       if (state === "pendingAdoption" || state === "staleStage") {
         picked.push({ unit, removeNodes: [...(mu.adopt?.nodes ?? []), ...tagsOf(snapshot, mu.id, mu.graph)] });
-      } else if (mu.irHash !== unit.hash || input.forceReplan?.has(`${asset.path} ${unit.id}`) === true) {
+      } else if (mu.irHash !== unit.hash || retypedFields.size > 0 || input.forceReplan?.has(`${asset.path} ${unit.id}`) === true) {
         // the old tag comment (and any orphan of it) goes with the unit's nodes; the tag pass writes the new one
         picked.push({ unit, removeNodes: [...mu.nodes, ...tagsOf(snapshot, mu.id, mu.graph)] });
       } else {
@@ -512,7 +512,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
     if (asset.classDefaults !== undefined || asset.classManagerRow !== undefined || asset.director !== undefined || (manifest?.directorRow !== undefined && asset.director === undefined)) {
       const values = asset.classDefaults ?? {};
       const hash = classDefaultsHash(values, asset.classManagerRow, asset.director?.asset, asset.director?.tag);
-      if (defaultsStale(asset, manifest, input.stage, input.directorRows === true)) {
+      if (retypedFields.size > 0 || defaultsStale(asset, manifest, input.stage, input.directorRows === true)) {
         const classPath = `${asset.path}.${asset.path.slice(asset.path.lastIndexOf("/") + 1)}_C`;
         defaults = {
           classPath,
@@ -577,7 +577,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
 
     const prefixes = picked.map((p) => `abfc_${p.unit.name}_`);
     const variables: IrVariable[] = asset.variables.filter(
-      (v) => (v.temp === true ? prefixes.some((pre) => v.name.startsWith(pre)) : true) && (!declared.has(v.name) || retypedInAsset.has(v.name)),
+      (v) => (v.temp === true ? prefixes.some((pre) => v.name.startsWith(pre)) : true) && (!declared.has(v.name) || retypedInAsset.has(v.name) || retypedFields.has(v.name)),
     );
     // Entry nodes of cross wire targets that stay as they are: their real names come from the manifest.
     const entryNames: Record<string, string> = {};

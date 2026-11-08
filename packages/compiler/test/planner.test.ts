@@ -593,11 +593,25 @@ test("a new own field is declared once, and not again when the asset already has
   assert.deepEqual(again.plan.assets[0]!.variables.map((v) => v.name).includes("Score"), false);
 });
 
-test("an own field whose type changed is ABFC2047 and nothing is planned", () => {
-  const r = fieldPlan(withFields(["Score", "float"]), fieldManifest(["Score", "int"]), ["Score"]);
-  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC2047"]);
-  assert.equal(r.diagnostics[0]!.severity, "error");
-  assert.deepEqual(r.plan.assets, []);
+test("a retyped own field is removed and re-added with the new type (ABFC2047 warning), units re-planned", () => {
+  const snapshot = snapshotOf(node("N1", CALL, []));
+  const keep = mu({ irHash: unit.hash, nodes: ["N1"], assetHash: unitStateHash(snapshot, ["N1"]), stageSyncedAt: "T1" });
+  const manifest = { ...manifestOf(keep), variables: [{ name: "Score", type: "int" }] } as unknown as Manifest;
+  const plan = (irm: IrModule) =>
+    planBuild(irm, { manifests: new Map([[asset, manifest]]), snapshots: new Map([[asset, snapshot]]), stage, handMadeUnits: new Map(), snapshotVariables: new Map([[asset, ["Score", "abfc_UpdateTarget_t0", "abfc_UpdateTarget_i0"]]]) });
+  const same = plan(withFields(["Score", "int"]));
+  assert.deepEqual(same.plan.assets, [], "an unchanged type plans nothing");
+  const r = plan(withFields(["Score", "float"]));
+  assert.deepEqual(r.diagnostics.map((d) => [d.code, d.severity]), [["ABFC2047", "warning"]]);
+  assert.match(r.diagnostics[0]!.message, /changed the type of own field Score \(int -> float\): the variable is recreated/);
+  const a = r.plan.assets[0]!;
+  assert.deepEqual(a.removeVariables, ["Score"]);
+  assert.deepEqual(a.variables.filter((v) => v.temp !== true).map((v) => [v.name, v.type]), [["Score", "float"]]);
+  assert.deepEqual(a.units.map((u) => u.unit.id), [unit.id], "the unit that was up to date is re-planned");
+  // a retyped field the asset lacks (the variable was deleted in the Mod Editor) is only added
+  const lacking = planBuild(withFields(["Score", "float"]), { manifests: new Map([[asset, manifest]]), snapshots: new Map([[asset, snapshot]]), stage, handMadeUnits: new Map(), snapshotVariables: new Map([[asset, []]]) });
+  assert.equal(lacking.plan.assets[0]!.removeVariables, undefined);
+  assert.ok(lacking.plan.assets[0]!.variables.some((v) => v.name === "Score" && v.type === "float"));
 });
 
 test("an own field removed from the TS is removed from the asset (ABFC5011 warning); one the asset lacks is only forgotten", () => {

@@ -469,13 +469,13 @@ Fix: use one decorator. For a changed struct, restore the fields or give the str
 
 ### ABFC2047
 
-Severity: error · Exit: 1
+Severity: error · Exit: 1 (a field that cannot be declared as written); warning · Exit: - (the type of an existing field changed)
 
-Meaning: an own field cannot be declared as written, or the type of an existing own field was changed.
+Meaning: an own field cannot be declared as written (error), or the type of an own field the asset already has was changed (warning: the build removes the variable and creates it again with the new type, and applies every unit of the class again because their get and set nodes carry the old type).
 
-Typical cause: a field with an initializer or a modifier other than `public`, a type without a Blueprint equivalent, a name that collides with an inherited member; or changing the type of a field the asset already has.
+Typical cause: a field with an initializer (own fields have no default value in TypeScript) or a modifier other than `public`, a type without a Blueprint equivalent, a name that collides with an inherited member; or changing `Hits!: int;` to `Hits!: float;`.
 
-Fix: declare the field as `Name!: Type;` with a supported type and a free name. For a type change, keep the type or rename the field (the old variable stays in the asset until you delete it in the Mod Editor).
+Fix: for the error, declare the field as `Name!: Type;` with a supported type and a free name. For the warning nothing is required; values set on placed instances of the class are reset, and hand-made nodes (a class that merges with a `_Manual` interface) that use the variable may fail Unreal's compile (ABFC6001 names them).
 
 ### ABFC2048
 

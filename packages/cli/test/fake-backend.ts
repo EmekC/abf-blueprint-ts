@@ -591,6 +591,11 @@ export class FakeBackend implements Backend {
     return (this.assets.get(asset)?.variables ?? []).map((v) => v.name);
   }
 
+  /** The type of a variable of an asset, in the stage. */
+  variableType(asset: string, name: string): string {
+    return this.assets.get(asset)?.variables.find((v) => v.name === name)?.type ?? "";
+  }
+
   /** Names of the function graphs (graphs with a function entry node) of an asset, in the stage. */
   functionNames(asset: string): string[] {
     return (this.assets.get(asset)?.nodes ?? []).filter((n) => n.cls.endsWith("K2Node_FunctionEntry")).map((n) => n.graph);
@@ -739,12 +744,13 @@ export class FakeBackend implements Backend {
         assets.push({ asset: spec.asset, node_ids: {} });
         return;
       }
-      for (const v of spec.variables ?? []) {
-        if (!a.variables.some((x) => x.name === v.name)) a.variables.push({ name: v.name, type: v.type });
-      }
+      // like the backend's set_vars: the removals first, then the additions (a retyped variable is removed and added in one spec)
       for (const name of spec.remove_variables ?? []) {
         if (!a.variables.some((x) => x.name === name)) scripted.push({ asset: spec.asset, message: `cannot remove variable ${name}: no such variable` });
         a.variables = a.variables.filter((x) => x.name !== name);
+      }
+      for (const v of spec.variables ?? []) {
+        if (!a.variables.some((x) => x.name === v.name)) a.variables.push({ name: v.name, type: v.type });
       }
       // a function graph is the nodes of that graph name in the fake
       for (const name of spec.remove_functions ?? []) {
