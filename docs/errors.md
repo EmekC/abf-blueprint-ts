@@ -941,6 +941,16 @@ Typical cause: abf-mod-editor-mcp older than 2.6.0.
 
 Fix: update abf-mod-editor-mcp to 2.6.0 or newer (or use the bundled backend of `abfc.exe`) and run `abfc stubs` again. Until then a tag can still be written as a string literal.
 
+### ABFC3013
+
+Severity: warning · Exit: -
+
+Meaning: a stub class does not have its full parent chain: the backend gave no Blueprint parents, or an ancestor could not be reflected and is a members-less placeholder.
+
+Typical cause: an older backend whose `reflect` does not report `supers`, or a class that fails to load (see [ABFC4002](errors.md#abfc4002)).
+
+Fix: update the backend, run `abfc stubs`, and check with `node scripts/stub-chain-audit.mjs --stubs .abfc/stubs/<profile>`.
+
 ## 4xxx backend
 
 The backend is the part of abfc that talks to the Mod Editor (the bundled one in `abfc.exe`, or an abf-mod-editor-mcp checkout in a source install). See [backend.md](backend.md). Except ABFC4090, these codes exit with 2.

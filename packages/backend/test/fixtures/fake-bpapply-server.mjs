@@ -150,6 +150,7 @@ function callTool(name, args) {
             structs: {},
             errors: ["one member failed"],
             ...(args.gameplay_tags === true ? { gameplayTags: { tags: ["ClassManager.EntityDirector.Fake"], sources: { settings: 1 } } } : {}),
+            ...(Array.isArray(args.supers_of) ? { supers: { "/Script/Fake.Widget": ["/Script/Fake.Base", "/Script/CoreUObject.Object"], "/Script/Fake.Bad": [1] } } : {}),
           }),
         "utf8",
       );

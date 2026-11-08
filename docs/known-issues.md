@@ -141,6 +141,10 @@ These are known and documented; work around them as described.
 - **`--resync` re-applies class defaults** of every owned asset (one extra publish of those assets), because a re-synced stage holds the editor's version.
 - **A touch-save in the Mod Editor** of a class with class defaults makes the next publish include that asset once.
 
+### Stubs
+
+- **Stubs from a backend without `supers` skip Blueprint parents (ABFC3013).** Members declared on a parent Blueprint are missing from the stub of a class that inherits from it; the class extends its nearest native ancestor instead. Update the backend (a version whose `reflect` reports `supers`) and run `abfc stubs`. A class that fails to load stays a members-less placeholder in the chain (ABFC3013 names it).
+
 ### Engine defaults
 
 - **Optional parameters come from engine metadata.** Functions whose default is not stored as metadata keep their parameters required, except the short curated list. If an argument you expect to be optional is required, pass it explicitly.

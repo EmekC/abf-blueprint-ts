@@ -54,7 +54,13 @@ const EXPORT = [
 ].join("\n");
 const EXPORT_PATH = "C:\\Runs\\r1\\export.t3d";
 
-async function fakeBackend(withReflect: boolean, calls: ReflectRequest[], reads: string[], gameTags?: string[]): Promise<Backend> {
+async function fakeBackend(
+  withReflect: boolean,
+  calls: ReflectRequest[],
+  reads: string[],
+  gameTags?: string[],
+  respond?: (r: ReflectRequest, n: number) => ReflectData,
+): Promise<Backend> {
   const tools = withReflect ? ALL_TOOLS : ALL_TOOLS.filter((t) => t !== "reflect");
   const real = scriptedBackend(tools, { backend_info: fixInfo(), abfc_extensions: EXT });
   const base = await real.info();
@@ -86,6 +92,7 @@ async function fakeBackend(withReflect: boolean, calls: ReflectRequest[], reads:
     },
     reflect: async (r) => {
       calls.push(r);
+      if (respond !== undefined) return result(respond(r, calls.length));
       return result(calls.length === 1 ? (gameTags === undefined ? firstData : { ...firstData, gameplayTags: { tags: gameTags, sources: {} } }) : secondData);
     },
     gameTest: async () => {
@@ -294,6 +301,113 @@ test("abfc stubs: stubs.widgetMembers are emitted on the class stub, recorded in
     assert.match(script, /readonly TitleText: UObject;/);
     const lock = JSON.parse(readFileSync(join(dir, "stubs.lock.json"), "utf8")) as { widgetMembers: unknown };
     assert.deepEqual(lock.widgetMembers, widgetMembers);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+const OBJ = "/Script/CoreUObject.Object";
+const FAKE_BP = "/Game/Fake/BP_Fake.BP_Fake_C";
+const MID = "/Script/FakeEngine.Mid";
+const OPAQ = "/Script/FakeEngine.Opaq";
+
+const chainClass = (ancestors: string[], extra: Record<string, unknown> = {}): ReflectData["classes"][string] => ({
+  meta: "/Script/CoreUObject.Class",
+  ancestors,
+  castPin: null,
+  properties: [],
+  functions: [],
+  ...extra,
+});
+
+test("abfc stubs: parent chains are closed with members and opaque types get their supers", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-stubs-"));
+  try {
+    const fake = setup(tmp, []);
+    const calls: ReflectRequest[] = [];
+    const respond = (_r: ReflectRequest, n: number): ReflectData => {
+      if (n === 1) {
+        return {
+          engineVersion: "5.4.4-fake",
+          classes: {
+            ...firstData.classes,
+            [FAKE_BP]: chainClass([THING, OBJ], {
+              meta: "/Script/Engine.BlueprintGeneratedClass",
+              properties: [{ name: "Slot", pins: [pin("Slot", "out", "object", { subCategoryObject: OPAQ })] }],
+            }),
+          },
+          structs: {},
+          supers: { [FAKE_BP]: [MID, THING, OBJ] },
+          errors: [],
+        };
+      }
+      return {
+        engineVersion: "5.4.4-fake",
+        classes: {
+          [MID]: chainClass([THING, OBJ], {
+            functions: [{ name: "MidCall", pins: [pin("self", "in", "object", { subCategoryObject: MID }), pin("ReturnValue", "out", "int")] }],
+          }),
+        },
+        structs: secondData.structs,
+        supers: { [OPAQ]: [THING, OBJ], [MID]: [THING, OBJ] },
+        errors: [],
+      };
+    };
+    const cap = captureDeps(fake, () => fakeBackend(true, calls, [], undefined, respond));
+    cap.deps.cwd = tmp;
+    const code = await main(["stubs"], cap.deps);
+    const out = cap.text();
+    assert.equal(code, 0, out);
+
+    assert.equal(calls.length, 2, "one round for the configured classes, one for the missing parent, structs and opaque supers");
+    assert.deepEqual(calls[1]?.classes, [MID]);
+    assert.deepEqual(calls[1]?.structs, [VEC]);
+    assert.deepEqual(calls[1]?.supersOf, [OPAQ]);
+    assert.doesNotMatch(out, /ABFC3013/);
+
+    const dir = join(tmp, ".abfc", "stubs", "ue5.4.4-1050002");
+    const bp = readFileSync(join(dir, "Game", "Fake", "BP_Fake.d.ts"), "utf8");
+    assert.match(bp, /export declare class BP_Fake_C extends Mid \{/);
+    const script = readFileSync(join(dir, "Script", "FakeEngine.d.ts"), "utf8");
+    assert.match(script, /export declare class Mid extends Thing \{/);
+    assert.match(script, /MidCall\(\): int;/);
+    assert.match(script, /export declare class Opaq extends Thing \{\}/);
+    const index = JSON.parse(readFileSync(join(dir, "_index.json"), "utf8")) as { chainGaps: string[]; noSupers: string[]; opaqueNoParent: string[] };
+    assert.deepEqual(index.chainGaps, []);
+    assert.deepEqual(index.noSupers, []);
+    assert.deepEqual(index.opaqueNoParent, []);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("abfc stubs: an old backend shape (no supers) warns ABFC3013 for Blueprint classes and never sends supersOf", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-stubs-"));
+  try {
+    const fake = setup(tmp, []);
+    const calls: ReflectRequest[] = [];
+    const respond = (_r: ReflectRequest, n: number): ReflectData =>
+      n === 1
+        ? {
+            engineVersion: "5.4.4-fake",
+            classes: { ...firstData.classes, [FAKE_BP]: chainClass([THING, OBJ], { meta: "/Script/Engine.BlueprintGeneratedClass" }) },
+            structs: {},
+            errors: [],
+          }
+        : secondData;
+    const cap = captureDeps(fake, () => fakeBackend(true, calls, [], undefined, respond));
+    cap.deps.cwd = tmp;
+    const code = await main(["stubs"], cap.deps);
+    const out = cap.text();
+    assert.equal(code, 0, out);
+    assert.match(out, /warning ABFC3013: the backend did not report the Blueprint parent classes of 1 class/);
+    assert.ok(calls.every((c) => c.supersOf === undefined), "supersOf is only sent to backends that report supers");
+
+    const dir = join(tmp, ".abfc", "stubs", "ue5.4.4-1050002");
+    const bp = readFileSync(join(dir, "Game", "Fake", "BP_Fake.d.ts"), "utf8");
+    assert.match(bp, /export declare class BP_Fake_C extends Thing \{/);
+    const index = JSON.parse(readFileSync(join(dir, "_index.json"), "utf8")) as { noSupers: string[] };
+    assert.deepEqual(index.noSupers, [FAKE_BP]);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

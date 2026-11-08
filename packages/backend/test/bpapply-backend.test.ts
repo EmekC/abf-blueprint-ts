@@ -276,6 +276,17 @@ test("reflect asks for gameplay tags only when requested and parses them", async
   });
 });
 
+test("reflect passes supers_of only when given and parses supers", async () => {
+  await withBackend({}, async ({ backend, calls }) => {
+    const plain = await backend.reflect({ mod: "TestMod", classes: [], structs: [], castTargets: [] });
+    assert.equal(plain.data.supers, undefined);
+    assert.equal("supers_of" in (calls()[0]?.args ?? {}), false);
+    const res = await backend.reflect({ mod: "TestMod", classes: [], structs: [], castTargets: [], supersOf: ["/Script/Fake.Other"] });
+    assert.deepEqual(calls()[1]?.args.supers_of, ["/Script/Fake.Other"]);
+    assert.deepEqual(res.data.supers, { "/Script/Fake.Widget": ["/Script/Fake.Base", "/Script/CoreUObject.Object"] });
+  });
+});
+
 test("assetOps sends bp_asset_ops and maps the result; a refused op is a result, not an exception", async () => {
   await withBackend({}, async ({ backend, calls }) => {
     const ok = await backend.assetOps("TestMod", [{ op: "rename", from: "/TestMod/A", to: "/TestMod/B" }, { op: "recreate", asset: "/TestMod/C" }]);

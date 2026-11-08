@@ -38,4 +38,6 @@ export interface ReflectData {
   classes: Record<string, ReflectClass>;
   structs: Record<string, { fields: ReflectPin[] }>;
   errors: string[];
+  /** Class path -> every ancestor, Blueprint and native, nearest first, ending at UObject; absent from older backends. */
+  supers?: Record<string, string[]>;
 }

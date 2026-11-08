@@ -5,9 +5,11 @@ import type { Backend, ReflectData } from "@abfc/backend";
 import { ownedSets } from "@abfc/compiler";
 import { AbfcError, runtimeLayout } from "@abfc/env";
 import {
+  classesWithoutSupers,
   emitStubsWithIndex,
   manualFromExport,
   manualReferences,
+  missingAncestors,
   missingStructs,
   newLock,
   sortedWidgetMembers,
@@ -26,6 +28,9 @@ import { ensureStage } from "./stage.js";
 
 /** Folders of the mod's Content that are never stubbed. */
 const SKIPPED_FOLDERS = ["_McpTest", "_McpTmp"];
+
+/** Upper bound of the reflect rounds that close parent chains and structs. */
+const MAX_REFLECT_ROUNDS = 6;
 
 /** The backend's refusal to read an asset of another class (`<asset> is not a Blueprint (<Class>)`, `<asset> is a <Class>, not a Blueprint`). */
 const NOT_A_BLUEPRINT = /not a Blueprint/i;
@@ -56,8 +61,15 @@ function declarationOf(spec: string): string {
 
 function merge(into: ReflectData, add: ReflectData): void {
   into.engineVersion ??= add.engineVersion;
-  for (const [k, v] of Object.entries(add.classes)) if (into.classes[k] === undefined) into.classes[k] = v;
+  for (const [k, v] of Object.entries(add.classes)) {
+    const have = into.classes[k];
+    if (have === undefined || (have.castOnly === true && v.castOnly !== true)) into.classes[k] = v;
+  }
   for (const [k, v] of Object.entries(add.structs)) if (into.structs[k] === undefined) into.structs[k] = v;
+  if (add.supers !== undefined) {
+    const sup = (into.supers ??= {});
+    for (const [k, v] of Object.entries(add.supers)) if (sup[k] === undefined) sup[k] = v;
+  }
   into.errors.push(...add.errors);
 }
 
@@ -113,7 +125,7 @@ async function reflectAndRead(ctx: CliContext, backend: Backend): Promise<number
   }
   recordRun(paths.runsFile, { at: at(), step: "stubs.read", seconds: (clock() - t0) / 1000, ok: true, units: manual.length, mode: "cold" });
 
-  // Reflection: the configured classes, then the struct closure (depth 2).
+  // Reflection: the configured classes, then every ancestor on their parent chains with members, the struct closure (depth 2) and the parent chains of the opaque types.
   const t1 = clock();
   const classes = [...config.stubs.classes];
   const first = await backend.reflect({
@@ -135,10 +147,21 @@ async function reflectAndRead(ctx: CliContext, backend: Backend): Promise<number
   const data: ReflectData = { engineVersion: null, classes: {}, structs: {}, errors: [] };
   merge(data, first.data);
   const manualRefs = manual.flatMap((m) => manualReferences(m));
-  for (let depth = 0; depth < 2; depth++) {
-    const need = missingStructs(data, manualRefs);
-    if (need.length === 0) break;
-    const more = await backend.reflect({ mod, classes: [], structs: need, castTargets: [] });
+  const manualParents = manual.map((m) => m.parent).filter((p): p is string => p !== null);
+  const manualPaths = new Set(manual.map((m) => m.classPath));
+  const supersSupported = first.data.supers !== undefined;
+  const askedClasses = new Set<string>([...classes, ...config.stubs.scriptClasses]);
+  const askedSupers = new Set<string>();
+  let structRounds = 0;
+  for (let round = 0; round < MAX_REFLECT_ROUNDS; round++) {
+    const needClasses = missingAncestors(data, manualParents, manualPaths).filter((p) => !askedClasses.has(p));
+    const needStructs = structRounds < 2 ? missingStructs(data, manualRefs) : [];
+    const needSupers = supersSupported ? classesWithoutSupers(data, manualRefs).filter((p) => !askedSupers.has(p) && !needClasses.includes(p)) : [];
+    if (needClasses.length + needStructs.length + needSupers.length === 0) break;
+    if (needStructs.length > 0) structRounds++;
+    for (const p of needClasses) askedClasses.add(p);
+    for (const p of needSupers) askedSupers.add(p);
+    const more = await backend.reflect({ mod, classes: needClasses, structs: needStructs, castTargets: [], ...(needSupers.length > 0 ? { supersOf: needSupers } : {}) });
     merge(data, more.data);
   }
   recordRun(paths.runsFile, {
@@ -182,6 +205,23 @@ async function reflectAndRead(ctx: CliContext, backend: Backend): Promise<number
     mod,
     opaque: [],
   });
+  const firstFew = (list: string[]): string => `${list.slice(0, 5).join(", ")}${list.length > 5 ? ", ..." : ""}`;
+  if (index.noSupers.length > 0) {
+    output.diag({
+      severity: "warning",
+      code: "ABFC3013",
+      message: `the backend did not report the Blueprint parent classes of ${index.noSupers.length} class(es) (${firstFew(index.noSupers)}); their stubs extend the nearest native class, so members declared on Blueprint parents are missing.`,
+      fix: 'update abf-mod-editor-mcp to a version whose reflect reports "supers" (see docs/backend.md), then run "abfc stubs".',
+    });
+  }
+  if (index.chainGaps.length > 0) {
+    output.diag({
+      severity: "warning",
+      code: "ABFC3013",
+      message: `${index.chainGaps.length} stub class(es) inherit from a class without members: ${firstFew(index.chainGaps)}.`,
+      fix: 'check the reflect warnings (ABFC4002) above and run "abfc stubs" again; report the class if the warning stays.',
+    });
+  }
   const profileDir = win32.join(paths.stubsDir, env.profile.id);
   writeStubs(profileDir, files);
   writeLock(
