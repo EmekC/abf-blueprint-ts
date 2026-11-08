@@ -38,6 +38,10 @@ export interface CliFlags {
   drift: boolean;
   /** `--keep-failed-stage`: after an Unreal compile failure the stage keeps the failed graphs (no re-sync). */
   keepFailedStage: boolean;
+  /** `--add <path>` (repeatable): `abfc stubs` also generates stubs for this class, struct or enum (`/Script/<Package>.<Name>`, a `/Game/...` class or module). */
+  add: string[];
+  /** `--refresh`: `abfc stubs` discards the cached class catalog and reflect data and generates everything again. */
+  refresh: boolean;
 }
 
 export interface ParsedArgs {
@@ -90,6 +94,8 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
         version: { type: "boolean" },
         drift: { type: "boolean" },
         "keep-failed-stage": { type: "boolean" },
+        add: { type: "string", multiple: true },
+        refresh: { type: "boolean" },
         // `abfc lsp` accepts what language clients add; the values are ignored
         stdio: { type: "boolean" },
         clientProcessId: { type: "string" },
@@ -105,6 +111,7 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
   if (v["keep-failed-stage"] === true && command !== "build" && command !== "test" && command !== "publish") {
     throw new UsageError("--keep-failed-stage is an option of abfc build, test and publish");
   }
+  if ((v.add !== undefined || v.refresh === true) && command !== "stubs") throw new UsageError("--add and --refresh are options of abfc stubs");
   return {
     command: command ?? null,
     positionals,
@@ -135,6 +142,8 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
       version: v.version === true,
       drift: v.drift === true,
       keepFailedStage: v["keep-failed-stage"] === true,
+      add: v.add ?? [],
+      refresh: v.refresh === true,
     },
   };
 }

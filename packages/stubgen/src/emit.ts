@@ -26,6 +26,8 @@ export interface EmitInput {
   mod: string;
   /** Extra type paths to emit as opaque classes (referenced types that were not reflected are added automatically). */
   opaque: string[];
+  /** Enum paths to declare even when no member references them. */
+  opaqueEnums?: string[];
 }
 
 export interface StubIndex {
@@ -312,6 +314,7 @@ export function emitStubsWithIndex(input: EmitInput): { files: Map<string, strin
     if (!defined.has(r.path) && !opaqueKinds.has(r.path)) opaqueKinds.set(r.path, r.kind);
   }
   for (const p of input.opaque) if (!defined.has(p) && !opaqueKinds.has(p)) opaqueKinds.set(p, "class");
+  for (const p of input.opaqueEnums ?? []) if (!defined.has(p) && !opaqueKinds.has(p)) opaqueKinds.set(p, "enum");
 
   // Parent chains: the nearest ancestor of every class (reflected or named by `supers`) is its real parent; a chain entry
   // that was not reflected becomes an opaque class that keeps its own known parent.

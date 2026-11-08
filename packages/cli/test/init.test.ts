@@ -64,7 +64,7 @@ test("init --mod moda --yes writes the project files, the sample and the user co
   assert.equal(cfg.mod.name, "ModA", "the folder's spelling");
   assert.equal(cfg.sourceRoot, "src");
   assert.equal(cfg.classManager.table, "DataTables/DT_ClassManager");
-  assert.equal(cfg.stubs.scriptClasses.length, 15);
+  assert.deepEqual(cfg.stubs.scriptClasses, [], "the default set is added by abfc stubs, not written to the config");
   assert.equal(cfg.stubs.modAssets, "all");
   assert.match(read(s, "tsconfig.json"), /"extends": "\.\/\.abfc\/tsconfig\.paths\.json"/);
   assert.doesNotMatch(read(s, "tsconfig.json"), /plugins/);

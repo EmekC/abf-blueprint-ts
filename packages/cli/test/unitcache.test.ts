@@ -27,6 +27,10 @@ function lock(over: Partial<StubsLock> = {}): StubsLock {
 test("the stub lock hash ignores the class lists and the timestamp", () => {
   const base = stubLockHashOf(lock());
   assert.equal(stubLockHashOf(lock({ classes: ["/Game/A", "/Game/B"] })), base);
+  // Adding classes automatically (lock.auto) never re-plans a unit.
+  const auto = { catalogSha256: "a", gameClasses: 3000, failed: [], added: [] };
+  assert.equal(stubLockHashOf(lock({ auto })), base);
+  assert.equal(stubLockHashOf(lock({ auto: { ...auto, catalogSha256: "b", gameClasses: 1, failed: ["/Game/X"], added: ["/Script/Y.Z"] } })), base);
   assert.equal(stubLockHashOf(lock({ scriptClasses: [] })), base);
   assert.equal(stubLockHashOf(lock({ modAssets: ["/TestMod/B", "/TestMod/C"] })), base);
   assert.equal(stubLockHashOf(lock({ createdAt: "2027-01-01T00:00:00.000Z" })), base);

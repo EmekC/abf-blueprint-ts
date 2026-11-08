@@ -17,8 +17,8 @@ Schema 2. A JSON schema ships with the VS Code extension, so the editor complete
 | `mod.name` | string, required | Folder name of the mod: `<mods folder>\<name>\<name>.uplugin`. Letters, digits and `_` only. |
 | `sourceRoot` | string, `"src"` | Project-relative folder with the class files. Asset paths derive from the folders below it. A relative path, `/` or `\`, no `..`. |
 | `classManager.table` | string, `"DataTables/DT_ClassManager"` | Mod-relative folder and name of the class-manager table that `@director` rows go into. |
-| `stubs.classes` | string array | Extra engine or game class paths to generate stubs for. |
-| `stubs.scriptClasses` | string array | Script class paths (`/Script/Module.Class`) to generate stubs for. |
+| `stubs.classes` | string array, `[]` | Optional extras. Every `/Game` class and every engine name your source imports gets stubs automatically; list a path here only to force it (for example a class no source imports yet). |
+| `stubs.scriptClasses` | string array, `[]` | Optional extras: `/Script/Module.Class` paths to generate stubs for. The profile's default engine classes are always generated; `abfc init` writes an empty list. |
 | `stubs.modAssets` | `"all"` or a list | `"all"` stubs every Blueprint of the mod. A list holds mod-relative paths such as `"Relays/BP_Example"`. A leading `/` is [ABFC1021](errors.md#abfc1021). |
 | `stubs.widgetMembers` | object | Deprecated. Members are found by `abfc stubs`; entries that reflection finds warn [ABFC3015](errors.md#abfc3015), others are still emitted (class path, then member name, then widget class path). |
 | `stubs.scriptModules` | ignored | Deprecated; use `stubs.scriptClasses` ([ABFC3010](errors.md#abfc3010)). |

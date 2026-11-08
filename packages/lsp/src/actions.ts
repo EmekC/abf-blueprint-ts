@@ -1,15 +1,25 @@
 // Quick fixes, built from the server's own diagnostics for the requested range.
 import { CodeActionKind } from "vscode-languageserver/node.js";
 import type { CodeAction, Range } from "vscode-languageserver/node.js";
-import { addDirectorTagFix, directorFix, idivFix, keepPathFix, modImportFix, optionalChainFix, relativePathFix, removePathFix, useOverrideFix } from "@abfc/compiler";
+import { addDirectorTagFix, directorFix, idivFix, keepPathFix, modImportFix, optionalChainFix, relativePathFix, removePathFix, stubImportAt, useOverrideFix } from "@abfc/compiler";
 import type { CompilerProjectConfig, TextEdit, TsSourceFile } from "@abfc/compiler";
 import type { Diagnostic } from "@abfc/ir";
 import { offsetRange, spanOffsets, toLspDiagnostic } from "./convert.js";
+import { GENERATE_STUBS_COMMAND } from "./generate.js";
 import type { ProjectState, Snapshot } from "./project.js";
 import { pathKey } from "./uri.js";
 
 /** TypeScript's "possibly null / undefined" errors, which `?.` fixes. */
 const TS_NULL = /^\[TS(2531|2532|18047|18048|18049)\]/;
+
+/** TypeScript's "module / exported member not found" errors, which a missing stub causes. */
+const TS_STUB_MISSING = /^\[TS(2305|2307|2614|2724)\]/;
+
+/** What the "Generate stubs" quick fix needs besides the editor: the CLI is known and where the project lives. */
+export interface ActionOptions {
+  canGenerate: boolean;
+  projectDir: string;
+}
 
 interface Fix {
   title: string;
@@ -52,7 +62,15 @@ function fixFor(d: Diagnostic, sf: TsSourceFile, start: number, end: number, cfg
  * diagnostics, so they do not depend on what the client sends back; TypeScript's possibly-null errors count even when
  * they are not published.
  */
-export function codeActionsFor(state: ProjectState, snap: Snapshot, uri: string, path: string, range: Range, cfg: CompilerProjectConfig): CodeAction[] {
+export function codeActionsFor(
+  state: ProjectState,
+  snap: Snapshot,
+  uri: string,
+  path: string,
+  range: Range,
+  cfg: CompilerProjectConfig,
+  opts: ActionOptions = { canGenerate: false, projectDir: "" },
+): CodeAction[] {
   const sf = snap.byKey.get(pathKey(path));
   if (sf === undefined) return [];
   let rangeStart: number;
@@ -88,6 +106,32 @@ export function codeActionsFor(state: ProjectState, snap: Snapshot, uri: string,
       diagnostics: [toLspDiagnostic(d)],
       edit: { changes: { [uri]: edits } },
     });
+  }
+  if (opts.canGenerate) {
+    for (const d of state.tsDiagnosticsOf(snap, sf)) {
+      if (d.span === undefined || !TS_STUB_MISSING.test(d.message)) continue;
+      let offsets: { start: number; end: number };
+      try {
+        offsets = spanOffsets(sf, d.span);
+      } catch {
+        continue;
+      }
+      if (offsets.start > rangeEnd || rangeStart > offsets.end) continue;
+      const imp = stubImportAt(sf, offsets.start, offsets.end);
+      if (imp === undefined) continue;
+      const isScript = imp.specifier.startsWith("/Script/");
+      const add = isScript ? imp.names.map((n) => `${imp.specifier}.${n}`) : [imp.specifier];
+      if (add.length === 0) continue;
+      const title = `Generate stubs for ${imp.names.length > 0 ? imp.names.join(", ") : imp.specifier}`;
+      if (seen.has(title)) continue;
+      seen.add(title);
+      out.push({
+        title,
+        kind: CodeActionKind.QuickFix,
+        diagnostics: [toLspDiagnostic(d)],
+        command: { title, command: GENERATE_STUBS_COMMAND, arguments: [{ projectDir: opts.projectDir, add }] },
+      });
+    }
   }
   return out;
 }

@@ -25,6 +25,13 @@ const FIX_INFO: RawBackendInfo = {
 
 const EXT = { features: ["reflect", "compile_node_refs", "bp_read_seconds"] };
 
+test("catalog capability follows the tool list only", () => {
+  assert.equal(capabilitiesFrom(ALL_TOOLS, FIX_INFO, EXT).catalog, false);
+  assert.equal(capabilitiesFrom([...ALL_TOOLS, "catalog"], FIX_INFO, EXT).catalog, true);
+  assert.equal(capabilitiesFrom([...ALL_TOOLS, "catalog"], null, null).catalog, true);
+  assert.equal(BP_APPLY_P1_BASE.catalog, false);
+});
+
 test("fix-shaped backend_info and extensions: native pin types, native map on, set off (backend lacks it)", () => {
   const c = capabilitiesFrom(ALL_TOOLS, FIX_INFO, EXT);
   assert.equal(c.protocol, 1);
