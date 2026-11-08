@@ -1153,7 +1153,7 @@ Fix: change the call in the unit named in the message, or declare the method aga
 
 Severity: warning · Exit: -
 
-Meaning: a Blueprint class is no longer declared in TypeScript. abfc removes the units it owns, but the class defaults it set stay as they are.
+Meaning: a Blueprint class is no longer declared in TypeScript, and the asset stays in the mod for now: abfc removes the units it owns, but the class defaults it set stay as they are. With backend 2.6.0 an asset that abfc created is deleted instead (the build prints `deleted <asset>`; the file leaves the mod with the next `abfc publish`), and only an asset that was not created by abfc, or a build with an older backend, ends here (see also [ABFC5017](errors.md#abfc5017)).
 
 Typical cause: the class file was deleted.
 
@@ -1389,7 +1389,7 @@ Meaning: the backend refused to copy the files because the mod or the open Mod E
 
 Typical cause: you saved the mod in the Mod Editor after the stage was made, or left an asset editor tab open.
 
-Fix: the fix line names the case. Typical steps: run `abfc publish` again after the mod changed (the build copies the mod again by itself), save or revert the assets in the Mod Editor, stop Play In Editor, or close the asset tabs, then run `abfc publish` again. abfc never closes your Mod Editor.
+Fix: the fix line names the case. Typical steps: run `abfc publish` again after the mod changed (the build copies the mod again by itself), save or revert the assets in the Mod Editor, stop Play In Editor, or close the asset tabs, then run `abfc publish` again. If the editor could not unload an asset because other loaded assets or the open map still use it, update the backend or close the Mod Editor. abfc never closes your Mod Editor and never stops Play In Editor for you.
 
 ### ABFC7006
 

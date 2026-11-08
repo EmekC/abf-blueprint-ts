@@ -80,11 +80,59 @@ A field can also start with a value. A literal initializer (a number, `true` or 
 Speed: float = 2.5;
 ```
 
-Change the number and the next `abfc build` updates the default of the existing variable; take the initializer away (`Speed!: float;`) and the default is cleared.
+Change the number and the next `abfc build` updates the default of the existing variable (with backend 2.6.0 or newer, [ABFC2084](errors.md#abfc2084) otherwise); take the initializer away (`Speed!: float;`) and the default is cleared.
+
+### Calling engine functions: defaults
+
+Engine functions keep the default values Unreal gives their parameters, so you only pass what you mean. These calls type-check and leave every other pin as the Blueprint editor would:
+
+```ts
+import { GameplayStatics, KismetSystemLibrary } from "/Script/Engine";
+
+KismetSystemLibrary.PrintString("hi");   // duration, colour, log and screen flags keep their defaults
+KismetSystemLibrary.Delay();             // Duration keeps 0.2
+const player = GameplayStatics.GetPlayerCharacter();   // PlayerIndex is 0
+```
+
+Only a trailing run of parameters can be left out, as in TypeScript. Run `abfc stubs` once (and again after updating abfc) so the stubs carry the defaults.
+
+### Overriding an engine event
+
+To run code when the actor begins play, override the parent's event. `@override` is for events and functions the parent class already has; `@event` is only for new custom events (using `@event` on a name the parent has is [ABFC2078](errors.md#abfc2078)):
+
+```ts
+import { blueprint, override } from "@abfc/runtime";
+import { Actor, KismetSystemLibrary } from "/Script/Engine";
+
+@blueprint()
+export class BP_Beacon extends Actor {
+  @override
+  override ReceiveBeginPlay(): void {
+    KismetSystemLibrary.PrintString("hi");
+  }
+}
+```
+
+You do not have to remember the names: in VS Code, inside a class body, type `Rec` and pick `ReceiveBeginPlay` from the completion list; it writes the whole method and adds the missing imports. In the same way, typing `PrintS` inside a method offers `KismetSystemLibrary.PrintString` and adds its import. This needs the language server ([language-service.md](language-service.md)) and generated stubs.
+
+### Director with a gameplay tag
+
+A director is an actor the game starts for you when its gameplay tag is present in the class manager. Name the row and the tag:
+
+```ts
+import { blueprint, director } from "@abfc/runtime";
+import { Actor } from "/Script/Engine";
+
+@director("MyDirector", ClassManager.EntityDirector.MyDirector)
+@blueprint()
+export class BP_MyDirector extends Actor {}
+```
+
+Typing `ClassManager.EntityDirector.` in your editor lists every tag the game and your mod know (they come from `abfc stubs`); a string such as `"ClassManager.EntityDirector.MyDirector"` works as well and autocompletes. A tag the mod does not have yet is created: the build adds it to the mod's tag list (`Config/Tags/ExampleModTags.ini`), `abfc publish` publishes the file, and you restart the Mod Editor once to see the new tag there ([ABFC7015](errors.md#abfc7015)). Tags a build adds stay in the list even if you remove the director later, because the list is shared mod content. Without a tag the row starts nothing ([ABFC2079](errors.md#abfc2079)).
 
 ### Where the asset goes
 
-You never write the asset path. It comes from the folder of the file below `src`: `src\Samples\BP_HelloAbfc.ts` builds `/ExampleMod/Samples/BP_HelloAbfc`, and a file `src\Relays\MyCustomRelay.ts` with `class MyCustomRelay` would build `/ExampleMod/Relays/MyCustomRelay`. A file directly in `src` gives `/ExampleMod/<ClassName>`. Folder and class names may use ASCII letters, digits and `_` only. Moving a file later is a different asset path, which abfc refuses to guess; see [ABFC5012](errors.md#abfc5012).
+You never write the asset path. It comes from the folder of the file below `src`: `src\Samples\BP_HelloAbfc.ts` builds `/ExampleMod/Samples/BP_HelloAbfc`, and a file `src\Relays\MyCustomRelay.ts` with `class MyCustomRelay` would build `/ExampleMod/Relays/MyCustomRelay`. A file directly in `src` gives `/ExampleMod/<ClassName>`. Folder and class names may use ASCII letters, digits and `_` only. Moving a file or renaming the class changes the path, and `abfc build` follows it: the existing Blueprint is renamed (`renamed <old> -> <new>`), references in your other Blueprints are fixed by Unreal, and `abfc publish` removes the old file from the mod. Changing `extends` works the same way (the asset is reparented, or created again when the new parent is of another kind), and deleting a class deletes its asset. Only a case that could mean several earlier assets stops with [ABFC5012](errors.md#abfc5012). All of this needs backend 2.6.0 (the one in `abfc.exe`); [cli.md](cli.md#abfc-build) lists the lines a build prints.
 
 ## 5. Check, build, test
 
@@ -118,7 +166,7 @@ After a live reload abfc prints `route: live-reload`, the backup folder, and a n
 
 If a publish is refused, the message says why; the usual causes are in [troubleshooting.md](troubleshooting.md#publish-is-refused).
 
-Then open the editor's content browser, find `Samples/BP_HelloAbfc`, and open the Blueprint. Its event graph shows `Bump` inside a comment box that says the unit is generated by abfc and that the `.ts` file is the source. Edit the TypeScript, not the nodes: abfc will not overwrite nodes you changed in the editor (it reports [ABFC5001](errors.md#abfc5001) instead), and a rebuild replaces what it generated.
+Then open the editor's content browser, find `Samples/BP_HelloAbfc`, and open the Blueprint. Its event graph shows `Bump` inside a comment box that says the unit is generated by abfc and that the `.ts` file is the source. Edit the TypeScript, not the nodes. **TypeScript wins:** the next build that applies this class replaces what you changed in the editor in the generated nodes, and in a class without a hybrid part it removes the nodes, functions and variables you added by hand; one warning per asset ([ABFC5014](errors.md#abfc5014)) lists what went. `abfc status` previews it. To keep hand-made members (designer widgets, a hand-made event your TypeScript calls), put them in a class that merges with a `BP_HelloAbfc_Manual` interface (a hybrid class, see [design.md](design.md)); abfc then leaves them alone. Without that, make the change in the `.ts` file.
 
 Before you upload a mod to mod.io, run `abfc publish --full --dry-run` and then `abfc publish --full`, which also runs the game tests, the stage audit and the upload file check. abfc never uploads anything to mod.io; you do that yourself.
 

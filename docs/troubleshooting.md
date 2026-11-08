@@ -4,7 +4,7 @@ Known limitations and their workarounds (stale entries in the open Mod Editor, a
 
 Start with `abfc doctor`. It prints every setting with the place it came from (flag, environment variable, project config, user config or auto-discovery), the versions it found, and the problems it can see. Each problem has an `ABFCnnnn` code; the meaning of every code is in [errors.md](errors.md). All paths below use placeholders such as `C:\Users\<you>`; replace them with your own.
 
-Sections: [OneDrive Documents](#onedrive-redirected-documents), [user names with spaces](#user-names-with-spaces-and-the-headless-folder), [non-English Windows](#non-english-windows), [long paths](#long-paths), [SmartScreen](#smartscreen), [antivirus](#antivirus-quarantine-or-locked-files), [runtime folder](#damaged-or-stale-runtime-folder), [bundled backend overridden](#abfc1053-the-exe-uses-a-backend-outside-its-runtime), [first stubs](#the-first-abfc-stubs-needs-the-network), [abfc not found](#abfc-is-not-found-after-installing), [extension](#the-vs-code-extension-cannot-find-abfc), [publish refused](#publish-is-refused), [Epic login](#the-epic-login-window-of-the-stage-audit).
+Sections: [OneDrive Documents](#onedrive-redirected-documents), [user names with spaces](#user-names-with-spaces-and-the-headless-folder), [non-English Windows](#non-english-windows), [long paths](#long-paths), [SmartScreen](#smartscreen), [antivirus](#antivirus-quarantine-or-locked-files), [runtime folder](#damaged-or-stale-runtime-folder), [bundled backend overridden](#abfc1053-the-exe-uses-a-backend-outside-its-runtime), [first stubs](#the-first-abfc-stubs-needs-the-network), [abfc not found](#abfc-is-not-found-after-installing), [extension](#the-vs-code-extension-cannot-find-abfc), [publish refused](#publish-is-refused), [two builds](#a-second-build-is-refused-abfc4019), [staged file in use](#a-staged-file-is-still-in-use), [deleted assets still listed](#the-editor-still-lists-a-deleted-asset), [edits in the editor disappear](#my-edits-in-the-mod-editor-disappeared), [superseded struct](#a-struct-stays-after-a-rename-abfc5018), [Epic login](#the-epic-login-window-of-the-stage-audit). Fixed problems and limitations of this version are collected in [known-issues.md](known-issues.md).
 
 ## OneDrive-redirected Documents
 
@@ -81,12 +81,37 @@ The extension shows one message when no abfc is found and does not retry. It sea
 
 `abfc publish` copies built assets into the mod. The backend refuses in a few cases, reported as [ABFC7005](errors.md#abfc7005) with the reason:
 
-- **Play In Editor is running.** Stop it in the Mod Editor and publish again.
-- **Unsaved assets in the open Mod Editor.** Save or revert them in the editor first.
+- **Play In Editor is running.** Stop it in the Mod Editor (abfc never does) and run `abfc publish` again. The exit code is 3.
+- **Unsaved assets in the open Mod Editor.** Save or revert them in the editor, then run `abfc publish` again. A publish reloads assets in the open editor, which would lose unsaved changes, so it refuses first.
 - **Locked files.** Another program, or an asset editor tab, holds the file; close the tab or the program.
 - **The mod's files changed outside abfc since the last sync** (for example saved in the Mod Editor). Run `abfc publish` again: the build copies the mod again by itself (ABFC4017) and applies the TypeScript on top, so only edits made by hand to what the TypeScript owns are replaced.
 
 [ABFC7006](errors.md#abfc7006) means the Mod Editor did not respond: close any dialog in it, run only one Mod Editor, and try again. abfc never closes your Mod Editor or clicks in it.
+
+## My edits in the Mod Editor disappeared
+
+That is by design: TypeScript wins. A build replaces what you changed by hand in an asset that a TypeScript class owns, and in a class without a `_Manual` merge it also removes hand-made nodes, functions and variables. The build prints one [ABFC5014](errors.md#abfc5014) warning per asset that lists what was replaced. The mod is also copied again when you saved in the Mod Editor ([ABFC4017](errors.md#abfc4017), a warning, nothing to do), and the TypeScript is applied on top. To keep a change, write it in the `.ts` file, or keep hand-made members in a hybrid class (`interface BP_X extends BP_X_Manual {}`, see [first-mod.md](first-mod.md#where-the-asset-goes)). `abfc status` shows what the next build would replace.
+
+## A second build is refused (ABFC4019)
+
+[ABFC4019](errors.md#abfc4019): another `abfc build`, `test`, `publish`, `status`, `stubs` or `adopt` is running in the same project (the message gives its command and process id). Often it is a build from the editor's task while a terminal build is still going. Wait until it ends and run the command again. After a crash the next run replaces the dead lock by itself; delete `.abfc/lock.json` only if abfc names a process that certainly does not exist.
+
+## A staged file is still in use
+
+A build or publish can fail with a message like "the staged file BP_X.uasset is still in use after 60 s" (or, on older backends, `WinError 32`, "being used by another process"). A virus scanner, the search indexer, a hidden editor of a previous run that is still shutting down, or a second abfc run on the same mod holds the file. Nothing was changed. Wait a moment and run the command again; it was seen right after `abfc stubs`. If it keeps happening, close other abfc runs and exclude the abfc runtime and headless folders from the scanner ([Antivirus](#antivirus-quarantine-or-locked-files)).
+
+## The editor still lists a deleted asset
+
+After `abfc publish` deleted the asset of a class you removed (or the old path of a renamed class), the open Mod Editor can keep showing it in the Content Browser or asset search, with no file behind it. The files are already gone from the mod. Restart the Mod Editor and the entries disappear; do not try to delete them again. This is a known limitation of the open editor's asset list ([known-issues.md](known-issues.md)).
+
+## A struct stays after a rename (ABFC5018)
+
+abfc never deletes a `@struct`, because Blueprints and saved games that use it would break. When you rename a struct or remove its file, the build warns once with [ABFC5018](errors.md#abfc5018) and the old struct stays in the mod next to the new one. Delete the old struct in the Mod Editor once nothing uses it, or declare it in TypeScript again.
+
+## New gameplay tags are not known in the editor
+
+After a `@director` with a new tag was published while the Mod Editor was open, [ABFC7015](errors.md#abfc7015) says the editor reads tags only at startup. Restart the Mod Editor before you use the tag there, and do not save the mod in the editor before that.
+
 
 ## The Epic login window of the stage audit
 
