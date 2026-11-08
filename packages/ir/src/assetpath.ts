@@ -63,3 +63,17 @@ export function toModRelative(mod: string, path: string): string | null {
   if (path.slice(0, prefix.length).toLowerCase() !== prefix.toLowerCase()) return null;
   return path.slice(prefix.length);
 }
+
+/** Every known `@director` gameplay tag starts with this (the class-manager's director tags). */
+export const DIRECTOR_TAG_PREFIX = "ClassManager.EntityDirector.";
+
+const GAMEPLAY_TAG = /^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/u;
+const MAX_TAG = 200;
+
+/** Null when `tag` is a valid gameplay tag name (dotted segments of A-Z, a-z, 0-9, _ and -, at most 200 characters); otherwise the reason. */
+export function gameplayTagProblem(tag: string): string | null {
+  if (tag === "") return "is empty";
+  if (tag.length > MAX_TAG) return `is longer than ${MAX_TAG} characters`;
+  if (!GAMEPLAY_TAG.test(tag)) return "must be dotted segments of A-Z, a-z, 0-9, _ and - (for example ClassManager.EntityDirector.MyDirector)";
+  return null;
+}

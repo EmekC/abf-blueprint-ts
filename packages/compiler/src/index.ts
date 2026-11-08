@@ -37,5 +37,5 @@ export { featureGates } from "./plan/gates.js";
 export type { GateCapabilities } from "./plan/gates.js";
 export { udsGuid, udsMemberName } from "./frontend/structnames.js";
 export { describeIrNode, irNodesAt } from "./explain.js";
-export { directorFix, idivFix, keepPathFix, modImportFix, optionalChainFix, relativePathFix, removePathFix, useOverrideFix } from "./frontend/fixes.js";
+export { addDirectorTagFix, directorFix, idivFix, keepPathFix, modImportFix, optionalChainFix, relativePathFix, removePathFix, useOverrideFix } from "./frontend/fixes.js";
 export type { TextEdit } from "./frontend/fixes.js";

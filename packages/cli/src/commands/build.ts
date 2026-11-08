@@ -333,6 +333,9 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   const createdStructs: string[] = [];
   const removedUnits: string[] = [];
   let removedOrphanTags = 0;
+  // Gameplay tags the defaults pass added to the stage's tag list (backend 2.6.0); they reach the mod with `abfc publish`.
+  const tagsAdded = applied.tagsAdded ?? [];
+  for (const t of tagsAdded) output.info(`gameplay tag ${t}: added to the mod's tag list (published with abfc publish)`);
   for (let i = 0; i < planned.plan.assets.length; i++) {
     const a = planned.plan.assets[i]!;
     const outcome = applied.perAsset[i]!;

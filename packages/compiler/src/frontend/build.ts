@@ -1,6 +1,6 @@
 // HIR builder: checks the TypeScript subset and resolves every name through the stub tags.
 import ts from "typescript";
-import { BpTypeError, DEFAULT_CLASS_MANAGER_TABLE, joinModPath, parseBpType, segmentProblem } from "@abfc/ir";
+import { BpTypeError, DEFAULT_CLASS_MANAGER_TABLE, DIRECTOR_TAG_PREFIX, gameplayTagProblem, joinModPath, parseBpType, segmentProblem } from "@abfc/ir";
 import type { Diagnostic, Profile, Span } from "@abfc/ir";
 import type { BpType, HirClass, HirEvent, HirField, HirExpr, HirProgram, HirStmt, HirStruct, LocalId } from "../hir.js";
 import { assetPathOf, bindPathContext, modImportHints, pathContextOf } from "./assetpaths.js";
@@ -415,7 +415,7 @@ class HirBuilder {
    * The `@director("Row")` of a class: undefined when there is none or it has an error (reported here). `notAllowed` is true for a
    * widget class or a `@struct` (ABFC2074).
    */
-  private directorOf(node: ts.ClassDeclaration, notAllowed: boolean, classManagerRowNode: ts.Node | undefined): { row: string; asset: string } | undefined {
+  private directorOf(node: ts.ClassDeclaration, notAllowed: boolean, classManagerRowNode: ts.Node | undefined): { row: string; asset: string; tag?: string } | undefined {
     const decs = (ts.getDecorators(node) ?? []).filter((d) => runtimeName(this.checker, d.expression) === "director");
     if (decs.length === 0) return undefined;
     const dec = decs[0]!;
@@ -427,7 +427,8 @@ class HirBuilder {
       this.sink.error("ABFC2074", "@director only applies to a non-widget @blueprint class", dec);
       return undefined;
     }
-    const arg = ts.isCallExpression(dec.expression) && dec.expression.arguments.length === 1 ? dec.expression.arguments[0]! : undefined;
+    const args = ts.isCallExpression(dec.expression) ? dec.expression.arguments : undefined;
+    const arg = args !== undefined && args.length >= 1 && args.length <= 2 ? args[0]! : undefined;
     if (arg === undefined || !(ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg))) {
       this.sink.error("ABFC2061", "@director takes the row name as a string literal", arg ?? dec);
       return undefined;
@@ -442,8 +443,51 @@ class HirBuilder {
       this.sink.error("ABFC2061", "use @director or classManagerRow, not both", classManagerRowNode);
       return undefined;
     }
+    const tagArg = args![1];
+    let tag: string | undefined;
+    if (tagArg !== undefined && !(ts.isIdentifier(tagArg) && tagArg.text === "undefined")) {
+      tag = this.gameplayTagOf(tagArg);
+      if (tag === undefined) return undefined;
+    }
+    if (tag === undefined) {
+      const suggested = DIRECTOR_TAG_PREFIX + row;
+      this.sink.warning(
+        "ABFC2079",
+        `@director("${row}") has no gameplay tag: a new class-manager row then has no tag and the director never starts (an existing row keeps its tag). Add "${suggested}".`,
+        dec,
+        { tag: suggested },
+      );
+    } else if (!tag.startsWith(DIRECTOR_TAG_PREFIX)) {
+      this.sink.warning("ABFC2081", `gameplay tag ${tag} is not under ${DIRECTOR_TAG_PREFIX}; the game may never start a director with another tag`, tagArg);
+    }
     const table = pathContextOf(node.getSourceFile())?.classManagerTable ?? DEFAULT_CLASS_MANAGER_TABLE;
-    return { row, asset: joinModPath(this.mod, `${table}/${row}`) };
+    return { row, asset: joinModPath(this.mod, `${table}/${row}`), ...(tag !== undefined ? { tag } : {}) };
+  }
+
+  /**
+   * The gameplay tag named by the second `@director` argument: a string literal, or an expression whose type has a string-literal
+   * `__gameplayTag` property (a `GameplayTag<"x.y">` constant of the generated `.abfc/tags.d.ts`). Anything else, or a malformed
+   * tag, is ABFC2080 and undefined.
+   */
+  private gameplayTagOf(arg: ts.Expression): string | undefined {
+    let tag: string | undefined;
+    if (ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg)) {
+      tag = arg.text;
+    } else {
+      const prop = this.checker.getPropertyOfType(this.checker.getTypeAtLocation(arg), "__gameplayTag");
+      const type = prop === undefined ? undefined : this.checker.getTypeOfSymbolAtLocation(prop, arg);
+      if (type !== undefined && type.isStringLiteral()) tag = type.value;
+    }
+    if (tag === undefined) {
+      this.sink.error("ABFC2080", "the @director gameplay tag must be a string literal or a GameplayTag constant such as ClassManager.EntityDirector.MyDirector (run abfc stubs to generate the constants)", arg);
+      return undefined;
+    }
+    const why = gameplayTagProblem(tag);
+    if (why !== null) {
+      this.sink.error("ABFC2080", `gameplay tag "${tag}" ${why}`, arg);
+      return undefined;
+    }
+    return tag;
   }
 
   /**

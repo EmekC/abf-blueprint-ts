@@ -41,7 +41,7 @@ export interface BpApplyAssetSpec {
   graphs?: BpGraphSpec[];
   raw?: Array<{ kind: "graph"; graph: string; text: string } | { kind: "python"; code: string }>;
   /** Backend 2.5.0 (bp_apply feature `class_manager_row`): write the class-manager row of a `@director` class after the Blueprints are saved. */
-  class_manager_row?: { asset_path: string; class_path: string };
+  class_manager_row?: { asset_path: string; class_path: string; /** Backend 2.6.0 (bp_apply feature `class_manager_row_tag`): the gameplay tag the row holds; a missing tag is added to the mod's tag ini. */ gameplay_tag?: string };
 }
 
 function refused(n: IrNode, what: string): AbfcError {
@@ -250,12 +250,14 @@ export interface AssetApplyOutcome {
   /** Warnings of pass 5: ABFC2070 (class manager row), ABFC5102 (the pass failed; it is repeated by the next build). */
   defaultsWarnings: Diagnostic[];
   /** The class-manager row the backend wrote for the asset's `@director` in pass 5 (`created`/`changed` as reported); absent without the capability. */
-  directorRow?: { asset: string; created: boolean; changed: boolean };
+  directorRow?: { asset: string; created: boolean; changed: boolean; /** The gameplay tag the row holds after the pass (backend 2.6.0), when the spec asked for one. */ tag?: string };
 }
 
 export interface ApplyOutcome {
   ok: boolean;
   perAsset: AssetApplyOutcome[];
+  /** Gameplay tags the backend added to the stage's tag ini during the class-defaults pass (backend 2.6.0); absent when none. They are published with the mod's tag ini. */
+  tagsAdded?: string[];
 }
 
 function entryFor(r: BpApplyResult, asset: string, i: number): NonNullable<BpApplyResult["assets"]>[number] | undefined {
@@ -288,14 +290,17 @@ export function renderDefaultsSpec(a: AssetPlan, caps: BackendCapabilities): BpA
   const writes = d.director !== undefined && caps.classManagerRows;
   const verify = d.director !== undefined ? (writes ? undefined : d.director.asset) : d.classManagerRow;
   const spec: BpApplyAssetSpec = { asset: a.asset, raw: [{ kind: "python", code: renderDefaultsCode(d.classPath, d.values, verify) }] };
-  if (writes) spec.class_manager_row = { asset_path: d.director!.asset, class_path: d.director!.classPath };
+  if (writes) {
+    spec.class_manager_row = { asset_path: d.director!.asset, class_path: d.director!.classPath };
+    if (d.director!.tag !== undefined && caps.classManagerRowTag) spec.class_manager_row.gameplay_tag = d.director!.tag;
+  }
   return spec;
 }
 
 /** Pass 5: class defaults of every asset whose plan has a `defaults` item. A failure is a warning (the next build repeats it). */
-async function applyDefaultsPass(backend: Backend, plan: ApplyPlan, perAsset: AssetApplyOutcome[], caps: BackendCapabilities, o: ApplyOptions): Promise<void> {
+async function applyDefaultsPass(backend: Backend, plan: ApplyPlan, perAsset: AssetApplyOutcome[], caps: BackendCapabilities, o: ApplyOptions): Promise<string[]> {
   const targets = plan.assets.map((a, i) => ({ a, i })).filter((x) => x.a.defaults !== undefined);
-  if (targets.length === 0) return;
+  if (targets.length === 0) return [];
   const specs = targets.map((x) => renderDefaultsSpec(x.a, caps));
   // Without the backend capability a @director row is only verified: say so once per asset.
   if (!caps.classManagerRows) {
@@ -307,6 +312,20 @@ async function applyDefaultsPass(backend: Backend, plan: ApplyPlan, perAsset: As
         asset: a.asset,
         message: `the backend cannot write class-manager rows; update abf-mod-editor-mcp to 2.5.0 or newer. The row ${a.defaults!.director.asset} is only checked, not written.`,
         fix: "update abf-mod-editor-mcp to 2.5.0 or newer, or create the row in the Mod Editor.",
+      });
+    }
+  }
+  // A tag the backend cannot write (before 2.6.0) is ignored: say so once per asset.
+  if (!caps.classManagerRowTag) {
+    for (const { a, i } of targets) {
+      const tag = a.defaults!.director?.tag;
+      if (tag === undefined) continue;
+      perAsset[i]!.defaultsWarnings.push({
+        severity: "warning",
+        code: "ABFC2082",
+        asset: a.asset,
+        message: `the backend cannot write gameplay tags; update abf-mod-editor-mcp to 2.6.0 or newer. The tag ${tag} of ${a.defaults!.director!.asset} is ignored.`,
+        fix: "update abf-mod-editor-mcp to 2.6.0 or newer, or set the tag in the Mod Editor.",
       });
     }
   }
@@ -337,7 +356,7 @@ async function applyDefaultsPass(backend: Backend, plan: ApplyPlan, perAsset: As
         });
         continue;
       }
-      out.directorRow = { asset: want.asset, created: row.created, changed: row.changed };
+      out.directorRow = { asset: want.asset, created: row.created, changed: row.changed, ...(typeof row.tag === "string" ? { tag: row.tag } : {}) };
     }
     out.defaultsApplied = true;
     const text = [r.logTail ?? "", ...r.compile.warnings.map((w) => w.message)].join("\n");
@@ -346,6 +365,7 @@ async function applyDefaultsPass(backend: Backend, plan: ApplyPlan, perAsset: As
       if (at >= 0) out.defaultsWarnings.push({ severity: "warning", code: "ABFC2070", asset: a.asset, message: line.slice(at + "ABFC2070".length).trim() });
     }
   }
+  return r.ok ? r.tagsAdded ?? [] : [];
 }
 
 /** Applies the plan: one main pass (native pin types, or the two-phase fallback), then the tag pass, then the class-defaults pass (pass 5). */
@@ -361,8 +381,8 @@ export async function applyPlan(
   const unitAssets = plan.assets.filter((a) => a.create !== undefined || a.struct !== undefined || a.units.length > 0 || a.variables.length > 0 || (a.removeUnits?.length ?? 0) > 0 || (a.removeTags?.length ?? 0) > 0);
   if (unitAssets.length === 0) {
     const only: AssetApplyOutcome[] = plan.assets.map((a) => ({ asset: a.asset, nodeIds: {}, finalText: null, compile: [], tagName: null, tagNames: {}, defaultsApplied: false, defaultsWarnings: [] }));
-    await applyDefaultsPass(backend, plan, only, caps, o);
-    return { ok: true, perAsset: only };
+    const added = await applyDefaultsPass(backend, plan, only, caps, o);
+    return { ok: true, perAsset: only, ...(added.length > 0 ? { tagsAdded: added } : {}) };
   }
   const specs =unitAssets.map((a) => renderMainSpec(a, caps, profile));
   const refs = unitAssets.map((a, i) => patchRefs(a, specs[i]!, caps, profile));
@@ -441,6 +461,6 @@ export async function applyPlan(
       out.finalText = readFinal(tag.run, ti) ?? out.finalText;
     });
   }
-  await applyDefaultsPass(backend, plan, perAsset, caps, o);
-  return { ok: true, perAsset };
+  const added = await applyDefaultsPass(backend, plan, perAsset, caps, o);
+  return { ok: true, perAsset, ...(added.length > 0 ? { tagsAdded: added } : {}) };
 }

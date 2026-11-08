@@ -20,7 +20,7 @@ export interface IrAsset {
   /** Row asset path whose class reference is verified (read-only) by the class-defaults pass. */
   classManagerRow?: string;
   /** `@director("Row")`: the class-manager row asset (`/<mod>/<table>/<Row>`) that should reference this class. */
-  director?: { row: string; asset: string };
+  director?: { row: string; asset: string; /** The gameplay tag the row holds (`@director("Row", tag)`). */ tag?: string };
   variables: IrVariable[];
   units: IrUnit[]; // owned functions/events/overrides
   structFields?: IrVariable[]; // only for UserDefinedStruct
@@ -195,7 +195,7 @@ export interface AssetPlan {
   /** Manifest units dropped without touching the stage (never applied, or adopted hand-made nodes). */
   forgetUnits?: string[];
   /** Class defaults to apply in pass 5 (plan item `defaults`); present only when they changed. */
-  defaults?: { classPath: string; values: Record<string, string>; hash: string; classManagerRow?: string; director?: { asset: string; classPath: string } };
+  defaults?: { classPath: string; values: Record<string, string>; hash: string; classManagerRow?: string; director?: { asset: string; classPath: string; tag?: string } };
 }
 export interface ApplyPlan { mod: string; assets: AssetPlan[] }
 

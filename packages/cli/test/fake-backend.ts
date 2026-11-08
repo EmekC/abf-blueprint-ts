@@ -569,11 +569,15 @@ export class FakeBackend implements Backend {
     // Class-manager rows run after all Blueprints (like the real backend): created when missing, class overwritten when it differs.
     const rowStage = new Map(this.rowClasses);
     const rows: BpApplyResult["rows"] = [];
+    const tagsAdded: string[] = [];
     for (const spec of specs as Spec[]) {
       const row = spec.class_manager_row;
       if (row === undefined) continue;
       const before = rowStage.get(row.asset_path);
-      rows.push({ asset: row.asset_path, created: before === undefined, changed: before !== row.class_path });
+      const tag = (row as { gameplay_tag?: string }).gameplay_tag;
+      const tagChanged = tag !== undefined && this.rowTags.get(row.asset_path) !== tag;
+      rows.push({ asset: row.asset_path, created: before === undefined, changed: before !== row.class_path || tagChanged, ...(tag !== undefined ? { tag } : {}) });
+      if (tag !== undefined && !this.tagIni.has(tag) && !tagsAdded.includes(tag)) tagsAdded.push(tag);
       rowStage.set(row.asset_path, row.class_path);
     }
 
@@ -646,7 +650,9 @@ export class FakeBackend implements Backend {
       for (const a of (specs as Spec[]).map((s) => s.asset)) {
         this.changed.add(`Content/${a.split("/").slice(2).join("/")}.uasset`);
       }
+      for (const t of tagsAdded) this.tagIni.add(t);
       for (const r of rows) {
+        if (typeof r.tag === "string") this.rowTags.set(r.asset, r.tag);
         this.rowClasses.set(r.asset, rowStage.get(r.asset)!);
         if (r.created || r.changed) this.changed.add(`Content/${r.asset.split("/").slice(2).join("/")}.uasset`);
       }
@@ -659,6 +665,7 @@ export class FakeBackend implements Backend {
       assets,
       compile: { errors, warnings: [] },
       rows: ok ? (this.scriptedRows ?? rows) : [],
+      ...(ok && tagsAdded.length > 0 ? { tagsAdded } : {}),
       // like the real backend, a failed apply always carries `error`: the spec error, else a summary of the compile errors
       ...(ok ? {} : { error: specError ?? `${errors.length} compile error(s) in the edited assets` }),
     };
@@ -693,6 +700,10 @@ export class FakeBackend implements Backend {
     this.lastWarm = this.warm;
     return { clean: this.reportMessages.length === 0, messages: this.reportMessages, run: "", seconds: 0.1, warm: this.warm };
   }
+
+  /** Tags of the stage's tag ini and the tag each class-manager row holds (written by `gameplay_tag`). */
+  readonly tagIni = new Set<string>();
+  readonly rowTags = new Map<string, string>();
 
   async reflect(): Promise<ReflectResult> {
     throw new Error("the fake backend does not reflect");

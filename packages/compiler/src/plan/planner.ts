@@ -82,7 +82,7 @@ function defaultsStale(asset: IrModule["assets"][number], manifest: Manifest | n
   // The `@director` is gone but the manifest still records its row: the pass runs once more so the build can clear the record.
   if (manifest?.directorRow !== undefined && asset.director === undefined) return true;
   if (asset.classDefaults === undefined && asset.classManagerRow === undefined && asset.director === undefined) return false;
-  const hash = classDefaultsHash(asset.classDefaults ?? {}, asset.classManagerRow, asset.director?.asset);
+  const hash = classDefaultsHash(asset.classDefaults ?? {}, asset.classManagerRow, asset.director?.asset, asset.director?.tag);
   if (manifest?.classDefaultsHash !== hash || (manifest.classDefaultsStageSyncedAt ?? null) !== stage.syncedAt) return true;
   // The backend can write class-manager rows now but the last pass only verified the row (or wrote another one): run the pass again.
   return directorRows && asset.director !== undefined && manifest.directorRow !== asset.director.asset;
@@ -374,7 +374,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
     let defaults: AssetPlan["defaults"];
     if (asset.classDefaults !== undefined || asset.classManagerRow !== undefined || asset.director !== undefined || (manifest?.directorRow !== undefined && asset.director === undefined)) {
       const values = asset.classDefaults ?? {};
-      const hash = classDefaultsHash(values, asset.classManagerRow, asset.director?.asset);
+      const hash = classDefaultsHash(values, asset.classManagerRow, asset.director?.asset, asset.director?.tag);
       if (defaultsStale(asset, manifest, input.stage, input.directorRows === true)) {
         const classPath = `${asset.path}.${asset.path.slice(asset.path.lastIndexOf("/") + 1)}_C`;
         defaults = {
@@ -382,7 +382,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
           values,
           hash,
           ...(asset.classManagerRow !== undefined ? { classManagerRow: asset.classManagerRow } : {}),
-          ...(asset.director !== undefined ? { director: { asset: asset.director.asset, classPath } } : {}),
+          ...(asset.director !== undefined ? { director: { asset: asset.director.asset, classPath, ...(asset.director.tag !== undefined ? { tag: asset.director.tag } : {}) } } : {}),
         };
       }
     }

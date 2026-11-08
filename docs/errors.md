@@ -695,6 +695,46 @@ Typical cause: implementing `ReceiveBeginPlay` or `ReceiveTick` of the parent wi
 
 Fix: use `@override` to implement the parent's event (quick fix "Use @override" replaces the decorator, adds the `override` modifier and imports `override` from `@abfc/runtime`). Keep `@event` for new custom events with names the parent does not have.
 
+### ABFC2079
+
+Severity: warning · Exit: -
+
+Meaning: `@director("Row")` has no gameplay tag. A new class-manager row then has no tag and the director never starts; an existing row keeps the tag it has.
+
+Typical cause: the second argument of `@director` is missing.
+
+Fix: add the tag, usually `ClassManager.EntityDirector.<Row>` (quick fix "Add the gameplay tag"): `@director("MyDirector", ClassManager.EntityDirector.MyDirector)` or a string literal. A tag that is not in the mod's tag list yet is added to `Config/Tags/<Mod>Tags.ini` by the build and published with the mod. Run `abfc stubs` once to generate the `ClassManager.EntityDirector.*` constants.
+
+### ABFC2080
+
+Severity: error · Exit: 1
+
+Meaning: the gameplay tag of `@director` is not a string literal or a `GameplayTag` constant, or has characters Unreal tag names do not allow. The director is not built.
+
+Typical cause: a tag held in a variable, a tag with a space, or a `ClassManager.EntityDirector.X` constant when the tags file was not generated yet.
+
+Fix: write the tag as a string literal made of dotted segments of A-Z, a-z, 0-9, `_` and `-` (at most 200 characters), or run `abfc stubs` to generate the tag constants.
+
+### ABFC2081
+
+Severity: warning · Exit: -
+
+Meaning: the gameplay tag of `@director` does not start with `ClassManager.EntityDirector.`. Every director the game knows uses that prefix; a director with another tag may never start.
+
+Typical cause: a typo, or a tag copied from another feature.
+
+Fix: use a tag under `ClassManager.EntityDirector.`, or ignore the warning if you know the game starts directors by another tag.
+
+### ABFC2082
+
+Severity: warning · Exit: -
+
+Meaning: the backend cannot write gameplay tags, so the tag of `@director` is ignored (the row is written without it).
+
+Typical cause: a backend older than 2.6.0 (source install).
+
+Fix: update the backend to 2.6.0 or newer ([backend.md](backend.md)), or set the tag on the row in the Mod Editor. `abfc.exe` bundles a current backend.
+
 ### ABFC2099
 
 Severity: error · Exit: 1

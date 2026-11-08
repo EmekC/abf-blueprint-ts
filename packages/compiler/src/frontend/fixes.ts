@@ -329,3 +329,24 @@ export function useOverrideFix(sf: ts.SourceFile, start: number, end: number): T
   }
   return edits;
 }
+
+/**
+ * ABFC2079: `@director("Row")` -> `@director("Row", "<tag>")`. The decorator covers [start, end); the tag is inserted as the second
+ * argument. Undefined when the decorator is not a call with exactly one argument.
+ */
+export function addDirectorTagFix(sf: ts.SourceFile, start: number, end: number, tag: string): TextEdit[] | undefined {
+  let call: ts.CallExpression | undefined;
+  const visit = (node: ts.Node): void => {
+    if (call !== undefined) return;
+    if (ts.isDecorator(node) && node.getStart(sf) <= start && end <= node.getEnd() && ts.isCallExpression(node.expression)) {
+      call = node.expression;
+      return;
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  if (call === undefined || call.arguments.length !== 1) return undefined;
+  const close = call.getChildren(sf).find((c) => c.kind === ts.SyntaxKind.CloseParenToken);
+  if (close === undefined) return undefined;
+  return [{ start: close.getStart(sf), length: 0, newText: `, ${JSON.stringify(tag)}` }];
+}

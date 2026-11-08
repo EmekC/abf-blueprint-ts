@@ -1820,12 +1820,51 @@ test("a @struct with a backend that cannot create a UserDefinedStruct is ABFC204
 
 const DIRECTOR_ROW = "/TestMod/DataTables/DT_ClassManager/EntityDirector_Test";
 
-function addDirector(dir: string, row = "EntityDirector_Test"): void {
+function addDirector(dir: string, row = "EntityDirector_Test", tag?: string): void {
   const file = join(dir, "src", "Relay.ts");
-  const text = readFileSync(file, "utf8").replace(/@director\("[^"]*"\)\n/, "");
+  const text = readFileSync(file, "utf8").replace(/@director\([^\n]*\)\n/, "");
   const withImport = text.includes("director") ? text : `import { director } from "@abfc/runtime";\n${text}`;
-  writeFileSync(file, withImport.replace("@blueprint(", `@director("${row}")\n@blueprint(`), "utf8");
+  const args = tag === undefined ? `"${row}"` : `"${row}", "${tag}"`;
+  writeFileSync(file, withImport.replace("@blueprint(", `@director(${args})\n@blueprint(`), "utf8");
 }
+
+const DIRECTOR_TAG = "ClassManager.EntityDirector.Test";
+
+test("(tag1) @director with a tag and classManagerRowTag: the spec carries gameplay_tag, the new tag is announced once, a rebuild is up to date; a changed tag re-runs the pass", async () => {
+  await withRig({ handMadeEvent: false, classManagerRows: true, classManagerRowTag: true, gameplayTags: true }, async (r) => {
+    addDirector(r.dir, "EntityDirector_Test", DIRECTOR_TAG);
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    const defaults = r.backend.calls.filter((c) => c.tool === "bp_apply" && c.label === "defaults");
+    assert.equal(defaults.length, 1);
+    assert.deepEqual(defaults[0]!.specs![0]!.class_manager_row, { asset_path: DIRECTOR_ROW, class_path: "/TestMod/Relay/BP_Relay.BP_Relay_C", gameplay_tag: DIRECTOR_TAG });
+    assert.match(x.out, new RegExp(`gameplay tag ${DIRECTOR_TAG.replaceAll(".", "\\.")}: added to the mod's tag list \\(published with abfc publish\\)`));
+    assert.doesNotMatch(x.out, /ABFC2079|ABFC2080|ABFC2081|ABFC2082/);
+    assert.equal(r.backend.tagIni.has(DIRECTOR_TAG), true);
+
+    x = await r.run(["build"]);
+    assert.match(x.out, /up to date/);
+    assert.doesNotMatch(x.out, /added to the mod's tag list/);
+
+    addDirector(r.dir, "EntityDirector_Test", "ClassManager.EntityDirector.Other");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /up to date/);
+    assert.match(x.out, /gameplay tag ClassManager\.EntityDirector\.Other: added to the mod's tag list/);
+    assert.equal(r.backend.calls.filter((c) => c.tool === "bp_apply" && c.label === "defaults").length, 2);
+  });
+});
+
+test("(tag2) @director with a tag but without classManagerRowTag warns ABFC2082 once and sends no gameplay_tag", async () => {
+  await withRig({ handMadeEvent: false, classManagerRows: true }, async (r) => {
+    addDirector(r.dir, "EntityDirector_Test", DIRECTOR_TAG);
+    const x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(x.out.match(/ABFC2082/g)?.length, 1, x.out);
+    assert.equal((r.backend.calls.find((c) => c.label === "defaults")!.specs![0]!.class_manager_row as { gameplay_tag?: string }).gameplay_tag, undefined);
+    assert.doesNotMatch(x.out, /added to the mod's tag list/);
+  });
+});
 
 test("(row1) @director with the classManagerRows capability: the spec carries class_manager_row, the manifest records directorRow, publish lists the row; a new row name warns ABFC5013", async () => {
   await withRig({ handMadeEvent: false, classManagerRows: true }, async (r) => {

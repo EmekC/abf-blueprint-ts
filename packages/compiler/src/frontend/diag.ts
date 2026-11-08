@@ -48,8 +48,8 @@ export class DiagSink {
     this.report("error", code, message, node, data);
   }
 
-  warning(code: string, message: string, node?: ts.Node): void {
-    this.report("warning", code, message, node);
+  warning(code: string, message: string, node?: ts.Node, data?: Record<string, string>): void {
+    this.report("warning", code, message, node, data);
   }
 
   /** Records an error and abandons the current statement. */
