@@ -403,6 +403,8 @@ export class FakeBackend implements Backend {
   readonly assetOpsCalls: AssetOp[][] = [];
   /** The next `bp_asset_ops` call fails as a whole (nothing changes) with this error; cleared after use. */
   assetOpsError: string | null = null;
+  /** The `bp_asset_ops` call whose number (1-based, counting from the first call of the run) equals this fails as a whole; cleared after use. */
+  assetOpsFailCall: number | null = null;
   /** Files of the stage that are gone from it but still in the mod (deleted or renamed-away assets); `staging_status` lists them as `removed`. A resync forgets them. */
   readonly removedFiles = new Set<string>();
   /** Files `staging_status` lists as conflicts (the real mod changed since the sync); a resync (`discardChanges`) clears them. */
@@ -925,10 +927,15 @@ export class FakeBackend implements Backend {
     this.assetOpsCalls.push(structuredClone(ops));
     this.lastWarm = false;
     const failWhole = (error: string, results: AssetOpsResult["results"] = []): AssetOpsResult => ({ ok: false, results, touched: [], error, rolledBack: true });
+    if (ops.length > 20) return failWhole(`at most 20 ops per call (got ${ops.length})`);
     if (this.assetOpsError !== null) {
       const e = this.assetOpsError;
       this.assetOpsError = null;
       return failWhole(e);
+    }
+    if (this.assetOpsFailCall !== null && this.assetOpsCalls.length === this.assetOpsFailCall) {
+      this.assetOpsFailCall = null;
+      return failWhole("rename failed: forced by the test");
     }
     const supported = new Set(this.infoValue.capabilities.assetOps);
     const work = new Map([...this.assets].map(([k, v]) => [k, structuredClone(v)]));

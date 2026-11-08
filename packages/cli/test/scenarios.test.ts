@@ -646,3 +646,70 @@ export class BP_Enum extends Actor {
     assert.match(x.out, /use an int or byte field, or an enum of the game or the engine/);
   });
 });
+
+const manyClasses = (r: { dir: string }, folder: string, n: number): void => {
+  mkdirSync(join(r.dir, "src", folder), { recursive: true });
+  for (let i = 0; i < n; i++) {
+    const name = `BP_Many${String(i).padStart(2, "0")}`;
+    writeFileSync(join(r.dir, "src", folder, `${name}.ts`), tally(name), "utf8");
+  }
+};
+
+test("(S28) 21 classes moved to another folder are renamed in two calls", async () => {
+  await withRig(OPS, async (r) => {
+    tallyOnly(r.dir, tally("BP_Zed"));
+    rmSync(join(r.dir, "src", "Tally.ts"));
+    manyClasses(r, "Many", 21);
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(r.backend.assetOpsCalls.length, 0);
+    renameSync(join(r.dir, "src", "Many"), join(r.dir, "src", "Many2"));
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.deepEqual(r.backend.assetOpsCalls.map((c) => c.length), [20, 1]);
+    assert.equal(x.out.split("\n").filter((l) => /renamed \/TestMod\/Many\//.test(l)).length, 21, x.out);
+    assert.doesNotMatch(x.out, /ABFC5016/);
+    assert.equal(r.backend.stageAssets().filter((a) => a.startsWith("/TestMod/Many2/")).length, 21);
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /up to date/);
+    assert.equal(r.backend.assetOpsCalls.length, 2);
+  });
+});
+
+test("(S28b) a failed second chunk keeps the first chunk's manifest moves and reports ABFC5016", async () => {
+  await withRig(OPS, async (r) => {
+    tallyOnly(r.dir, tally("BP_Zed"));
+    rmSync(join(r.dir, "src", "Tally.ts"));
+    manyClasses(r, "Many", 21);
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    renameSync(join(r.dir, "src", "Many"), join(r.dir, "src", "Many2"));
+    r.backend.assetOpsFailCall = 2;
+    x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, /ABFC5016/);
+    assert.match(x.out, /The 20 operation\(s\) before it were done and are kept/);
+    assert.deepEqual(r.backend.assetOpsCalls.map((c) => c.length), [20, 1]);
+    const moved = r.backend.assetOpsCalls[0]!.map((op) => (op.op === "rename" ? op.to : ""));
+    const last = r.backend.assetOpsCalls[1]![0]!;
+    assert.equal(last.op, "rename");
+    for (const to of moved) {
+      assert.notEqual(readManifest(r.dir, to), null, `manifest at ${to}`);
+    }
+    for (const op of r.backend.assetOpsCalls[0]!) {
+      if (op.op === "rename") assert.equal(readManifest(r.dir, op.from), null, `no manifest at ${op.from}`);
+    }
+    if (last.op === "rename") {
+      assert.notEqual(readManifest(r.dir, last.from), null, "the 21st class is still at the old path");
+      assert.equal(readManifest(r.dir, last.to), null);
+    }
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(r.backend.assetOpsCalls.length, 3);
+    assert.equal(r.backend.assetOpsCalls[2]!.length, 1, "only the 21st is renamed now");
+    assert.equal(x.out.split("\n").filter((l) => /renamed \/TestMod\/Many\//.test(l)).length, 1, x.out);
+    x = await r.run(["build"]);
+    assert.match(x.out, /up to date/);
+  });
+});

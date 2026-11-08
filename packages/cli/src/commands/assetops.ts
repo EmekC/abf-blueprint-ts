@@ -45,15 +45,37 @@ async function callAssetOps(backend: Backend, mod: string, ops: AssetOp[]): Prom
   }
 }
 
+/** The most operations the backend takes in one `bp_asset_ops` call (more at once crash the editor; the backend refuses them). */
+export const ASSET_OPS_PER_CALL = 20;
+
+/**
+ * `callAssetOps` in slices of ASSET_OPS_PER_CALL. Stops at the first failed slice: `done` are the ops of the slices before it (they
+ * stay on the stage), `failedChunk` the slice that failed and `r` its result (`touched` are those of the slices that succeeded).
+ */
+async function callAssetOpsChunked(backend: Backend, mod: string, ops: AssetOp[]): Promise<{ r: AssetOpsResult; done: AssetOp[]; failedChunk: AssetOp[] }> {
+  const results: AssetOpsResult["results"] = [];
+  const touched: string[] = [];
+  const done: AssetOp[] = [];
+  for (let i = 0; i < ops.length; i += ASSET_OPS_PER_CALL) {
+    const chunk = ops.slice(i, i + ASSET_OPS_PER_CALL);
+    const r = await callAssetOps(backend, mod, chunk);
+    if (!r.ok) return { r: { ...r, touched: [...touched] }, done, failedChunk: chunk };
+    results.push(...r.results);
+    touched.push(...r.touched);
+    done.push(...chunk);
+  }
+  return { r: { ok: true, results, touched, error: null }, done, failedChunk: [] };
+}
+
 /** ABFC5016 for a failed `bp_asset_ops` call (the backend restored the stage; `afterApply`: the build's applied changes stay on it). */
-function failedOps(ops: AssetOp[], r: AssetOpsResult, afterApply = false): Diagnostic {
+function failedOps(ops: AssetOp[], r: AssetOpsResult, afterApply = false, kept = 0): Diagnostic {
   const failing = r.results.filter((x) => !x.ok).map((x) => x.detail).filter((d): d is string => d !== undefined && d !== "");
   const why = [r.error ?? "the backend reported no reason", ...failing.filter((d) => r.error === null || !r.error.includes(d))].join("; ");
   return {
     severity: "error",
     code: "ABFC5016",
     ...(ops[0] !== undefined ? { asset: "asset" in ops[0] ? ops[0].asset : ops[0].to } : {}),
-    message: `the backend could not ${ops.map(describeOp).join(", ")}: ${why}. ${afterApply ? "The delete was rolled back; the changes this build applied stay on the stage." : "The stage was restored; nothing was changed."}`,
+    message: `the backend could not ${ops.map(describeOp).join(", ")}: ${why}. ${afterApply ? "The delete was rolled back; the changes this build applied stay on the stage." : kept > 0 ? "This step was rolled back." : "The stage was restored; nothing was changed."}${kept > 0 ? ` The ${kept} operation(s) before it were done and are kept.` : ""}`,
     fix: "fix what the backend names (assets that still reference a deleted asset, an existing target), or keep a moved class where it was with path: \"<its path below the mod>\"; then run abfc build again.",
   };
 }
@@ -102,18 +124,18 @@ export async function runAssetOps(
   const phase = o.phase ?? "renames";
   const doRenames = phase !== "deletes";
   const doDeletes = phase !== "renames";
-  const renames = doRenames ? o.plan.renames.filter((r) => exists(r.from)) : [];
+  let renames = doRenames ? o.plan.renames.filter((r) => exists(r.from)) : [];
   const lostRenames = doRenames ? o.plan.renames.filter((r) => !exists(r.from)) : [];
   // A stage re-synced from the mod gives the old asset back: the rename is repeated.
-  const repeated = (doRenames ? o.manifests : [])
+  let repeated = (doRenames ? o.manifests : [])
     .filter((m) => m.renamedFrom !== undefined && m.deleted !== true && classPaths.has(lower(m.asset)) && can("rename") && exists(m.renamedFrom) && !exists(m.asset))
     .map((m) => ({ from: m.renamedFrom!, to: m.asset }));
-  const deletes = o.plan.deletes.filter((a) => exists(a));
+  let deletes = o.plan.deletes.filter((a) => exists(a));
   const lostDeletes = doRenames ? o.plan.deletes.filter((a) => !exists(a)) : [];
-  const rowDeletes = o.plan.rowDeletes.filter((r) => exists(r.row) && deletes.some((d) => lower(d) === lower(r.asset)));
+  let rowDeletes = o.plan.rowDeletes.filter((r) => exists(r.row) && deletes.some((d) => lower(d) === lower(r.asset)));
   // A tombstone whose asset is back on the stage (re-sync before the publish that deletes it): deleted again.
-  const repeatedDeletes = o.manifests.filter((m) => m.deleted === true && can("delete") && !classPaths.has(lower(m.asset)) && exists(m.asset));
-  const repeatedRows = repeatedDeletes.flatMap((m) => (m.directorRow !== undefined && exists(m.directorRow) ? [m.directorRow] : []));
+  let repeatedDeletes = o.manifests.filter((m) => m.deleted === true && can("delete") && !classPaths.has(lower(m.asset)) && exists(m.asset));
+  let repeatedRows = repeatedDeletes.flatMap((m) => (m.directorRow !== undefined && exists(m.directorRow) ? [m.directorRow] : []));
   // A row retired by a changed @director that is back on the stage (re-sync before the publish that deletes it): deleted again, unless a
   // class uses it (as its current row) or it is already deleted in this call.
   const inUse = new Set([
@@ -121,25 +143,43 @@ export async function runAssetOps(
     ...(o.directorRows ?? []).map(lower),
   ]);
   const already = new Set([...rowDeletes.map((r) => r.row), ...repeatedRows].map(lower));
-  const retiredAgain = [
+  let retiredAgain = [
     ...new Set(o.manifests.flatMap((m) => (can("delete") && m.deleted !== true ? (m.retiredRows ?? []).filter((row) => exists(row) && !inUse.has(lower(row)) && !already.has(lower(row))) : []))),
   ];
 
-  const ops: AssetOp[] = [
-    ...renames.map((r): AssetOp => ({ op: "rename", from: r.from, to: r.to })),
-    ...repeated.map((r): AssetOp => ({ op: "rename", from: r.from, to: r.to })),
-    ...(doDeletes ? [...rowDeletes.map((r) => r.row), ...repeatedRows, ...retiredAgain].map((row): AssetOp => ({ op: "delete", asset: row })) : []),
-    ...(doDeletes ? [...deletes, ...repeatedDeletes.map((m) => m.asset)].map((asset): AssetOp => ({ op: "delete", asset })) : []),
-  ];
+  // Every entry with the op it becomes, so that after a failed chunk the entries of the chunks that were done can be told apart.
+  const pair = <T>(items: readonly T[], make: (t: T) => AssetOp): Array<[T, AssetOp]> => items.map((t) => [t, make(t)]);
+  const rename = (r: { from: string; to: string }): AssetOp => ({ op: "rename", from: r.from, to: r.to });
+  const del = (asset: string): AssetOp => ({ op: "delete", asset });
+  const renamePairs = pair(renames, rename);
+  const repeatedPairs = pair(repeated, rename);
+  const rowPairs = doDeletes ? pair(rowDeletes, (r) => del(r.row)) : [];
+  const repeatedRowPairs = doDeletes ? pair(repeatedRows, del) : [];
+  const retiredPairs = doDeletes ? pair(retiredAgain, del) : [];
+  const deletePairs = doDeletes ? pair(deletes, del) : [];
+  const repeatedDeletePairs = doDeletes ? pair(repeatedDeletes, (m) => del(m.asset)) : [];
+  const ops: AssetOp[] = [...renamePairs, ...repeatedPairs, ...rowPairs, ...repeatedRowPairs, ...retiredPairs, ...deletePairs, ...repeatedDeletePairs].map(([, op]) => op);
   const outcome: AssetOpsOutcome = { ok: true, renamed: [], deleted: [], ...(phase === "renames" ? { deferred: [...deletes, ...repeatedDeletes.map((m) => m.asset), ...rowDeletes.map((r) => r.row), ...repeatedRows, ...retiredAgain] } : {}) };
   let touched: string[] = [];
+  let failedCall = false;
   if (ops.length > 0) {
-    const r = await callAssetOps(backend, mod, ops);
-    if (!r.ok) {
-      output.diag(failedOps(ops, r, phase === "deletes"));
-      return { ...outcome, ok: false };
-    }
+    const { r, done, failedChunk } = await callAssetOpsChunked(backend, mod, ops);
     touched = r.touched;
+    if (!r.ok) {
+      output.diag(failedOps(failedChunk, r, phase === "deletes", done.length));
+      if (done.length === 0) return { ...outcome, ok: false };
+      // The chunks before the failed one are on the stage: their manifests, source maps and cache entries follow below.
+      failedCall = true;
+      const doneSet = new Set(done);
+      const keep = <T>(pairs: Array<[T, AssetOp]>): T[] => pairs.filter(([, op]) => doneSet.has(op)).map(([t]) => t);
+      renames = keep(renamePairs);
+      repeated = keep(repeatedPairs);
+      rowDeletes = keep(rowPairs);
+      repeatedRows = keep(repeatedRowPairs);
+      retiredAgain = keep(retiredPairs);
+      deletes = keep(deletePairs);
+      repeatedDeletes = keep(repeatedDeletePairs);
+    }
   }
   const moved = new Set([...renames, ...repeated].flatMap((r) => [lower(r.from), lower(r.to)]));
   const also = touched.filter((t) => !moved.has(lower(t)) && !o.owned.has(t) && !classPaths.has(lower(t)));
@@ -208,7 +248,7 @@ export async function runAssetOps(
     dropUnitCacheAsset(cacheFile, asset);
     output.info(`forgot ${asset}: it is not in the stage and its class is gone`);
   }
-  return outcome;
+  return failedCall ? { ...outcome, ok: false } : outcome;
 }
 
 /**
@@ -217,7 +257,7 @@ export async function runAssetOps(
  */
 export async function deleteRetiredRows(ctx: CliContext, backend: Backend, assetOps: readonly string[], rows: readonly string[]): Promise<boolean> {
   if (rows.length === 0 || !assetOps.includes("delete")) return false;
-  const r = await callAssetOps(backend, ctx.config.mod.name, rows.map((asset): AssetOp => ({ op: "delete", asset })));
+  const { r } = await callAssetOpsChunked(backend, ctx.config.mod.name, rows.map((asset): AssetOp => ({ op: "delete", asset })));
   return r.ok;
 }
 
