@@ -182,7 +182,7 @@ export function fixInfo(
     editorRoot: null,
     headlessDir: over.headlessDir ?? "C:\\abfc-headless",
     documentsDir: over.documentsDir ?? "C:\\Users\\Jane\\Documents",
-    capabilities: { pinTypes: over.pinTypes ?? true, containerTypes: { array: true, map: true, set: false }, ...over.capabilities },
+    capabilities: { pinTypes: over.pinTypes ?? true, containerTypes: { array: true, map: true, set: false }, liveTags: true, ...over.capabilities },
     bpApply: { features: ["cast_object_pin", "map_types", "pin_types", "self_event_calls", "variable_defaults"], nodeKinds: ["call", "cast"] },
   };
 }

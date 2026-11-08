@@ -196,7 +196,7 @@ Builds, then copies the built assets of the project's mod from the staging copy 
 The publish also carries the structural changes of the build:
 
 - `deleted <file>`: the files of a deleted class (and its class-manager row), the old path of a renamed or moved class and the row of a changed `@director` are deleted from the mod, with a backup. The assets that Unreal edited for a rename (references fixed in other Blueprints) are published with it. A backend older than 2.6.0 cannot delete: the publish goes on and warns with [ABFC7014](errors.md#abfc7014) naming the files to delete by hand; the deletions stay pending for the next publish. An open Mod Editor may keep listing a deleted asset until it is restarted ([troubleshooting.md](troubleshooting.md#the-editor-still-lists-a-deleted-asset)).
-- `changed config <file>`: the mod's gameplay tag list `Config/Tags/<Mod>Tags.ini`, when a `@director` tag was added. An open Mod Editor reads tags only when it starts: [ABFC7015](errors.md#abfc7015) says to restart it before using the new tags.
+- `changed config <file>`: the mod's gameplay tag list `Config/Tags/<Mod>Tags.ini`, when a `@director` tag was added. With the Mod Editor open, backend 2.6.0 registers the new tags in it before the rows reload; only when that fails does [ABFC7015](errors.md#abfc7015) say to restart the editor.
 
 `--dry-run` lists all of these as `changed`, `added`, `changed config` and `deleted` lines and copies nothing. A publish that only deletes files is a real publish (it does not say "nothing to publish").
 

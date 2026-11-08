@@ -139,7 +139,7 @@ import { Actor } from "/Script/Engine";
 export class BP_MyDirector extends Actor {}
 ```
 
-Typing `ClassManager.EntityDirector.` in your editor lists every tag the game and your mod know (they come from `abfc stubs`); a string such as `"ClassManager.EntityDirector.MyDirector"` works as well and autocompletes. A tag the mod does not have yet is created: the build adds it to the mod's tag list (`Config/Tags/ExampleModTags.ini`), `abfc publish` publishes the file, and you restart the Mod Editor once to see the new tag there ([ABFC7015](errors.md#abfc7015)). Tags a build adds stay in the list even if you remove the director later, because the list is shared mod content. Without a tag the row starts nothing ([ABFC2079](errors.md#abfc2079)).
+Typing `ClassManager.EntityDirector.` in your editor lists every tag the game and your mod know (they come from `abfc stubs`); a string such as `"ClassManager.EntityDirector.MyDirector"` works as well and autocompletes. A tag the mod does not have yet is created: the build adds it to the mod's tag list (`Config/Tags/ExampleModTags.ini`), `abfc publish` publishes the file, and an open Mod Editor is told about the new tag at publish (only when that fails, [ABFC7015](errors.md#abfc7015) asks you to restart it). Tags a build adds stay in the list even if you remove the director later, because the list is shared mod content. Without a tag the row starts nothing ([ABFC2079](errors.md#abfc2079)).
 
 ### Where the asset goes
 

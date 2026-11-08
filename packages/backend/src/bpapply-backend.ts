@@ -102,6 +102,10 @@ export function publishResultFrom(json: Record<string, unknown>): PublishResult 
       const o = isObject(item) ? item : {};
       return { asset: str(o.asset), message: str(o.message) ?? JSON.stringify(item) };
     }),
+    tagsRegistered: strList(json.tags_registered),
+    tagsUnregistered: strList(json.tags_unregistered),
+    tagsStrategy: str(json.tags_strategy),
+    tagsError: str(json.tags_error),
     raw: json,
   };
 }

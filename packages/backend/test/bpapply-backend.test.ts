@@ -464,6 +464,19 @@ test("publishResultFrom maps bp_publish results", () => {
     { asset: "/M/C", message: "cannot connect" },
     { asset: null, message: '"plain"' },
   ]);
+  assert.deepEqual([g.tagsRegistered, g.tagsUnregistered, g.tagsStrategy, g.tagsError], [[], [], null, null]);
+  const h = publishResultFrom({
+    published: ["Content/A.uasset"],
+    message: "ok",
+    tags_registered: ["A.B"],
+    tags_unregistered: ["C.D", "E.F"],
+    tags_strategy: "settings",
+    tags_error: "refresh: boom",
+  });
+  assert.deepEqual(h.tagsRegistered, ["A.B"]);
+  assert.deepEqual(h.tagsUnregistered, ["C.D", "E.F"]);
+  assert.equal(h.tagsStrategy, "settings");
+  assert.equal(h.tagsError, "refresh: boom");
   assert.deepEqual(a.reloadedReferencers, []);
   assert.deepEqual(a.skippedDirty, []);
   assert.deepEqual(a.dirtyPublished, []);

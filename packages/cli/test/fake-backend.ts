@@ -144,6 +144,8 @@ export interface FakeBackendOptions {
   publishDeletes?: boolean;
   /** The backend lists/creates gameplay tags (`gameplayTags`; default false). */
   gameplayTags?: boolean;
+  /** A publish with the Mod Editor open registers the mod's gameplay tags in it (`liveTags`; default false). */
+  liveTags?: boolean;
   /** The backend returns `defaults` in reflect function meta (`reflectDefaults`; default false). */
   reflectDefaults?: boolean;
   /** The class-manager row may carry `gameplay_tag` (`classManagerRowTag`; needs `classManagerRows`; default false). */
@@ -395,6 +397,10 @@ export class FakeBackend implements Backend {
     skippedDirty: [],
     dirtyPublished: [],
     compileErrorsAfter: [],
+    tagsRegistered: [],
+    tagsUnregistered: [],
+    tagsStrategy: null,
+    tagsError: null,
     raw: {},
   };
   /** The arguments of every `publish` call (the `bp_publish` calls also appear in `calls`). */
@@ -449,6 +455,7 @@ export class FakeBackend implements Backend {
     capabilities.assetOps = o.assetOps === true ? [...ALL_ASSET_OPS] : Array.isArray(o.assetOps) ? [...o.assetOps] : [];
     capabilities.publishDeletes = o.publishDeletes === true;
     capabilities.gameplayTags = o.gameplayTags === true;
+    capabilities.liveTags = o.liveTags === true;
     capabilities.reflectDefaults = o.reflectDefaults === true;
     capabilities.classManagerRowTag = o.classManagerRowTag === true && o.classManagerRows === true;
     capabilities.variableDefaults = o.variableDefaults === true;

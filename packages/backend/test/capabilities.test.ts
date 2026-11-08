@@ -180,6 +180,15 @@ test("2.6.0 capabilities: assetOps needs the tool and the report, publishDeletes
   assert.equal(RECOMMENDED_BACKEND_VERSION, "2.6.0");
 });
 
+test("liveTags needs the report AND bp_publish", () => {
+  const info = { protocol: 1, bpApply: { features: [] }, capabilities: { liveTags: true } } as RawBackendInfo;
+  assert.equal(capabilitiesFrom(["bp_publish"], info, null).liveTags, true);
+  assert.equal(capabilitiesFrom([], info, null).liveTags, false);
+  assert.equal(capabilitiesFrom(["bp_publish"], { ...info, capabilities: {} } as RawBackendInfo, null).liveTags, false);
+  assert.equal(capabilitiesFrom(ALL_TOOLS, FIX_INFO, null).liveTags, false);
+  assert.equal(capabilitiesFrom(["bp_publish"], null, null).liveTags, false);
+});
+
 test("variableDefaults follows the bp_apply feature variable_defaults", () => {
   const info = (features: string[]): RawBackendInfo => ({ protocol: 1, bpApply: { features } }) as RawBackendInfo;
   assert.equal(capabilitiesFrom([], info(["variable_defaults"]), null).variableDefaults, true);

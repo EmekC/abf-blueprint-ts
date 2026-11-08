@@ -44,6 +44,7 @@ export interface RawBackendInfo {
     assetOps?: unknown;
     publishDeletes?: unknown;
     gameplayTags?: unknown;
+    liveTags?: unknown;
     reflectDefaults?: unknown;
   } | null;
   bpApply?: { features?: unknown; nodeKinds?: unknown } | null;
@@ -80,6 +81,7 @@ export const BP_APPLY_P1_BASE: BackendCapabilities = {
   assetOps: [],
   publishDeletes: false,
   gameplayTags: false,
+  liveTags: false,
   reflectDefaults: false,
   classManagerRowTag: false,
   variableDefaults: false,
@@ -145,6 +147,7 @@ export function capabilitiesFrom(
     assetOps: tools.includes("bp_asset_ops") ? strings(info?.capabilities?.assetOps) : [],
     publishDeletes: bool(info?.capabilities?.publishDeletes) && tools.includes("bp_publish"),
     gameplayTags: bool(info?.capabilities?.gameplayTags),
+    liveTags: bool(info?.capabilities?.liveTags) && tools.includes("bp_publish"),
     reflectDefaults: bool(info?.capabilities?.reflectDefaults),
     nodeKinds: strings(info?.bpApply?.nodeKinds),
     backendContainerTypes:

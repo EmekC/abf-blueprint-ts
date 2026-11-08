@@ -167,6 +167,14 @@ export interface PublishResult {
   dirtyPublished: string[];
   /** Blueprint compile errors the open editor logged for the reloaded packages while it reloaded (the files on disk are fine). */
   compileErrorsAfter: Array<{ asset: string | null; message: string }>;
+  /** Gameplay tags the backend registered in the open editor before it reloaded the published rows (`tags_registered`, capability `liveTags`); empty otherwise. */
+  tagsRegistered: string[];
+  /** Tags of the mod's tag list the open editor still does not know after the publish (`tags_unregistered`); empty when all are known or the backend is older. */
+  tagsUnregistered: string[];
+  /** How the backend registered the tags (`tags_strategy`: "refresh" or "settings"), or null. */
+  tagsStrategy: string | null;
+  /** Why the tag registration failed or was partial (`tags_error`), or null. */
+  tagsError: string | null;
   raw: unknown;
 }
 

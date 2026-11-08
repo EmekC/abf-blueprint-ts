@@ -124,6 +124,8 @@ function defaultsStale(asset: IrModule["assets"][number], manifest: Manifest | n
   if (manifest?.classDefaultsHash !== hash) return true;
   // The Mod Editor saved this asset (that is why the stage was copied again): its class defaults may differ from the TypeScript, which wins.
   if (editedInMod?.has(asset.path.toLowerCase()) === true) return true;
+  // The Mod Editor saved the class-manager row (e.g. it stripped a tag it did not know): the row is written again.
+  if (asset.director !== undefined && editedInMod?.has(asset.director.asset.toLowerCase()) === true) return true;
   // A re-sync discards unpublished defaults only: published ones come back with the mod's copy.
   if ((manifest.classDefaultsStageSyncedAt ?? null) !== stage.syncedAt && manifest.classDefaultsPublished !== true) return true;
   // The backend can write class-manager rows now but the last pass only verified the row (or wrote another one): run the pass again.

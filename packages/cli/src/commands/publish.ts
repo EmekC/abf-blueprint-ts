@@ -97,7 +97,7 @@ async function publishFast(ctx: CliContext, rec: Recorder, session: BackendSessi
   rec.record("publish.list", since(t));
 
   if (args.flags.dryRun) return output.exitCode();
-  return copyToMod(ctx, rec, backend, list, "publish.copy", info.capabilities.publishDeletes);
+  return copyToMod(ctx, rec, backend, list, "publish.copy", info.capabilities.publishDeletes, info.capabilities.liveTags);
 }
 
 /** The release checks, then the same copy. */
@@ -186,7 +186,7 @@ async function publishFull(ctx: CliContext, rec: Recorder, session: BackendSessi
 
   if (args.flags.dryRun) return output.exitCode();
   // gate 8: bp_publish for the owned assets of the list
-  return copyToMod(ctx, rec, backend, list, "gate.8", info.capabilities.publishDeletes);
+  return copyToMod(ctx, rec, backend, list, "gate.8", info.capabilities.publishDeletes, info.capabilities.liveTags);
 }
 
 /** Prints the would-publish list: files of the stage that differ from the mod, limited to assets that hold owned units or adoptions. */
@@ -253,7 +253,7 @@ function wouldPublish(ctx: CliContext, stage: StageStatus | null): PublishList {
 }
 
 /** `bp_publish` for the owned assets of the list, with a grant for the project's own mod. */
-async function copyToMod(ctx: CliContext, rec: Recorder, backend: Backend, list: PublishList, step: string, canDelete: boolean): Promise<number> {
+async function copyToMod(ctx: CliContext, rec: Recorder, backend: Backend, list: PublishList, step: string, canDelete: boolean, liveTags: boolean): Promise<number> {
   const { output, config } = ctx;
   const mod = config.mod.name;
   // Removed files are deleted from the mod only by a backend that can (publishDeletes); otherwise they stay and the user deletes them.
@@ -324,12 +324,17 @@ async function copyToMod(ctx: CliContext, rec: Recorder, backend: Backend, list:
       "the open Mod Editor reloaded the published assets in place; the asset editor tabs of the published assets and of the assets that reference them were closed (reopen them to see the change).",
     );
   }
-  if (list.config.length > 0 && r.route === "live-reload") {
+  if (r.tagsRegistered.length > 0) output.info(`gameplay tags registered in the open Mod Editor: ${r.tagsRegistered.join(", ")}`);
+  const unknownTags = r.tagsUnregistered;
+  if (r.route === "live-reload" && (unknownTags.length > 0 || (!liveTags && list.config.length > 0))) {
     output.diag({
       severity: "warning",
       code: "ABFC7015",
-      message: `the tag list ${list.config.join(", ")} was published while the Mod Editor is open; the editor reads gameplay tags when it starts, so the new tags are not known to it yet.`,
-      fix: "restart the Mod Editor before you use the new tags there (do not save the mod in the editor before that).",
+      message:
+        unknownTags.length > 0
+          ? `the open Mod Editor does not know these gameplay tags yet: ${unknownTags.join(", ")}${r.tagsError !== null ? ` (${r.tagsError})` : ""}; rows that use them load with an invalid tag there and their directors do not start in Play In Editor.`
+          : `the tag list ${list.config.join(", ")} was published while the Mod Editor is open; this backend cannot register new tags in the open editor (update abf-mod-editor-mcp), so the editor does not know them yet.`,
+      fix: 'restart the Mod Editor before you play or open the director rows. Do not save a row the editor reports "Invalid Tags that have been removed" for; if you did, run abfc build and abfc publish again (the tag is set again).',
     });
   }
   if (r.skippedDirty.length > 0) {

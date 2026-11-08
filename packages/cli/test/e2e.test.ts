@@ -2357,8 +2357,8 @@ test("(A11-3) a backend without publishDeletes: ABFC7014 names the files, the re
   });
 });
 
-test("(A11-4) a new director tag: the tag ini is listed, published by file, and ABFC7015 warns when the editor reloads live", async () => {
-  await withRig({ handMadeEvent: false, classManagerRows: true, classManagerRowTag: true, gameplayTags: true }, async (r) => {
+test("(A11-4) a new director tag: the tag ini is listed, published by file, and the backend registers the tag in the open editor (no ABFC7015)", async () => {
+  await withRig({ handMadeEvent: false, classManagerRows: true, classManagerRowTag: true, gameplayTags: true, liveTags: true }, async (r) => {
     addDirector(r.dir, "EntityDirector_Test", DIRECTOR_TAG);
     let x = await r.run(["publish", "--dry-run"]);
     assert.equal(x.code, 0, x.out);
@@ -2367,16 +2367,48 @@ test("(A11-4) a new director tag: the tag ini is listed, published by file, and 
     assert.match(x.out, /"config":\s*\[\s*"Config\/Tags\/TestModTags\.ini"/);
     assert.equal(r.backend.publishCalls.length, 0);
 
-    r.backend.publishResult = { ...r.backend.publishResult, route: "live-reload" };
+    r.backend.publishResult = {
+      ...r.backend.publishResult,
+      route: "live-reload",
+      tagsRegistered: [DIRECTOR_TAG],
+      tagsStrategy: "refresh",
+    };
     x = await r.run(["publish"]);
     assert.equal(x.code, 0, x.out);
     const call = r.backend.publishCalls[0]!;
     assert.ok(call.assets.includes("Config/Tags/TestModTags.ini"), call.assets.join(","));
     assert.ok(call.assets.includes("/TestMod/Relay/BP_Relay"));
-    assert.match(x.out, /warning ABFC7015/);
+    assert.match(x.out, /gameplay tags registered in the open Mod Editor: ClassManager\.EntityDirector\.Test/);
+    assert.doesNotMatch(x.out, /ABFC7015/);
 
     x = await r.run(["publish"]);
     assert.match(x.out, /nothing to publish/);
+  });
+});
+
+test("(A11-4b) a tag the open editor could not register: ABFC7015 names it and the reason", async () => {
+  await withRig({ handMadeEvent: false, classManagerRows: true, classManagerRowTag: true, gameplayTags: true, liveTags: true }, async (r) => {
+    addDirector(r.dir, "EntityDirector_Test", DIRECTOR_TAG);
+    r.backend.publishResult = {
+      ...r.backend.publishResult,
+      route: "live-reload",
+      tagsUnregistered: [DIRECTOR_TAG],
+      tagsError: "refresh: no settings",
+    };
+    const x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC7015: .*does not know these gameplay tags yet: ClassManager\.EntityDirector\.Test \(refresh: no settings\)/);
+    assert.doesNotMatch(x.out, /gameplay tags registered in the open Mod Editor/);
+  });
+});
+
+test("(A11-4c) a backend without liveTags: the tag list published live gives ABFC7015 (old backend wording)", async () => {
+  await withRig({ handMadeEvent: false, classManagerRows: true, classManagerRowTag: true, gameplayTags: true }, async (r) => {
+    addDirector(r.dir, "EntityDirector_Test", DIRECTOR_TAG);
+    r.backend.publishResult = { ...r.backend.publishResult, route: "live-reload" };
+    const x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC7015: .*cannot register new tags in the open editor/);
   });
 });
 

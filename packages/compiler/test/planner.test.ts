@@ -287,6 +287,24 @@ test("a director row is part of the defaults item (with the class path) and of i
   assert.deepEqual(planBuild(bare, input2(done, snapshot)).plan.assets, []);
 });
 
+test("a director row saved in the Mod Editor makes the defaults stale (its tag is applied again)", () => {
+  const snapshot = snapshot2();
+  const row = "/TestMod/DataTables/DT_ClassManager/EntityDirector_Test";
+  const { classDefaults: _unused, ...noDefaults } = ir2.assets[0]!;
+  const withDirector = { ...ir2, assets: [{ ...noDefaults, director: { row: "EntityDirector_Test", asset: row, tag: "ClassManager.EntityDirector.Test" } }] };
+  const built = planBuild(withDirector, input2(appliedManifest(snapshot), snapshot)).plan.assets[0]!.defaults!;
+  const applied = appliedManifest(snapshot, { classDefaultsHash: built.hash, classDefaultsStageSyncedAt: "T1", classDefaultsPublished: true, directorRow: row });
+  assert.deepEqual(planBuild(withDirector, input2(applied, snapshot)).plan.assets, []);
+  const edited = { ...input2(applied, snapshot), editedInMod: new Set([row.toLowerCase()]) };
+  const plan = planBuild(withDirector, edited).plan.assets;
+  assert.equal(plan.length, 1);
+  assert.equal(plan[0]!.defaults?.director?.asset, row);
+  assert.equal(plan[0]!.defaults?.director?.tag, "ClassManager.EntityDirector.Test");
+  // an unrelated saved file changes nothing
+  const other = { ...input2(applied, snapshot), editedInMod: new Set(["/testmod/datatables/dt_classmanager/other"]) };
+  assert.deepEqual(planBuild(withDirector, other).plan.assets, []);
+});
+
 test("a manifest directorRow without a director in the IR makes the defaults stale (and is read); a class with a director is unaffected", () => {
   const snapshot = snapshot2();
   const row = "/TestMod/DataTables/DT_ClassManager/EntityDirector_Test";

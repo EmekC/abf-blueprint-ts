@@ -110,7 +110,7 @@ abfc never deletes a `@struct`, because Blueprints and saved games that use it w
 
 ## New gameplay tags are not known in the editor
 
-After a `@director` with a new tag was published while the Mod Editor was open, [ABFC7015](errors.md#abfc7015) says the editor reads tags only at startup. Restart the Mod Editor before you use the tag there, and do not save the mod in the editor before that.
+After a `@director` with a new tag was published while the Mod Editor was open, [ABFC7015](errors.md#abfc7015) means the backend could not register the tag in the open editor (or is too old to try), which reads tags only at startup. Restart the Mod Editor before you use the tag there, and do not save a row the editor reports "Invalid Tags that have been removed" for; if you did, run `abfc build` and `abfc publish` again.
 
 
 ## The Epic login window of the stage audit

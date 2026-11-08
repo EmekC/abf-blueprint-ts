@@ -42,7 +42,7 @@ Error codes link to [errors.md](errors.md). For step-by-step help see [troublesh
 
 - **What users hit:** a new `@director` row was written without a gameplay tag, so the director never started.
 - **What changed:** `@director("Row", ClassManager.EntityDirector.X)` (or a string tag) sets the row's tag. A tag that does not exist yet is added to the mod's `Config/Tags/<Mod>Tags.ini` and published with the mod. All known tags autocomplete through the generated `.abfc/tags.d.ts`. Related diagnostics: ABFC2079 (no tag), ABFC2080 (bad tag), ABFC2081 (not under `ClassManager.EntityDirector.`), ABFC2082 (backend too old).
-- **How to use it now:** give every new director a tag. The open Mod Editor loads new tags only at its next start (ABFC7015 when you publish one); restart it before saving that row there.
+- **How to use it now:** give every new director a tag. With backend 2.6.0 `abfc publish` registers the mod's new tags in the open Mod Editor before it reloads the row, so nothing needs a restart. If the editor cannot take them, ABFC7015 names the tags and says to restart it (see Limitations).
 
 #### P6. Engine functions needed every optional argument
 
@@ -87,6 +87,7 @@ These were found by running abfc against a real mod through the Mod Editor, with
 - **A struct whose TypeScript is gone** stayed silently. It now warns once (ABFC5018) and stays (see Limitations).
 - **The ABFC2046 text** (changing the fields of an existing struct) now says that the old struct stays and how to get out (rename the struct).
 - **A mod name in another letter case** (`mod.name` differs from the plugin file) is normalised to the plugin's spelling, with warning ABFC1045 (visible in every command).
+- **Director tag invalid after publish with the editor open.** The row showed "Invalid Tags that have been removed" in the Mod Editor and the director did not start in Play In Editor. The open editor reads gameplay tags only when it starts, and the publish reloaded the row before the editor knew the new tag; saving the row there then removed the tag from the row file. Now the backend registers the mod's tags in the open editor before it reloads the row (ABFC7015 only when that fails), and a director row that the Mod Editor saved gets its tag again at the next build.
 - **A second abfc run in the same project** at the same time could fail on a staged file or corrupt nothing but report a confusing backend error. Build, test, publish, status, stubs and adopt now take a project lock; a second run is ABFC4019. A lock of a dead process, an old one or an unreadable one is replaced.
 - **A hidden file copy was still in use (WinError 32)** during an apply: the backend now waits up to 60 seconds and, if the file is still held, names the holder. See Limitations.
 - **Engine defaults that live under the parameter name** (not `CPP_Default_`) were not found. The backend now follows Unreal's own lookup; a few common move and player functions have curated zero defaults.
@@ -104,7 +105,7 @@ These are known and documented; work around them as described.
 ### Mod Editor and publish
 
 - **The open Mod Editor keeps listing deleted assets until it is restarted.** After a publish deleted assets (or a class or row was renamed), the editor's asset registry still shows them, even though their files are gone. Restart the Mod Editor; nothing needs to be cleaned up. abfc does not unload packages in your editor (risk of a crash).
-- **New gameplay tags need an editor restart** to be loaded by the open Mod Editor (ABFC7015). Do not save the director row there before restarting.
+- **New gameplay tags need an editor restart only when registration fails** (ABFC7015, which names the tags). Do not save the director row there before restarting. Tags that abfc registered live can drop out of the open editor again after a tag-settings refresh in the editor itself (Project Settings > GameplayTags changes); the next `abfc publish` registers them again, and a restart always loads them.
 - **Play In Editor.** `abfc build` works while Play In Editor runs, but `abfc publish` is refused (ABFC7005) until you stop it. abfc never stops it or clicks in the editor.
 - **Publish with unsaved changes** in the open Mod Editor is refused (ABFC7005) and names the assets. Save or revert them, then publish again; the next build re-syncs and applies the TypeScript on top.
 - **"Staged file still in use" (WinError 32).** A virus scanner, the search indexer, a leftover hidden editor or a second tool using the same mod can hold a staged file for a moment. The backend waits up to 60 seconds and names the holder in the message ("nothing was changed; wait a moment and run the command again"). If it still fails, run the same command again. It was seen right after `abfc stubs` and when two abfc runs overlapped (now ABFC4019).

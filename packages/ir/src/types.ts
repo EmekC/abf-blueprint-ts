@@ -113,6 +113,8 @@ export interface BackendCapabilities {
   publishDeletes: boolean;
   /** `backend_info.capabilities.gameplayTags` (backend 2.6.0): reflect can list gameplay tags and the tag ini is managed. */
   gameplayTags: boolean;
+  /** `backend_info.capabilities.liveTags` (backend 2.6.0) AND `bp_publish`: a publish with the Mod Editor open registers the mod's gameplay tags in it before it reloads the rows. */
+  liveTags: boolean;
   /** `backend_info.capabilities.reflectDefaults` (backend 2.6.0): reflect function meta carries `defaults`. */
   reflectDefaults: boolean;
   /** `classManagerRows` AND bp_apply feature `class_manager_row_tag` (backend 2.6.0): `class_manager_row` may carry `gameplay_tag`. */

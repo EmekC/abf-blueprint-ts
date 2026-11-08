@@ -1455,11 +1455,11 @@ Fix: delete the listed assets in the Mod Editor (Content Browser), or update abf
 
 Severity: warning · Exit: -
 
-Meaning: the publish copied the mod's gameplay tag list (`Config/Tags/<Mod>Tags.ini`, new tags added by a `@director` tag) while the Mod Editor was open. The editor reads gameplay tags when it starts, so it does not know the new tags yet; the file on disk is fine.
+Meaning: the publish copied the mod's gameplay tag list (`Config/Tags/<Mod>Tags.ini`, new tags added by a `@director` tag) while the Mod Editor was open, and the editor does not know some of the tags. Backend 2.6.0 registers the mod's tags in the open editor itself before it reloads the published rows (capability `liveTags`; abfc prints `gameplay tags registered in the open Mod Editor`), so this warning means that registration failed (the message names the tags that stayed unknown and the backend's reason) or that the backend is older and cannot do it. A row that uses an unknown tag loads with an invalid tag in the editor, and its director does not start in Play In Editor. The files on disk are fine.
 
-Typical cause: a `@director` with a tag that was not in the mod's tag list, published with the editor open.
+Typical cause: the editor refused every way the backend has to refresh its tag tree, or an abf-mod-editor-mcp without `liveTags`.
 
-Fix: restart the Mod Editor before you use the new tags there, and do not save the mod in the editor before that.
+Fix: restart the Mod Editor before you play or open the director rows. Do not save a row the editor reports "Invalid Tags that have been removed" for; if you did, run `abfc build` and `abfc publish` again (the tag is set again). Update abf-mod-editor-mcp to get the automatic registration.
 
 ## Lint rules
 
