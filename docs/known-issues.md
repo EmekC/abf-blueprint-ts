@@ -147,6 +147,12 @@ These are known and documented; work around them as described.
 
 - **Member discovery needs the backend's member pass (ABFC3014).** Widgets, components and widget/component variables of game Blueprints are found from the widget tree, the SCS templates and the class package's cooked name map; native classes' component and widget properties (a character's mesh or movement component) come from the class's Python documentation. The cooked reader needs the editor's uncompressed, unencrypted IoStore content; otherwise `cookedClass` is missing and the warning appears. Members that none of these sources names are still missing, and only single object references are recovered (arrays and other types are listed by the class defaults anyway).
 
+- **Native members found from the Python docstring can differ in case from the C++ name.** They are named by converting snake_case to PascalCase, so acronyms come out differently (`Hud` for `HUD`). They still resolve in the engine because FNames ignore case.
+
+- **Discovery keeps only widget, component and timeline-typed members.** Other members that GetClassDefaults does not list are deliberately dropped. Timelines are emitted as readonly components.
+
+- **Numbered variables are found only up to `_9`.** Cooked containers that are signed, encrypted, multi-partition or older than TOC version 4 are skipped; the reason is reported in `errors`.
+
 ### Engine defaults
 
 - **Optional parameters come from engine metadata.** Functions whose default is not stored as metadata keep their parameters required, except the short curated list. If an argument you expect to be optional is required, pass it explicitly.
