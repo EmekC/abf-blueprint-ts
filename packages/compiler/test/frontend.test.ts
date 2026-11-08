@@ -559,6 +559,89 @@ test("own fields: Name!: T becomes a variable and is usable as this.Name; bad de
   assert.ok(push.k === "arrayOp" && push.array.self === "Names" && push.array.type === "array:name");
 });
 
+/** Fields and diagnostics of a one-class file `BP_Init` extending the phase2 Actor stub, with the given members. */
+function fieldsHir(members: string): { fields: Array<{ name: string; type: string; default?: string }>; diagnostics: Diagnostic[] } {
+  const dir = mkdtempSync(join(here78, "fields-"));
+  try {
+    cpSync(phase2Dir, dir, { recursive: true });
+    for (const f of ["Phase2Bad.ts", "Counter.ts", "Director.ts"]) rmSync(join(dir, "src", f));
+    writeFileSync(
+      join(dir, "src", "Init.ts"),
+      `import { blueprint } from "@abfc/runtime";
+import type { int, int64, byte, float, double, name } from "@abfc/runtime";
+import { Actor } from "/Script/FakeEngine";
+
+@blueprint({ path: "/TestMod/Relay/BP_Init" })
+export class BP_Init extends Actor {
+${members}
+}
+`,
+      "utf8",
+    );
+    const ld = loadProgram(dir);
+    const sf = ld.files.classes.find((f) => f.fileName.endsWith("/Init.ts"));
+    assert.ok(sf);
+    const res = buildHir(ld, config, profile, [sf]);
+    return { fields: res.classes.flatMap((c) => c.fields.map((f) => ({ name: f.name, type: f.type, ...(f.default !== undefined ? { default: f.default } : {}) }))), diagnostics: res.diagnostics };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("own field initializers: literals become the variable default; other initializers are ABFC2047", () => {
+  const ok = fieldsHir(`  Speed: float = 2.5;
+  Neg: float = -1;
+  Wide: double = (3);
+  Cnt: int = -3;
+  Big: int64 = 9007199254740991;
+  Low: byte = 255;
+  Armed: boolean = true;
+  Off: boolean = false;
+  Label: string = "hi";
+  Tpl: string = \`x\`;
+  Tag: name = "N";
+  Plain!: int;`);
+  assert.deepEqual(ok.diagnostics, []);
+  assert.deepEqual(
+    ok.fields.map((f) => [f.name, f.type, f.default]),
+    [
+      ["Speed", "float", "2.5"],
+      ["Neg", "float", "-1"],
+      ["Wide", "double", "3"],
+      ["Cnt", "int", "-3"],
+      ["Big", "int64", "9007199254740991"],
+      ["Low", "byte", "255"],
+      ["Armed", "bool", "true"],
+      ["Off", "bool", "false"],
+      ["Label", "string", "hi"],
+      ["Tpl", "string", "x"],
+      ["Tag", "name", "N"],
+      ["Plain", "int", undefined],
+    ],
+  );
+  const members = [
+    `Cast: name = "N" as name;`,
+    `Sum: float = 1 + 1;`,
+    `Frac: int = 2.5;`,
+    `Over: byte = 256;`,
+    `Huge: int = 3000000000;`,
+    `Flag: boolean = 1;`,
+    `Str: string = 3;`,
+    `Names: name[] = [];`,
+    `Bang!: int = 1;`,
+    `Bare: int;`,
+  ];
+  const bad = fieldsHir(members.map((m) => `  ${m}`).join("\n"));
+  assert.deepEqual(bad.fields, []);
+  assert.ok(bad.diagnostics.every((d) => d.code === "ABFC2047"), JSON.stringify(bad.diagnostics.map((d) => d.code)));
+  assert.deepEqual(
+    bad.diagnostics.map((d) => /^field (\w+):/.exec(d.message)?.[1]),
+    members.map((m) => /^\w+/.exec(m)![0]),
+  );
+  assert.match(bad.diagnostics[3]!.message, /256 is out of range for byte/);
+  assert.match(bad.diagnostics[1]!.message, /must be a literal of the field type/);
+});
+
 test("native Map and Set: operations build containerOp/containerQuery", () => {
   const loaded4 = loadProgram(phase4Dir);
   const sf = loaded4.files.classes.find((f) => f.fileName.endsWith("/Maps.ts"));

@@ -8,8 +8,8 @@ export type BpType = string;
 /** `actor`: derives from Actor; `component`: from ActorComponent; `widget`: from UserWidget; `object`: anything else. */
 export type ParentFamily = "actor" | "component" | "widget" | "object";
 
-/** An own member variable (`Name!: T;` in the TS class); abfc declares it in the asset. */
-export interface HirField { name: string; type: BpType; span: Span }
+/** An own member variable (`Name!: T;` or `Name: T = <literal>` in the TS class); abfc declares it in the asset. `default` is Unreal default-value text. */
+export interface HirField { name: string; type: BpType; default?: string; span: Span }
 
 export interface HirClass {
   name: string;

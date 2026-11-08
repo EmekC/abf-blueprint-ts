@@ -569,8 +569,9 @@ class HirBuilder {
   }
 
   /**
-   * An own field: `Name!: Type;` with no initializer and no modifiers other than `public`. Reports ABFC2047 and returns undefined
-   * for any other property declaration, a type without a Blueprint equivalent, or a name that collides with an inherited member.
+   * An own field: `Name!: Type;` or `Name: Type = <literal>;` with no modifiers other than `public`; a literal initializer becomes
+   * the variable's default. Reports ABFC2047 and returns undefined for any other property declaration, an initializer that is not a
+   * literal of the field type, a type without a Blueprint equivalent, or a name that collides with an inherited member.
    */
   private ownField(node: ts.ClassDeclaration, m: ts.PropertyDeclaration): HirField | undefined {
     const shown = m.name.getText();
@@ -578,10 +579,10 @@ class HirBuilder {
       this.sink.error("ABFC2047", `field ${shown}: ${why}`, m.name);
       return undefined;
     };
-    const FORM = "an own field is declared as `Name!: Type;` (no initializer, not static/readonly/optional)";
+    const FORM = "an own field is declared as `Name!: Type;` or `Name: Type = <literal>;` (not static/readonly/optional)";
     if (!ts.isIdentifier(m.name)) return bad(FORM);
     const mods = (ts.getModifiers(m) ?? []).filter((x) => x.kind !== ts.SyntaxKind.PublicKeyword);
-    if (mods.length > 0 || m.questionToken !== undefined || m.exclamationToken === undefined || m.initializer !== undefined || (ts.getDecorators(m) ?? []).length > 0 || m.type === undefined) {
+    if (mods.length > 0 || m.questionToken !== undefined || (m.exclamationToken !== undefined) === (m.initializer !== undefined) || (ts.getDecorators(m) ?? []).length > 0 || m.type === undefined) {
       return bad(FORM);
     }
     const tsFieldType = this.checker.getTypeFromTypeNode(m.type);
@@ -610,7 +611,56 @@ class HirBuilder {
     if (ctype?.isClassOrInterface() && this.checker.getBaseTypes(ctype).some((b) => this.checker.getPropertyOfType(b, m.name.getText()) !== undefined)) {
       return bad("the name collides with a member of the parent class or a hand-made member of the asset; rename the field");
     }
-    return { name: m.name.text, type, span: this.sp(m.name) };
+    let def: string | undefined;
+    if (m.initializer !== undefined) {
+      def = this.fieldDefault(m.initializer, type, shown);
+      if (def === undefined) return undefined;
+    }
+    return { name: m.name.text, type, ...(def !== undefined ? { default: def } : {}), span: this.sp(m.name) };
+  }
+
+  /** The Unreal default-value text of an own field's literal initializer, or undefined (after reporting ABFC2047/ABFC2015) when it is not a literal of the field type. */
+  private fieldDefault(init: ts.Expression, type: BpType, shown: string): string | undefined {
+    const e = stripParens(init);
+    let num: number | undefined;
+    if (ts.isNumericLiteral(e)) num = Number(e.text);
+    else if (ts.isPrefixUnaryExpression(e) && e.operator === ts.SyntaxKind.MinusToken) {
+      const operand = stripParens(e.operand);
+      if (ts.isNumericLiteral(operand)) num = -Number(operand.text);
+    }
+    if (type === "float" || type === "double" || type === "real") {
+      if (num !== undefined && Number.isFinite(num)) return String(num);
+    } else if (type === "int" || type === "int64" || type === "byte") {
+      if (num !== undefined && Number.isInteger(num)) {
+        const [lo, hi] = type === "int" ? [-2147483648, 2147483647] : type === "byte" ? [0, 255] : [undefined, undefined];
+        const inRange = lo === undefined || hi === undefined ? Number.isSafeInteger(num) : num >= lo && num <= hi;
+        if (inRange) return String(num);
+        this.sink.error("ABFC2047", `field ${shown}: ${init.getText()} is out of range for ${type}`, init);
+        return undefined;
+      }
+    } else if (type === "bool") {
+      if (e.kind === ts.SyntaxKind.TrueKeyword) return "true";
+      if (e.kind === ts.SyntaxKind.FalseKeyword) return "false";
+    } else if (type === "string" || type === "name") {
+      if (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) return e.text;
+    } else if (type.startsWith("enum:") && ts.isStringLiteral(e)) {
+      const ctx = this.checker.getContextualType(e);
+      if (ctx) {
+        const members = ctx.isUnion() ? ctx.types : [ctx];
+        const known = members.filter((x): x is ts.StringLiteralType => x.isStringLiteral()).map((x) => x.value);
+        if (known.length > 0 && !known.includes(e.text)) {
+          this.sink.error("ABFC2015", `"${e.text}" is not a value of ${type.slice("enum:".length)} (${known.join(", ")})`, e);
+          return undefined;
+        }
+      }
+      return e.text;
+    }
+    this.sink.error(
+      "ABFC2047",
+      `field ${shown}: the initializer must be a literal of the field type: a number (int, int64, byte, float, double), true or false (boolean), a string (string, name) or an enum value; struct, object, array, Map, Set and text fields have no default`,
+      init,
+    );
+    return undefined;
   }
 
   /** True when the class or one of its base classes is an engine Actor (`@bpPath /Script/<Module>.Actor`). */

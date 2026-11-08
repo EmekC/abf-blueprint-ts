@@ -445,12 +445,12 @@ test("(S19) adding a field adds a variable; removing it removes the variable (AB
     assert.doesNotMatch(x.out, /ABFC5011/);
     assert.match(x.out, /up to date/);
 
-    // a field with a default is refused with a clear message and nothing is applied
+    // a field with a non-literal initializer is refused with a clear message and nothing is applied
     const before = appliedSpecs(r).length;
-    writeFileSync(join(r.dir, "src", "Tally.ts"), tally("BP_Tally").replace("  Total!: int;", "  Total!: int;\n  Speed: number = 2.5;"), "utf8");
+    writeFileSync(join(r.dir, "src", "Tally.ts"), tally("BP_Tally").replace("  Total!: int;", "  Total!: int;\n  Speed: int = 1 + 1;"), "utf8");
     x = await r.run(["build"]);
     assert.equal(x.code, 1, x.out);
-    assert.match(x.out, /error ABFC2047: field Speed: an own field is declared as `Name!: Type;`/);
+    assert.match(x.out, /error ABFC2047: field Speed: the initializer must be a literal/);
     assert.equal(appliedSpecs(r).length, before);
   });
 });
