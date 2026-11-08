@@ -621,3 +621,30 @@ test("hand-made replicated variables and RPC custom events carry @bpReplicated, 
   visit(sf);
   assert.deepEqual(tagNames, ["bpPath", "bpRpc", "bpReliable", "bpHandMade"]);
 });
+
+test("meta.defaults through emit(): trailing defaulted pins are optional with @bpDefault, a middle default stays required, no meta is unchanged", () => {
+  const data = reflectData();
+  data.classes[LIB]!.functions.push(
+    {
+      name: "PrintLike",
+      pins: [execIn, selfPin(true), execThen, pin("InString", "in", "string"), pin("bPrintToScreen", "in", "bool"), pin("bPrintToLog", "in", "bool")],
+      meta: { defaults: { InString: "Hello", bPrintToScreen: "true", bPrintToLog: "true" } },
+    },
+    {
+      name: "MiddleDefault",
+      pins: [execIn, selfPin(true), execThen, pin("A", "in", "bool"), pin("B", "in", "bool"), pin("C", "in", "bool")],
+      meta: { defaults: { B: "true" } },
+    },
+    {
+      name: "NoMeta",
+      pins: [execIn, selfPin(true), execThen, pin("A", "in", "bool")],
+    },
+  );
+  const text = emitStubs(input({ reflect: data })).get("Script/FakeEngine.d.ts") ?? "";
+  assert.match(text, /^ {2}function PrintLike\(InString\?: string, bPrintToScreen\?: boolean, bPrintToLog\?: boolean\): void;$/m);
+  assert.match(text, / \* @bpDefault InString "Hello"/);
+  assert.match(text, / \* @bpDefault bPrintToScreen "true"/);
+  assert.match(text, /^ {2}function MiddleDefault\(A: boolean, B: boolean, C: boolean\): void;$/m);
+  assert.doesNotMatch(text, /@bpDefault B /);
+  assert.match(text, /^ {2}function NoMeta\(A: boolean\): void;$/m);
+});

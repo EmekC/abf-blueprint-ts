@@ -624,3 +624,45 @@ test("a @struct asset lowers to a UserDefinedStruct with its fields and no varia
   assert.ok(outer && mod.assets.indexOf(entry) < mod.assets.indexOf(outer), "a struct comes after the structs it contains");
   assert.equal(outer.structFields?.[0]?.type, "struct:/TestMod/Phase4/S_Entry.S_Entry");
 });
+
+test("optional stub parameters: an omitted or undefined argument sets no pin", () => {
+  // inside the package tree so that `@abfc/runtime` still resolves through the workspace node_modules
+  const dir = mkdtempSync(join(fileURLToPath(new URL("./", import.meta.url)), "lower-"));
+  try {
+    cpSync(projectDir, dir, { recursive: true });
+    writeFileSync(
+      join(dir, "src", "Printer.ts"),
+      [
+        'import { blueprint, event } from "@abfc/runtime";',
+        'import { Actor, KismetSystemLibrary } from "/Script/FakeEngine";',
+        "",
+        '@blueprint({ path: "/TestMod/Relay/BP_Printer" })',
+        "export class BP_Printer extends Actor {",
+        "  @event",
+        "  Hello(): void {",
+        '    KismetSystemLibrary.PrintString("hi");',
+        '    KismetSystemLibrary.PrintString("hi", undefined, false);',
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    const loaded = loadProgram(dir);
+    const sf = loaded.files.classes.find((f) => f.fileName.endsWith("/Printer.ts"));
+    assert.ok(sf);
+    const hir = buildHir(loaded, config, profile, [sf]);
+    assert.deepEqual(hir.diagnostics, []);
+    const mod = lower(hir, profile);
+    assert.deepEqual(validateIrModule(mod), []);
+    const u = mod.assets[0]!.units[0]!;
+    const prints = u.nodes.filter((n) => n.sem?.k === "call" && n.sem.function === "PrintString");
+    assert.equal(prints.length, 2);
+    const inputPins = (n: IrNode): string[] => Object.keys(n.pinDefaults ?? {}).sort();
+    assert.deepEqual(inputPins(prints[0]!), ["InString"]);
+    assert.equal(prints[0]!.pinDefaults?.InString, "hi");
+    assert.deepEqual(inputPins(prints[1]!), ["InString", "bPrintToLog"]);
+    assert.equal(prints[1]!.pinDefaults?.bPrintToLog, "false");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -21,3 +21,20 @@ export declare class FakeController extends Actor {
    */
   GetPawnThing(): Actor | null;
 }
+
+/**
+ * @bpPath /Script/FakeEngine.KismetSystemLibrary
+ * @bpMeta /Script/CoreUObject.Class
+ */
+export declare namespace KismetSystemLibrary {
+  /**
+   * @bpPath /Script/FakeEngine.KismetSystemLibrary:PrintString
+   * @bpParam InString string
+   * @bpParam bPrintToScreen bool
+   * @bpParam bPrintToLog bool
+   * @bpDefault InString "Hello"
+   * @bpDefault bPrintToScreen "true"
+   * @bpDefault bPrintToLog "true"
+   */
+  function PrintString(InString?: string, bPrintToScreen?: boolean, bPrintToLog?: boolean): void;
+}
