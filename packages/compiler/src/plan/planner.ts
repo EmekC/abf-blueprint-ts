@@ -82,6 +82,15 @@ function tagsOf(snapshot: Map<string, T3dNode>, unitId: string, graph: string): 
   return out;
 }
 
+/**
+ * Unreal's compiler leaves intermediate nodes and function graphs in the saved asset (a stub function graph per event, e.g. `Bump` or
+ * `ReceiveBeginPlay`, whose entry calls `ExecuteUbergraph_<Class>`). They are flagged `bIsIntermediateNode=True`, belong to the
+ * events of the EventGraph and are never hand-made content, so the sweep leaves them alone.
+ */
+function isIntermediate(n: T3dNode): boolean {
+  return n.head.includes("bIsIntermediateNode=True");
+}
+
 /** Does the asset's class defaults pass need to run (hash or stage changed)? */
 function defaultsStale(asset: IrModule["assets"][number], manifest: Manifest | null, stage: StageInfo, directorRows = false): boolean {
   // The `@director` is gone but the manifest still records its row: the pass runs once more so the build can clear the record.
@@ -271,7 +280,8 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
         }
         if (unit.kind === "event" && !hasHandMadeEvent(snapshot, unit.name)) newEvents.add(unit.name);
         // a manifest unit that was never applied records no tag, but may still have left some
-        picked.push({ unit, removeNodes: [...handMadeNodes, ...(mu ? tagsOf(snapshot, mu.id, mu.graph) : [])] });
+        // (a unit the manifest lost, e.g. pruned after a re-sync, may have left its tag comment: it goes too, the tag pass writes a new one)
+        picked.push({ unit, removeNodes: [...handMadeNodes, ...tagsOf(snapshot, unit.id, mu?.graph ?? unit.graph)] });
         continue;
       }
 
@@ -386,7 +396,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
 
     // TS wins, non-hybrid class: everything in the asset that no TS unit owns is removed (nodes, function graphs, member variables).
     // Kept because no TS form exists: macros, event dispatchers, interface and override functions, disabled engine default events,
-    // the entry and result nodes of function graphs, components and the widget tree (they are not nodes or variables of a graph).
+    // compiler-generated intermediate nodes and event stub graphs (bIsIntermediateNode), the entry and result nodes of function graphs, components and the widget tree (they are not nodes or variables of a graph).
     const removeGraphNodes: NonNullable<AssetPlan["removeGraphNodes"]> = [];
     const removeFunctions: string[] = [];
     if (!hybridAsset && snapshot.size > 0) {
@@ -410,7 +420,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
       for (const [graph, entry] of functionGraphs) {
         const tsFunction = asset.units.some((u) => u.graph === graph);
         const inherited = entry.head.some((h) => h.startsWith("FunctionReference=") && h.includes("MemberParent=")); // interface or override function
-        if (tsFunction || inherited || delegates.has(graph) || graph === "UserConstructionScript") continue;
+        if (tsFunction || inherited || isIntermediate(entry) || delegates.has(graph) || graph === "UserConstructionScript") continue;
         dropGraphs.add(graph);
         removeFunctions.push(graph);
         report.push(`removed the hand-made function ${graph}`);
@@ -419,7 +429,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
       for (const n of snapshot.values()) {
         if (n.graph === null || macroGraphs.has(n.graph) && !functionGraphs.has(n.graph) || dropGraphs.has(n.graph)) continue;
         if (gone.has(n.name) || owned.has(n.name)) continue;
-        if (n.cls.endsWith("K2Node_FunctionEntry") || n.cls.endsWith("K2Node_FunctionResult")) continue;
+        if (n.cls.endsWith("K2Node_FunctionEntry") || n.cls.endsWith("K2Node_FunctionResult") || isIntermediate(n)) continue;
         if (n.cls.endsWith("K2Node_Event") && n.head.includes("EnabledState=Disabled")) continue;
         const tagOf = tagUnitOf(n);
         if (tagOf !== null && tsUnitIds.has(tagOf)) continue;

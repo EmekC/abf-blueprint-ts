@@ -784,3 +784,41 @@ test("TS wins, hybrid class (the _Manual merge): nothing hand-made is swept", ()
   assert.deepEqual(r.diagnostics, []);
   assert.deepEqual(r.plan.assets, []);
 });
+
+test("TS wins, non-hybrid: the compiler's intermediate event stub graphs and nodes (bIsIntermediateNode) are not hand-made and are never swept", () => {
+  const n1 = node("N1", CALL, []);
+  const inter = ["bIsIntermediateNode=True"];
+  const stubEntry = (graph: string, extra: string[] = []): T3dNode => ({ name: "K2Node_FunctionEntry_0", cls: "/Script/BlueprintGraph.K2Node_FunctionEntry", graph, head: [...inter, ...extra], pins: [] });
+  const stubCall = (graph: string): T3dNode => ({ name: "K2Node_CallFunction_0", cls: CALL, graph, head: [...inter, `FunctionReference=(MemberName="ExecuteUbergraph_Relay",bSelfContext=True)`], pins: [] });
+  const snapshot = new Map<string, T3dNode>([
+    ["N1", n1],
+    ["CMT_cur", tagNode("CMT_cur", unit.id)],
+    // two stub graphs holding a node of the same name: the second is keyed <graph>/<name> by the parser
+    ["K2Node_FunctionEntry_0", stubEntry("ReceiveBeginPlay", [`FunctionReference=(MemberParent=/Script/CoreUObject.Class'/Script/Engine.ActorComponent',MemberName="ReceiveBeginPlay")`])],
+    ["K2Node_CallFunction_0", stubCall("ReceiveBeginPlay")],
+    ["Bump/K2Node_FunctionEntry_0", stubEntry("Bump")],
+    ["Bump/K2Node_CallFunction_0", stubCall("Bump")],
+  ]);
+  const manifest = manifestOf(mu({ irHash: unit.hash, nodes: ["N1"], tag: "CMT_cur", assetHash: unitStateHash(snapshot, ["N1"]), stageSyncedAt: "T1" }));
+  const input = {
+    manifests: new Map([[asset, manifest]]),
+    snapshots: new Map([[asset, snapshot]]),
+    stage,
+    handMadeUnits: new Map<string, string[]>(),
+  };
+  const r = planBuild(ir, input);
+  assert.deepEqual(r.diagnostics, []);
+  assert.deepEqual(r.plan.assets, []);
+  // a genuinely hand-made function graph next to them is still swept, and only it
+  const hand: T3dNode = { name: "FE_Hand", cls: "/Script/BlueprintGraph.K2Node_FunctionEntry", graph: "HandFunc", head: [], pins: [] };
+  const withHand = planBuild(ir, { ...input, snapshots: new Map([[asset, new Map([...snapshot, ["FE_Hand", hand]])]]) });
+  assert.deepEqual(withHand.plan.assets[0]!.removeFunctions, ["HandFunc"]);
+  assert.match(withHand.diagnostics[0]!.message, /removed the hand-made function HandFunc/);
+  assert.doesNotMatch(withHand.diagnostics[0]!.message, /Bump|ReceiveBeginPlay/);
+});
+
+test("a unit the manifest lost (pruned) that is applied again also removes the tag comment it left on the stage", () => {
+  const snapshot = snapshotOf(node("N1", CALL, []), tagNode("CMT_old", unit.id, "92f777f3"));
+  const r = planBuild(ir, { manifests: new Map(), snapshots: new Map([[asset, snapshot]]), stage, handMadeUnits: new Map() });
+  assert.ok(r.plan.assets[0]!.units[0]!.removeNodes.includes("CMT_old"));
+});
