@@ -69,6 +69,11 @@ export class Output {
     this.result = obj;
   }
 
+  /** The result set by json() so far (undefined when none). */
+  resultSoFar(): unknown {
+    return this.result;
+  }
+
   /** 0 when there is no error diagnostic, else the highest exit code of the errors (warnings never fail). */
   exitCode(): number {
     let code = 0;

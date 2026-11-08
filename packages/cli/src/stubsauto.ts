@@ -32,6 +32,8 @@ export interface StubRequestInput {
   adds: string[];
   /** `lock.auto.failed`: classes skipped until `--add`, `--refresh` or a new editor build. */
   failed: string[];
+  /** Placeholder classes and structs the source uses (program scan); generated and kept in added unless they failed before. */
+  used: string[];
   /** Every game class of the catalog is wanted (no valid cache). */
   full: boolean;
 }
@@ -116,6 +118,14 @@ export function resolveStubRequest(i: StubRequestInput): StubRequest {
     }
   }
 
+  const failedSet = new Set(i.failed);
+  for (const p of i.used) {
+    if (failedSet.has(p)) continue;
+    if (lookup !== null && lookup.kindOf(p) === undefined) continue;
+    place(p, false);
+    added.add(p);
+  }
+
   for (const p of i.failed) {
     if (resolvedAdds.has(p)) continue;
     classes.delete(p);
@@ -143,6 +153,37 @@ export const shortName = (path: string): string => path.slice(path.lastIndexOf("
 /** Identifies the backend a lock's `auto.noCatalog` was recorded for (a digest of its folder, so no path is stored). */
 export function backendIdOf(env: CliContext["env"]): string {
   return sha256(env.backendDir.value ?? "").slice(0, 16);
+}
+
+/**
+ * The placeholder classes and structs (`used`, from the program scan) that still have to be generated, decided offline:
+ * not failed before, not reflected yet, and known to the catalog of this editor build. Returns `[]` without a lock with `auto`
+ * (the `stubsNeedWork` path handles the first generation), without a usable catalog, or when no catalog tool was found.
+ */
+export function usedPlaceholdersToGenerate(ctx: CliContext, used: readonly string[]): string[] {
+  if (used.length === 0) return [];
+  const { env, paths } = ctx;
+  const profileDir = win32.join(paths.stubsDir, env.profile.id);
+  const lock = readLock(profileDir);
+  if (lock === null || lock.auto === undefined) return [];
+  if (lock.auto.noCatalog !== undefined && lock.auto.noCatalog === backendIdOf(env)) return [];
+  const failed = new Set(lock.auto.failed);
+  const candidates = used.filter((p) => !failed.has(p));
+  if (candidates.length === 0) return [];
+  const coverage = readCoverage(profileDir);
+  if (coverage === null) return [];
+  const reflected = new Set(coverage.reflected);
+  const open = candidates.filter((p) => !reflected.has(p));
+  if (open.length === 0) return [];
+  const catalog = readCatalog(profileDir);
+  if (catalog === null || (env.fingerprint !== null && catalog.catalog.editorFingerprint !== env.fingerprint)) return [];
+  const lookup = catalogLookup(catalog.catalog);
+  return sortedUnique(
+    open.filter((p) => {
+      const kind = lookup.kindOf(p);
+      return kind === "class" || kind === "game" || kind === "struct";
+    }),
+  );
 }
 
 /**
@@ -174,6 +215,7 @@ export function stubsNeedWork(ctx: CliContext): string | null {
     added: lock.auto.added,
     adds: [],
     failed: lock.auto.failed,
+    used: [],
     full: false,
   });
   const names = [...req.missing.classes, ...req.missing.structs, ...req.opaqueEnums];

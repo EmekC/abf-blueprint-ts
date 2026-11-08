@@ -84,9 +84,8 @@ export interface Frontend {
   ir: IrModule | null;
 }
 
-/** TypeScript program -> HIR -> IR, printing every diagnostic. */
-export function compileFrontend(ctx: CliContext): Frontend {
-  const loaded = loadProgram(ctx.projectDir);
+/** TypeScript program -> HIR -> IR, printing every diagnostic. `loaded` is the program when the caller already has a current one. */
+export function compileFrontend(ctx: CliContext, loaded: LoadedProgram = loadProgram(ctx.projectDir)): Frontend {
   const hir = buildHir(loaded, compilerConfigOf(ctx.config), ctx.env.profile);
   const diags = [...loaded.diagnostics, ...hir.diagnostics];
   emitAll(ctx, diags);

@@ -2,7 +2,8 @@ import { mkdirSync } from "node:fs";
 import { createRequire } from "node:module";
 import { win32 } from "node:path";
 import type { Backend, ReflectData } from "@abfc/backend";
-import { libraryEntriesOf, ownedSets, sourceStubImports } from "@abfc/compiler";
+import { libraryEntriesOf, loadProgram, ownedSets, placeholderTypesUsed, sourceStubImports } from "@abfc/compiler";
+import type { LoadedProgram } from "@abfc/compiler";
 import { AbfcError, runtimeLayout } from "@abfc/env";
 import {
   classesWithoutSupers,
@@ -37,7 +38,7 @@ import type { CliContext } from "../context.js";
 import { SLOW_BACKEND_HINT } from "../progress.js";
 import { reflectAll } from "../reflectchunks.js";
 import { recordRun } from "../runs.js";
-import { backendIdOf, resolveStubRequest, shortName, stubsNeedWork } from "../stubsauto.js";
+import { backendIdOf, resolveStubRequest, shortName, stubsNeedWork, usedPlaceholdersToGenerate } from "../stubsauto.js";
 import type { StubMode } from "../stubsauto.js";
 import { refreshTagsFile } from "../tags.js";
 import { BackendSession, Recorder, backendStartOptions, pruneManifestsToStage, since } from "./common.js";
@@ -470,7 +471,7 @@ async function reflectAndRead(ctx: CliContext, backend: Backend, run: StubRun): 
  * Decides what the stubs of this project still need (catalog, cache, source imports, `--add`), reflects it and writes
  * `.abfc/stubs/<profile>/`. `explicit` is `abfc generate`, `add` is `abfc generate --add`, `build` is the generation at the start of a build.
  */
-export async function generateStubs(ctx: CliContext, backend: Backend, mode: StubMode): Promise<number> {
+export async function generateStubs(ctx: CliContext, backend: Backend, mode: StubMode, opts: { used?: string[] } = {}): Promise<number> {
   const { config, env, output, deps, paths, args } = ctx;
   const flags = args.flags;
   const mod = config.mod.name;
@@ -542,6 +543,7 @@ export async function generateStubs(ctx: CliContext, backend: Backend, mode: Stu
     added: oldLock?.auto?.added ?? [],
     adds: flags.add,
     failed,
+    used: opts.used ?? [],
     full,
   });
   for (const arg of req.notFound) {
@@ -607,10 +609,57 @@ export async function generate(ctx: CliContext): Promise<number> {
     done: () => "Backend started",
   });
   try {
-    return await generateStubs(ctx, backend, ctx.args.flags.add.length > 0 ? "add" : "explicit");
+    const code = await generateStubs(ctx, backend, ctx.args.flags.add.length > 0 ? "add" : "explicit");
+    if (code !== 0) return code;
+    const first = ctx.output.resultSoFar() as Record<string, unknown> | undefined;
+    const u = await generateUsedPlaceholders(ctx, async () => backend, loadProgram(ctx.projectDir));
+    if (u.rounds > 0 && first !== undefined) {
+      ctx.output.json({
+        ...(ctx.output.resultSoFar() as object),
+        notFound: first.notFound,
+        reflected: (first.reflected as number) + u.reflected,
+        used: u.generated,
+      });
+    } else if (first !== undefined) {
+      ctx.output.json({ ...first, used: [] });
+    }
+    return code;
   } finally {
     await backend.close();
   }
+}
+
+/** Upper bound of the scan -> generate -> reload rounds that generate the placeholder types the source uses. */
+const MAX_USED_ROUNDS = 3;
+
+/**
+ * Generates the engine classes and structs the source uses while the stubs hold them only as placeholders (`@bpOpaque`): scans the program,
+ * generates what is missing, reloads the program and scans again (newly generated members can reveal more placeholders), at most
+ * {@link MAX_USED_ROUNDS} times. Starts no backend when the source uses no placeholder that can be generated.
+ */
+export async function generateUsedPlaceholders(
+  ctx: CliContext,
+  backendOf: () => Promise<Backend | null>,
+  loaded: LoadedProgram,
+): Promise<{ loaded: LoadedProgram; generated: string[]; reflected: number; rounds: number }> {
+  let cur = loaded;
+  const generated: string[] = [];
+  let reflected = 0;
+  let rounds = 0;
+  while (rounds < MAX_USED_ROUNDS) {
+    const want = usedPlaceholdersToGenerate(ctx, placeholderTypesUsed(cur)).filter((p) => !generated.includes(p));
+    if (want.length === 0) break;
+    const backend = await backendOf();
+    if (backend === null) break;
+    const names = `${want.slice(0, 5).map(shortName).join(", ")}${want.length > 5 ? ` and ${want.length - 5} more` : ""}`;
+    ctx.output.info(`stubs: the source uses ${names} without generated members; generating ${want.length === 1 ? "it" : "them"}`);
+    await generateStubs(ctx, backend, "build", { used: want });
+    reflected += (ctx.output.resultSoFar() as { reflected?: number } | undefined)?.reflected ?? 0;
+    generated.push(...want);
+    cur = loadProgram(ctx.projectDir);
+    rounds++;
+  }
+  return { loaded: cur, generated, reflected, rounds };
 }
 
 /**
@@ -662,5 +711,42 @@ export async function ensureStubsForBuild(ctx: CliContext, session: BackendSessi
     warn(e);
   } finally {
     rec.record("build.stubs", since(t0), ok);
+  }
+}
+
+/**
+ * Start of `abfc build`, `test` and `publish`, after {@link ensureStubsForBuild}: loads the program, and when it uses placeholder types
+ * (`@bpOpaque`) the stubs can generate, generates them (see {@link generateUsedPlaceholders}). Returns the current program, so the build
+ * compiles what it loaded here. A backend that cannot do it, or a failure, is a warning ABFC3020.
+ */
+export async function ensureUsedStubsForBuild(ctx: CliContext, session: BackendSession, rec: Recorder): Promise<LoadedProgram> {
+  const loaded = loadProgram(ctx.projectDir);
+  const t0 = performance.now();
+  const warn = (e: unknown): void =>
+    ctx.output.diag({
+      severity: "warning",
+      code: "ABFC3020",
+      message: `could not generate stubs (the source uses placeholder types): ${e instanceof Error ? e.message : String(e)}; the build continues with the existing stubs`,
+      fix: 'run "abfc generate" once the Mod Editor backend works.',
+    });
+  const backendOf = async (): Promise<Backend | null> => {
+    try {
+      const opened = await session.open();
+      if (!opened.info.capabilities.reflect || !opened.info.capabilities.catalog) return null;
+      return opened.backend;
+    } catch (e) {
+      warn(e);
+      return null;
+    }
+  };
+  try {
+    const u = await generateUsedPlaceholders(ctx, backendOf, loaded);
+    if (u.rounds > 0) rec.record("build.usedStubs", since(t0), true);
+    return u.loaded;
+  } catch (e) {
+    warn(e);
+    rec.record("build.usedStubs", since(t0), false);
+    // The stubs may have changed partially before the failure.
+    return loadProgram(ctx.projectDir);
   }
 }

@@ -563,9 +563,9 @@ Severity: error · Exit: 1
 
 Meaning: the parent class has no Blueprint metadata (no `@bpPath`), so abfc cannot tell which class to derive from.
 
-Typical cause: the stub of the parent class is missing or out of date.
+Typical cause: the stub of the parent class is missing or out of date; or a member of a placeholder type (`@bpOpaque`, no members yet) is used.
 
-Fix: run `abfc generate` to regenerate the stubs, and check the import.
+Fix: run `abfc generate` to regenerate the stubs, and check the import. For a placeholder type, run `abfc generate` or `abfc build`: they generate the placeholder types the source uses. If the error stays, ABFC3023 names the class the backend could not reflect; `abfc generate --add <path>` retries it, and `stubs.scriptClasses` is the manual fallback.
 
 ### ABFC2061
 
@@ -909,7 +909,7 @@ Meaning: abfc could not determine the cast pin for a class, so a cast to that cl
 
 Typical cause: the class is not in the stubs (a class of your config, your source or `--add` that the backend could not reflect), or the backend did not report how to cast to it.
 
-Fix: run `abfc generate --add <path>` with the class path (`ABFC3023` is reported when the backend cannot reflect it). If the warning stays, report the class name.
+Fix: run `abfc generate` (it generates the classes the source uses) or `abfc generate --add <path>` with the class path (`ABFC3023` is reported when the backend cannot reflect it); `stubs.scriptClasses` is the manual fallback. If the warning stays, report the class name.
 
 ### ABFC3010
 

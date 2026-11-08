@@ -324,3 +324,43 @@ test("code actions: an unresolved /Game module offers Generate stubs for the mod
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/** phase4 whose stubs hold `FakeText` only as an `@bpOpaque` placeholder (the type of `Actor.Txt`), and a file reading a member of it. */
+function withPlaceholder(dir: string, text: string): void {
+  const stub = join(dir, ".abfc", "stubs", "test", "Script", "FakeEngine.d.ts");
+  const original = readFileSync(stub, "utf8");
+  const members =
+    "K2_DestroyActor(): void;\n  /**\n   * @bpPath /Script/FakeEngine.Actor:Txt\n   * @bpType object:/Script/FakeEngine.FakeText\n   */\n  Txt: FakeText;";
+  const placeholder = "\n/**\n * @bpPath /Script/FakeEngine.FakeText\n * @bpMeta /Script/CoreUObject.Class\n * @bpOpaque\n */\nexport declare class FakeText extends UObject {}\n";
+  writeFileSync(stub, original.replace("K2_DestroyActor(): void;", members) + placeholder, "utf8");
+  writeFileSync(join(dir, "src", "Imp.ts"), text, "utf8");
+}
+
+test("code actions: a missing member on a placeholder type offers Generate stubs for it, and none otherwise", async () => {
+  const src = `import { Actor } from "/Script/FakeEngine";\ndeclare const a: Actor;\nexport const t = a.Txt.GetText();\nexport const n = a.Nope;\n`;
+  const dir = copyFixture("phase4", (d) => withPlaceholder(d, src));
+  const started = await startInMemory({}, {}, { cliLaunch: LAUNCH });
+  const plain = await startInMemory();
+  try {
+    const file = join(dir, "src", "Imp.ts");
+    const uri = open(started.client, file);
+    await started.client.waitForDiagnostics(uri);
+    const gen = generateActions(await actionsAt(started, uri, rangeOf(src, "GetText")));
+    assert.equal(gen.length, 1, JSON.stringify(gen.map((a) => a.title)));
+    assert.equal(gen[0]?.title, "Generate stubs for FakeText");
+    assert.equal(gen[0]?.kind, "quickfix");
+    assert.equal(gen[0]?.command?.command, "abfc.generateStubs");
+    assert.deepEqual(gen[0]?.command?.arguments[0]?.add, ["/Script/FakeEngine.FakeText"]);
+    // a missing member of a type that is not a placeholder has no such fix
+    assert.deepEqual(generateActions(await actionsAt(started, uri, rangeOf(src, "Nope"))), []);
+
+    const uri2 = open(plain.client, file);
+    await plain.client.waitForDiagnostics(uri2);
+    assert.deepEqual(generateActions(await actionsAt(plain, uri2, rangeOf(src, "GetText"))), [], "no fix without a CLI launch");
+    assert.deepEqual(started.client.protocolErrors, []);
+  } finally {
+    await started.dispose();
+    await plain.dispose();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

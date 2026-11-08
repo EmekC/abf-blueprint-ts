@@ -49,3 +49,5 @@ export { PrefixIndex } from "./frontend/nameindex.js";
 export type { NameHit } from "./frontend/nameindex.js";
 export { sourceStubImports, stubImportAt } from "./frontend/stubimports.js";
 export type { StubImport } from "./frontend/stubimports.js";
+export { placeholderOfSymbol, placeholderReceiverAt, placeholderTypesUsed, placeholdersOfType } from "./frontend/opaqueuse.js";
+export type { PlaceholderType } from "./frontend/opaqueuse.js";

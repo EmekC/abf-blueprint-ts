@@ -44,7 +44,7 @@ import {
 import { refreshTagsFile } from "../tags.js";
 import { deleteRetiredRows, runAssetOps, runParentChange } from "./assetops.js";
 import { ensureStage } from "./stage.js";
-import { ensureStubsForBuild } from "./generate.js";
+import { ensureStubsForBuild, ensureUsedStubsForBuild } from "./generate.js";
 
 /** True for an @event whose doc comment is its tooltip: the backend only writes it with the bp_apply feature `event_meta`. */
 function hasEventTooltip(u: IrUnit): boolean {
@@ -138,12 +138,13 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
 
   await ensureStubsForBuild(ctx, session, rec);
   if (emitAll(ctx, lockDiagnostics(ctx, "build"))) return FAILED_BUILD;
+  const loaded = await ensureUsedStubsForBuild(ctx, session, rec);
 
   const tFront = performance.now();
   const fe = await ctx.progress.run(
     "Checking TypeScript",
     (s) => {
-      const r = compileFrontend(ctx);
+      const r = compileFrontend(ctx, loaded);
       if (r.ir === null) s.fail("TypeScript has errors");
       return r;
     },

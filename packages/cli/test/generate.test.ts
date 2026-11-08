@@ -1,11 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import { AbfcError, loadProfile } from "@abfc/env";
 import type { Backend, ReflectData, ReflectRequest, ReflectResult } from "@abfc/backend";
 import { main } from "../src/index.js";
+import { TSCONFIG_TEXT } from "../src/init/templates.js";
 import { ALL_TOOLS, captureDeps, fakeEnvironmentFiles, fixInfo, scriptedBackend } from "./helpers.js";
 
 const THING = "/Script/FakeEngine.Thing";
@@ -910,6 +911,108 @@ test("usage lists generate and not stubs", async () => {
     assert.match(text, /commands: .*\bgenerate\b/);
     assert.doesNotMatch(text, /\bstubs\b/);
     assert.match(text, /--no-generate/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+// ---- Placeholder classes the source uses ----
+
+const USE_SOURCE = `import type { Thing } from "/Script/FakeEngine";\nexport function f(t: Thing): unknown { return t.Other.Anything; }\n`;
+
+/** `plain`, but Thing has a property `Other` of the object type OTHER_NATIVE (which stays a placeholder until it is reflected itself). */
+function withOtherProperty(r: ReflectRequest): ReflectData {
+  const d = plain(r);
+  const thing = d.classes[THING];
+  if (thing !== undefined) {
+    thing.properties = [{ name: "Other", pins: [pin("Other", "out", "object", { subCategoryObject: OTHER_NATIVE })] }];
+  }
+  return d;
+}
+
+/** A project that uses a placeholder: tsconfig and one source file on the real disk next to the fake machine. */
+function usedProject(tmp: string): ReturnType<typeof setup> {
+  const fake = setup(tmp, []);
+  mkdirSync(join(tmp, "src"), { recursive: true });
+  writeFileSync(join(tmp, "tsconfig.json"), TSCONFIG_TEXT, "utf8");
+  writeFileSync(join(tmp, "src", "Use.ts"), USE_SOURCE, "utf8");
+  return fake;
+}
+
+/** One `abfc generate --json` run with the machine-readable result kept apart from the progress lines. */
+async function runUsedJson(fake: ReturnType<typeof setup>, tmp: string, reflect: (r: ReflectRequest) => ReflectData): Promise<AutoRun & { result: any }> {
+  const calls: ReflectRequest[] = [];
+  const reads: string[] = [];
+  const catalogCalls: string[] = [];
+  const cap = captureDeps(fake, () => fakeBackend(true, calls, reads, undefined, { catalog: RAW_CATALOG, reflect, catalogCalls }));
+  cap.deps.cwd = tmp;
+  const outLines: string[] = [];
+  const errLines: string[] = [];
+  cap.deps.stdout = (l) => outLines.push(l);
+  cap.deps.stderr = (l) => errLines.push(l);
+  const code = await main(["generate", "--json"], cap.deps);
+  const out = [...errLines, ...outLines].join("\n");
+  let result: unknown = null;
+  try {
+    result = (JSON.parse(outLines.join("\n")) as { result: unknown }).result;
+  } catch {
+    // reported through the assertion on `out` by the caller
+  }
+  return { code, out, calls, reads, catalogCalls, result };
+}
+
+test("abfc generate: a placeholder class the source uses is generated, recorded in auto.added and not requested again", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-used-"));
+  try {
+    const fake = usedProject(tmp);
+    const r = await runUsedJson(fake, tmp, withOtherProperty);
+    assert.equal(r.code, 0, r.out);
+    assert.ok(!r.calls[0]?.classes.includes(OTHER_NATIVE), "the first run knows nothing about the class yet");
+    assert.ok(
+      r.calls.slice(1).some((c) => c.classes.includes(OTHER_NATIVE)),
+      "a later round reflects the class the source uses",
+    );
+    assert.deepEqual(r.result?.used, [OTHER_NATIVE]);
+
+    const lock = readJson(join(profileDir(tmp), "stubs.lock.json")) as { auto: { failed: string[]; added: string[] } };
+    assert.deepEqual(lock.auto.added, [OTHER_NATIVE]);
+    assert.deepEqual(lock.auto.failed, []);
+    const script = readFileSync(join(profileDir(tmp), "Script", "FakeEngine.d.ts"), "utf8");
+    const at = script.indexOf("export declare class Other ");
+    assert.ok(at > 0, "the class is declared");
+    assert.doesNotMatch(script.slice(script.lastIndexOf("/**", at), at), /@bpOpaque/);
+
+    // The second run asks for it together with everything else and finds nothing more to generate.
+    const again = await runUsedJson(fake, tmp, withOtherProperty);
+    assert.equal(again.code, 0, again.out);
+    assert.equal(again.calls.length, 1, again.out);
+    assert.ok(again.calls[0]?.classes.includes(OTHER_NATIVE));
+    assert.deepEqual(again.result?.used, []);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("abfc generate: a used placeholder the backend cannot reflect is ABFC3023, lands in auto.failed and is not requested again", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-used-"));
+  try {
+    const fake = usedProject(tmp);
+    const without = (r: ReflectRequest): ReflectData => {
+      const d = withOtherProperty(r);
+      delete d.classes[OTHER_NATIVE];
+      return d;
+    };
+    const r = await runUsedJson(fake, tmp, without);
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /ABFC3023/);
+    assert.equal(r.calls.filter((c) => c.classes.includes(OTHER_NATIVE)).length, 1, "asked for once in this run");
+    const lock = readJson(join(profileDir(tmp), "stubs.lock.json")) as { auto: { failed: string[] } };
+    assert.ok(lock.auto.failed.includes(OTHER_NATIVE));
+
+    const again = await runUsedJson(fake, tmp, without);
+    assert.equal(again.code, 0, again.out);
+    assert.ok(again.calls.every((c) => !c.classes.includes(OTHER_NATIVE)), "a failed class never starts the backend again");
+    assert.doesNotMatch(again.out, /ABFC3023/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }
