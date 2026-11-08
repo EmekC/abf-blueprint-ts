@@ -179,3 +179,10 @@ test("2.6.0 capabilities: assetOps needs the tool and the report, publishDeletes
   assert.deepEqual([old.publishDeletes, old.gameplayTags, old.reflectDefaults, old.classManagerRowTag], [false, false, false, false]);
   assert.equal(RECOMMENDED_BACKEND_VERSION, "2.6.0");
 });
+
+test("variableDefaults follows the bp_apply feature variable_defaults", () => {
+  const info = (features: string[]): RawBackendInfo => ({ protocol: 1, bpApply: { features } }) as RawBackendInfo;
+  assert.equal(capabilitiesFrom([], info(["variable_defaults"]), null).variableDefaults, true);
+  assert.equal(capabilitiesFrom([], info(["class_manager_row"]), null).variableDefaults, false);
+  assert.equal(capabilitiesFrom([], null, null).variableDefaults, false);
+});

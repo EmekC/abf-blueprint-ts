@@ -644,6 +644,56 @@ test("an asset whose only news is a field is still planned, with no units", () =
   assert.deepEqual(r.plan.assets[0]!.variables.map((v) => v.name), ["Score"]);
 });
 
+test("a changed or removed own field default of a variable in the asset is planned as variableDefaults; equal defaults plan nothing", () => {
+  const snapshot = snapshotOf(node("N1", CALL, []));
+  const keep = mu({ irHash: unit.hash, nodes: ["N1"], assetHash: unitStateHash(snapshot, ["N1"]), stageSyncedAt: "T1" });
+  const manifest = { ...manifestOf(keep), variables: [{ name: "Speed", type: "float", hash: "h", default: "2.5" }] } as Manifest;
+  const withDefault = (def?: string): IrModule => {
+    const a = ir.assets[0]!;
+    const v = { name: "Speed", type: "float", ...(def !== undefined ? { default: def } : {}), flags: [], origin: span0 };
+    return { ...ir, assets: [{ ...a, variables: [v, ...a.variables] }] } as unknown as IrModule;
+  };
+  const plan = (irm: IrModule, variableDefaults?: boolean) =>
+    planBuild(irm, {
+      manifests: new Map([[asset, manifest]]),
+      snapshots: new Map([[asset, snapshot]]),
+      stage,
+      handMadeUnits: new Map(),
+      snapshotVariables: new Map([[asset, ["Speed", "abfc_UpdateTarget_t0", "abfc_UpdateTarget_i0"]]]),
+      ...(variableDefaults !== undefined ? { variableDefaults } : {}),
+    });
+  const changed = plan(withDefault("4"));
+  assert.deepEqual(changed.diagnostics, []);
+  assert.equal(changed.plan.assets.length, 1);
+  assert.deepEqual(changed.plan.assets[0]!.variableDefaults, { Speed: "4" });
+  assert.deepEqual(changed.plan.assets[0]!.units, []);
+  assert.deepEqual(changed.plan.assets[0]!.variables, []);
+  assert.equal(changed.plan.assets[0]!.removeVariables, undefined);
+  const dropped = plan(withDefault());
+  assert.deepEqual(dropped.diagnostics, []);
+  assert.deepEqual(dropped.plan.assets[0]!.variableDefaults, { Speed: null });
+  const same = plan(withDefault("2.5"));
+  assert.deepEqual(same.plan.assets, []);
+  assert.deepEqual(same.diagnostics, []);
+  assert.equal(assetsNeedingRead(withDefault("2.5"), { manifests: new Map([[asset, manifest]]), stage }).has(asset), false);
+  assert.equal(assetsNeedingRead(withDefault("4"), { manifests: new Map([[asset, manifest]]), stage }).has(asset), true);
+  assert.equal(assetsNeedingRead(withDefault(), { manifests: new Map([[asset, manifest]]), stage }).has(asset), true);
+  // a backend without variable_defaults: a warning per field, nothing planned, the default stays
+  const old = plan(withDefault("4"), false);
+  assert.deepEqual(old.diagnostics.map((d) => [d.code, d.severity]), [["ABFC2084", "warning"]]);
+  assert.match(old.diagnostics[0]!.message, /cannot change the default of the existing variable Speed/);
+  assert.deepEqual(old.plan.assets, []);
+});
+
+test("a new own field with a default carries it in the variable spec", () => {
+  const r = fieldPlan(
+    { ...ir, assets: [{ ...ir.assets[0]!, variables: [{ name: "Speed", type: "float", default: "2.5", flags: [], origin: span0 }, ...ir.assets[0]!.variables] }] } as unknown as IrModule,
+    null,
+  );
+  assert.equal(r.plan.assets[0]!.variables[0]!.default, "2.5");
+  assert.equal(r.plan.assets[0]!.variableDefaults, undefined);
+});
+
 test("assetsNeedingRead includes an asset whose fields differ from the manifest", () => {
   const snapshot = snapshotOf(node("N1", CALL, []));
   const keep = mu({ irHash: unit.hash, nodes: ["N1"], assetHash: unitStateHash(snapshot, ["N1"]), stageSyncedAt: "T1" });

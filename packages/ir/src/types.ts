@@ -117,6 +117,8 @@ export interface BackendCapabilities {
   reflectDefaults: boolean;
   /** `classManagerRows` AND bp_apply feature `class_manager_row_tag` (backend 2.6.0): `class_manager_row` may carry `gameplay_tag`. */
   classManagerRowTag: boolean;
+  /** bp_apply feature `variable_defaults`: the spec may carry `variable_defaults` to change or drop the default of an existing variable in place. */
+  variableDefaults: boolean;
   bpApplyFeatures: string[];
   nodeKinds: string[];
   /** `mod_audit` can audit the stage (false in Phase 1: it audits the real mod). */
@@ -198,6 +200,8 @@ export interface AssetPlan {
   removeGraphNodes?: Array<{ graph: string; nodes: string[] }>;
   /** TS wins: member variables removed from the asset (hand-made ones of a non-hybrid class, and own fields gone from the TS). */
   removeVariables?: string[];
+  /** Own fields declared in the asset whose TS default differs from the manifest: the new text, or null to drop the default. */
+  variableDefaults?: Record<string, string | null>;
   /** TS wins: hand-made function graphs removed from a non-hybrid class. */
   removeFunctions?: string[];
   /** Own fields gone from the TS that were not in the asset any more: only the manifest record is dropped. */

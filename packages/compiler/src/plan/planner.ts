@@ -27,6 +27,8 @@ export interface PlanInput {
   createKinds?: string[];
   /** The backend writes class-manager rows (capability `classManagerRows`): a `@director` asset whose manifest has no `directorRow` for it re-runs the defaults pass. */
   directorRows?: boolean;
+  /** Backend capability `variableDefaults`; false: a changed default of an existing variable is ABFC2084 (warning) and left as is. */
+  variableDefaults?: boolean;
   /** Assets (paths) of hybrid classes (the TS class merges with a `<X>_Manual` interface): hand-made members are kept there (design 13). */
   hybrid?: Set<string>;
   /**
@@ -168,6 +170,7 @@ function parentStale(asset: IrModule["assets"][number], manifest: Manifest | nul
 function fieldsStale(asset: IrModule["assets"][number], manifest: Manifest | null): boolean {
   const fields = asset.variables.filter((v) => v.temp !== true);
   if (fields.some((v) => manifest?.variables.find((m) => m.name === v.name)?.type !== v.type)) return true;
+  if (fields.some((v) => (manifest?.variables.find((m) => m.name === v.name)?.default ?? null) !== (v.default ?? null))) return true;
   return (manifest?.variables ?? []).some((m) => !m.name.startsWith("abfc_") && !fields.some((v) => v.name === m.name));
 }
 
@@ -292,6 +295,26 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
       });
     }
     const newFields = fieldVars.filter((v) => !declared.has(v.name) || retypedInAsset.has(v.name) || retypedFields.has(v.name));
+    // A changed or removed initializer of a field that stays in the asset updates its default in place (new and recreated fields carry it in `variables`).
+    const variableDefaults: Record<string, string | null> = {};
+    for (const v of fieldVars) {
+      if (!declared.has(v.name) || retypedInAsset.has(v.name) || retypedFields.has(v.name)) continue;
+      const mv = manifest?.variables.find((m) => m.name === v.name);
+      if (mv === undefined || (mv.default ?? null) === (v.default ?? null)) continue;
+      if (input.variableDefaults === false) {
+        diagnostics.push({
+          severity: "warning",
+          code: "ABFC2084",
+          asset: asset.path,
+          span: v.origin,
+          message: `the backend cannot change the default of the existing variable ${v.name}; the default in the asset stays as it is.`,
+          fix: "update abf-mod-editor-mcp (bp_apply feature variable_defaults), or set the default in the Mod Editor.",
+        });
+      } else {
+        variableDefaults[v.name] = v.default ?? null;
+      }
+    }
+    const hasVariableDefaults = Object.keys(variableDefaults).length > 0;
 
     /** What this build replaces or removes from the asset beyond its own changes (TS wins): reported once as ABFC5014. */
     const report: string[] = [];
@@ -534,7 +557,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
     }
     if (
       create === undefined && picked.length === 0 && newFields.length === 0 && defaults === undefined && removeUnits.length === 0 && forgetUnits.length === 0 &&
-      removeTags.length === 0 && removeGraphNodes.length === 0 && removeVariables.length === 0 && removeFunctions.length === 0 && forgetVariables.length === 0
+      removeTags.length === 0 && removeGraphNodes.length === 0 && removeVariables.length === 0 && removeFunctions.length === 0 && forgetVariables.length === 0 && !hasVariableDefaults
     ) continue;
 
     const removedByGraph = new Map<string, Set<string>>();
@@ -602,6 +625,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
       ...(removeTags.length > 0 ? { removeTags } : {}),
       ...(removeGraphNodes.length > 0 ? { removeGraphNodes } : {}),
       ...(removeVariables.length > 0 ? { removeVariables } : {}),
+      ...(hasVariableDefaults ? { variableDefaults } : {}),
       ...(removeFunctions.length > 0 ? { removeFunctions } : {}),
       ...(forgetVariables.length > 0 ? { forgetVariables } : {}),
     });

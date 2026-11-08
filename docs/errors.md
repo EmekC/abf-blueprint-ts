@@ -473,9 +473,9 @@ Severity: error · Exit: 1 (a field that cannot be declared as written); warning
 
 Meaning: an own field cannot be declared as written (error), or the type of an own field the asset already has was changed (warning: the build removes the variable and creates it again with the new type, and applies every unit of the class again because their get and set nodes carry the old type).
 
-Typical cause: a field with an initializer (own fields have no default value in TypeScript) or a modifier other than `public`, a type without a Blueprint equivalent, a name that collides with an inherited member; or changing `Hits!: int;` to `Hits!: float;`.
+Typical cause: an initializer that is not a literal of the field type (or a default on a struct, object, array, Map, Set or text field, or an integer out of range for its type), `!` together with an initializer, a modifier other than `public`, a type without a Blueprint equivalent, a name that collides with an inherited member; or changing `Hits!: int;` to `Hits!: float;`.
 
-Fix: for the error, declare the field as `Name!: Type;` with a supported type and a free name. For the warning nothing is required; values set on placed instances of the class are reset, and hand-made nodes (a class that merges with a `_Manual` interface) that use the variable may fail Unreal's compile (ABFC6001 names them).
+Fix: for the error, declare the field as `Name!: Type;` or `Name: Type = <literal>;` (a number, `true`/`false`, a string or an enum value of the field type) with a supported type and a free name. For the warning nothing is required; values set on placed instances of the class are reset, and hand-made nodes (a class that merges with a `_Manual` interface) that use the variable may fail Unreal's compile (ABFC6001 names them).
 
 ### ABFC2048
 
@@ -756,6 +756,16 @@ Meaning: `@override UserConstructionScript()` was written. The Blueprint Constru
 Typical cause: porting Blueprint logic that lived in the Construction Script.
 
 Fix: move the logic to an `@override` of `ReceiveBeginPlay` (runtime) or to a custom `@event` you call yourself. The Construction Script of a class cannot be written in TypeScript.
+
+### ABFC2084
+
+Severity: warning · Exit: -
+
+Meaning: the initializer of an own field that the asset already has was changed or removed (`Speed: float = 2.5;` to `= 4;`), but the backend cannot change the default of an existing variable (it lacks the bp_apply feature `variable_defaults`). The default in the asset stays as it is; the warning repeats on every build until the backend is updated.
+
+Typical cause: an older abf-mod-editor-mcp backend.
+
+Fix: update the backend ([backend.md](backend.md)); `abfc doctor` shows `variable defaults: yes` once it can. Or set the default in the Mod Editor.
 
 ### ABFC2099
 

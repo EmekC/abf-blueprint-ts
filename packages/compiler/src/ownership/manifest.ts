@@ -37,7 +37,7 @@ export interface Manifest {
   compiler: string;
   profile: string;
   units: ManifestUnit[];
-  variables: Array<{ name: string; type: string; hash: string }>;
+  variables: Array<{ name: string; type: string; hash: string; default?: string }>;
   /** Hash of the class defaults (and class manager row) of the last pass 5 that succeeded; absent until then. */
   classDefaultsHash?: string;
   /** `StageStatus.syncedAt` of the stage the class defaults were applied to (a resync discards them). */

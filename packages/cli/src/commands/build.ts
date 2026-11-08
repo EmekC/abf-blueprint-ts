@@ -287,6 +287,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     missing,
     createKinds: caps.createKinds,
     directorRows: caps.classManagerRows,
+    variableDefaults: caps.variableDefaults,
   });
   if (emitAll(ctx, planned.diagnostics)) return false;
   for (const a of skipped) for (const u of a.units) planned.upToDate.push(`${a.path} ${u.id}`);
@@ -447,10 +448,17 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     const goneVars = new Set([...(a.removeVariables ?? []), ...(a.forgetVariables ?? [])]);
     const variables = (old?.variables ?? []).filter((v) => !goneVars.has(v.name));
     for (const v of a.variables) {
-      const entry = { name: v.name, type: v.type, hash: sha256(`${v.name}:${v.type}:${v.flags.join(",")}`) };
+      const entry = { name: v.name, type: v.type, hash: sha256(`${v.name}:${v.type}:${v.flags.join(",")}`), ...(v.default !== undefined ? { default: v.default } : {}) };
       const at = variables.findIndex((x) => x.name === v.name);
       if (at >= 0) variables[at] = entry;
       else variables.push(entry);
+    }
+    // A changed or dropped default of a variable that stays in the asset (the backend applied `variable_defaults`).
+    for (const [name, def] of Object.entries(a.variableDefaults ?? {})) {
+      const at = variables.findIndex((x) => x.name === name);
+      if (at < 0) continue;
+      const { default: _old, ...rest } = variables[at]!;
+      variables[at] = def === null ? rest : { ...rest, default: def };
     }
     // Class defaults: the hash is recorded only when pass 5 succeeded, so a failed pass is repeated by the next build.
     const defaultsDone = a.defaults !== undefined && outcome.defaultsApplied;
