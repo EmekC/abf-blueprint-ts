@@ -50,6 +50,9 @@ function splitContainerType(type: string): { key: string; value: string } {
 
 type EqKind = "object" | "name" | "string" | "int" | "real" | "bool" | "byte";
 
+/** A TypeScript `enum` declaration cannot become a Blueprint enum (the asset kind is not created yet): say so and name the way out. */
+const TS_ENUM_HINT = "a TypeScript enum has no Blueprint equivalent (abfc cannot create Blueprint enums yet); use an int or byte field, or an enum of the game or the engine";
+
 export function kindOfBpType(t: string): EqKind | undefined {
   if (t === "bool") return "bool";
   if (t === "int" || t === "int64") return "int";
@@ -545,7 +548,7 @@ class HirBuilder {
       }
       const type = bpTypeOf(this.checker, tsType);
       if (type === undefined) {
-        bad(`field ${shown}: field type has no Blueprint equivalent`, m.name);
+        bad(`field ${shown}: ${(tsType.flags & ts.TypeFlags.EnumLike) !== 0 ? TS_ENUM_HINT : "field type has no Blueprint equivalent"}`, m.name);
         continue;
       }
       try {
@@ -592,7 +595,7 @@ class HirBuilder {
         this.sink.error("ABFC2043", `field ${shown}: unsupported Map/Set type; keys and set elements are int, int64, byte, name or string, and a map value is any single (non-container) type`, m.name);
         return undefined;
       }
-      return bad("field type has no Blueprint equivalent");
+      return bad((tsFieldType.flags & ts.TypeFlags.EnumLike) !== 0 ? TS_ENUM_HINT : "field type has no Blueprint equivalent");
     }
     try {
       parseBpType(type);
@@ -735,7 +738,10 @@ class HirBuilder {
         this.sink.error("ABFC2043", `parameter ${p.name.text}: Map and Set parameters are not supported`, p);
         type = "unknown";
       } else if (type === undefined && kind === "event") {
-        if (t.flags & ts.TypeFlags.NumberLike) {
+        if (t.flags & ts.TypeFlags.EnumLike) {
+          this.sink.error("ABFC2099", `parameter ${p.name.text}: ${TS_ENUM_HINT}`, p);
+          type = "unknown";
+        } else if (t.flags & ts.TypeFlags.NumberLike) {
           this.sink.error("ABFC2014", `number kind of parameter ${p.name.text} is not inferable: use int, int64, byte, float or double`, p);
           type = "number";
         } else {

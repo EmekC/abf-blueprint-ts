@@ -616,3 +616,33 @@ test("(S22b) a hand-made asset at a TypeScript class path is taken over (ABFC501
     assert.doesNotMatch(x.out, /ABFC5017/, "the warning is shown once, by the build that removed the parts");
   });
 });
+
+test("(S24) a TypeScript enum used as a field or event parameter is a clear error that names the way out", async () => {
+  await withRig(OPS, async (r) => {
+    writeFileSync(
+      join(r.dir, "src", "Enum.ts"),
+      `import { blueprint, event } from "@abfc/runtime";
+import { Actor } from "/Script/FakeEngine";
+
+export enum E_Mode {
+  A,
+  B,
+}
+
+@blueprint()
+export class BP_Enum extends Actor {
+  Mode!: E_Mode;
+
+  @event
+  Go(mode: E_Mode): void {}
+}
+`,
+      "utf8",
+    );
+    const x = await r.run(["check"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, /field Mode: a TypeScript enum has no Blueprint equivalent/);
+    assert.match(x.out, /parameter mode: a TypeScript enum has no Blueprint equivalent/);
+    assert.match(x.out, /use an int or byte field, or an enum of the game or the engine/);
+  });
+});

@@ -465,7 +465,7 @@ Meaning: a class is both a `@blueprint` and a `@struct`, or the fields of a `@st
 
 Typical cause: two decorators on one class; or editing the fields of a struct after it was created.
 
-Fix: use one decorator. For a changed struct, restore the fields or give the struct a new path and update the places that use it. Changing fields of an existing struct is not supported yet.
+Fix: use one decorator. For a changed struct, restore the fields, or rename the struct class and its file (for example `F_Data` to `F_Data2`) and use the new struct where the old one was used; the build creates the new struct and re-creates the fields that use it (warning [ABFC2047](errors.md#abfc2047)). The old struct stays in the mod; delete it in the Mod Editor when nothing uses it. Changing fields of an existing struct is not supported yet.
 
 ### ABFC2047
 

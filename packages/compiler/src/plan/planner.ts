@@ -202,7 +202,7 @@ export function planBuild(ir: IrModule, input: PlanInput): PlanResult {
           asset: asset.path,
           ...(fields[0] !== undefined ? { span: fields[0].origin } : {}),
           message: `changing the fields of @struct ${name} after it was created is not supported yet.`,
-          fix: "restore the fields, or give the struct a new path (and change the places that use it).",
+          fix: "restore the fields, or rename the struct class and its file (for example Name2) and use the new struct where the old one is used; the old struct stays in the mod until you delete it in the Mod Editor.",
         });
         continue;
       }
