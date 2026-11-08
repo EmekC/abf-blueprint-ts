@@ -34,8 +34,7 @@ test("only the compiler frontend imports typescript", () => {
     if (existsSync(src)) all.push(...importers(src));
   }
   assert.ok(all.length > 0, "the frontend must import typescript");
-  // ts-plugin only names tsserver's TypeScript types (`import type`); its runtime `ts` object comes from tsserver
-  for (const f of all) assert.match(f, /^(compiler\/src\/frontend\/|ts-plugin\/src\/)/, `${f} must not import typescript`);
+  for (const f of all) assert.match(f, /^compiler\/src\/frontend\//, `${f} must not import typescript`);
 });
 
 test("lowering, planning and ownership never import typescript", () => {

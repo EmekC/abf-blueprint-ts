@@ -43,6 +43,7 @@ const ALL = [
   "mod_audit",
   "warm_session",
   "bp_publish",
+  "bp_asset_ops",
 ];
 let warmRunning = false;
 const listed = config.tools ?? ALL;
@@ -76,7 +77,7 @@ function callTool(name, args) {
         changed: ["Content/A.uasset"],
         added: [],
         removed: ["Content/B.uasset"],
-        conflicts: [],
+        conflicts: args.mod === "conflicted" ? [{ path: "Content/C.uasset", reason: "the real file changed since the last sync; run staging_sync again" }] : [],
         kit_found: true,
       });
     case "bp_apply": {
@@ -148,6 +149,7 @@ function callTool(name, args) {
             classes: { "/Script/Fake.Widget": { meta: "/Script/CoreUObject.Class", ancestors: [], functions: [], properties: [], castPin: "AsWidget" } },
             structs: {},
             errors: ["one member failed"],
+            ...(args.gameplay_tags === true ? { gameplayTags: { tags: ["ClassManager.EntityDirector.Fake"], sources: { settings: 1 } } } : {}),
           }),
         "utf8",
       );
@@ -160,6 +162,15 @@ function callTool(name, args) {
         filter: { content_version: "v1", rules: [["Allow", "Fake.Widget"], ["Block", "Fake.Widget.Secret"]] },
       });
     }
+    case "bp_asset_ops": {
+      const ops = args.ops ?? [];
+      if (ops.some((o) => o.op === "delete" && o.asset === "/TestMod/Referenced")) {
+        return json({ ok: false, results: [{ op: "delete", ok: false, detail: "referenced by /TestMod/Other" }], touched: [], error: "delete failed: referenced by /TestMod/Other", rolled_back: true, run: "C:\fake\runs\ops-1" }, true);
+      }
+      return json({ ok: true, results: ops.map((o) => ({ op: o.op, ok: true })), touched: ["/TestMod/Row"], run: "C:\fake\runs\ops-1", error: null });
+    }
+    case "bp_publish":
+      return json({ ok: true, published: ["Content/A.uasset"], deleted: args.delete_removed === true ? ["Content/Old.uasset"] : [], message: "published", backup: "C:\fake\backup", route: "file-copy" });
     case "bp_game_test":
       return json(
         {

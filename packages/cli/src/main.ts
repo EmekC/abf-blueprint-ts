@@ -1,18 +1,23 @@
 import { startBackend } from "@abfc/backend";
-import { AbfcError, realHost } from "@abfc/env";
+import { AbfcError, cleanBundledRuntimes, installInfo, realHost, verifyBundledRuntime } from "@abfc/env";
 import { parseCliArgs, UsageError } from "./args.js";
 import type { ParsedArgs } from "./args.js";
 import { adopt } from "./commands/adopt.js";
 import { build } from "./commands/build.js";
 import { check } from "./commands/check.js";
-import { doctor } from "./commands/doctor.js";
+import { cleanRuntimesCommand, doctor } from "./commands/doctor.js";
+import { runInit } from "./commands/init.js";
+import { runLsp } from "./commands/lsp.js";
 import { publish } from "./commands/publish.js";
 import { status } from "./commands/status.js";
 import { stubs } from "./commands/stubs.js";
 import { test } from "./commands/test.js";
 import { loadContext } from "./context.js";
 import type { CliContext, CliDeps } from "./context.js";
+import { acquireProjectLock, LOCKED_COMMANDS } from "./lock.js";
+import type { ProjectLock } from "./lock.js";
 import { Output } from "./output.js";
+import { ABFC_VERSION } from "./version.js";
 
 export type CommandFn = (ctx: CliContext) => Promise<number>;
 
@@ -29,9 +34,14 @@ export const COMMANDS: Record<string, CommandFn> = {
 
 const USAGE = [
   "usage: abfc <command> [options]",
-  "commands: " + Object.keys(COMMANDS).join(", "),
+  "commands: init, lsp, version, " + Object.keys(COMMANDS).join(", "),
   "options: --json --verbose --project <dir> --editor-root <dir> --mods-dir <dir> --mod-dir <dir>",
   "         --backend-dir <dir> --python <exe> --headless-dir <dir> --timings --resync --no-build --yes --dry-run --full --discard-editor-changes --cold --watch (check)",
+  "         --drift (build) --keep-failed-stage (build, test, publish)",
+  "doctor:  abfc doctor [--deep] [--clean-runtimes]",
+  "init:    abfc init [dir] [--mod <name>] [--yes] [--no-stubs] [--mods-dir <dir>] [--editor-root <dir>] [--backend-dir <dir>] [--python <exe>]",
+  "lsp:     abfc lsp [--stdio]   language server over stdio (docs/language-service.md)",
+  "version: abfc version [--json] | abfc --version",
 ];
 
 export function defaultDeps(): CliDeps {
@@ -39,6 +49,7 @@ export function defaultDeps(): CliDeps {
     host: realHost(),
     startBackend: (env, o) => startBackend(env, o),
     now: () => new Date(),
+    install: { info: installInfo, verify: verifyBundledRuntime, clean: cleanBundledRuntimes },
   };
 }
 
@@ -60,9 +71,53 @@ export async function main(argv: string[], deps: CliDeps = defaultDeps()): Promi
   }
 
   const command = args.command;
+  if (args.flags.version && command !== null && command !== "version") {
+    err(`abfc: error: --version is not an option of abfc ${command}`);
+    for (const l of USAGE) err(l);
+    return 2;
+  }
+  if (command === "version" || args.flags.version) {
+    const kind = deps.install?.info().kind ?? "source";
+    if (args.flags.json) {
+      out(JSON.stringify({ version: ABFC_VERSION, install: kind, node: process.versions.node }));
+    } else {
+      out(`abfc ${ABFC_VERSION} (${kind === "exe" ? "exe" : "source install"}, node ${process.versions.node})`);
+    }
+    return 0;
+  }
   if (command === null) {
     for (const l of USAGE) out(l);
     return 0;
+  }
+  if (command === "init") {
+    try {
+      return await runInit(args, deps);
+    } catch (e) {
+      const output = new Output({ command, json: args.flags.json, projectDir: args.flags.project, stdout: deps.stdout, stderr: deps.stderr });
+      output.diag({
+        severity: "error",
+        code: "ABFC4002",
+        message: `unexpected failure: ${e instanceof Error ? (args.flags.verbose ? (e.stack ?? e.message) : e.message) : String(e)}`,
+      });
+      output.finish();
+      return 2;
+    }
+  }
+  if (command === "lsp") {
+    try {
+      return await runLsp(args, deps);
+    } catch (e) {
+      err(`abfc: error: language server failed: ${e instanceof Error ? (args.flags.verbose ? (e.stack ?? e.message) : e.message) : String(e)}`);
+      return 2;
+    }
+  }
+  if (command === "doctor" && args.flags.cleanRuntimes) {
+    try {
+      return cleanRuntimesCommand(args, deps);
+    } catch (e) {
+      err(`abfc: error: could not clean the runtime folders: ${e instanceof Error ? (args.flags.verbose ? (e.stack ?? e.message) : e.message) : String(e)}`);
+      return 2;
+    }
   }
   const run = COMMANDS[command];
   if (run === undefined) {
@@ -72,8 +127,10 @@ export async function main(argv: string[], deps: CliDeps = defaultDeps()): Promi
   }
 
   let ctx: CliContext | null = null;
+  let lock: ProjectLock | null = null;
   try {
     ctx = loadContext(args, deps);
+    if (LOCKED_COMMANDS.includes(command)) lock = acquireProjectLock(ctx.projectDir, command, deps.now());
     await run(ctx);
     return ctx.output.finish();
   } catch (e) {
@@ -98,5 +155,7 @@ export async function main(argv: string[], deps: CliDeps = defaultDeps()): Promi
     });
     output.finish();
     return 2;
+  } finally {
+    lock?.release();
   }
 }

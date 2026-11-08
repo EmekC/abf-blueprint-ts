@@ -1,0 +1,6 @@
+**
+!dist/extension.js
+!dist/schema/abf.config.schema.json
+!package.json
+!README.md
+!LICENSE

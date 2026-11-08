@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { AbfcError } from "@abfc/env";
 import type { Backend, ReflectData, ReflectRequest, ReflectResult } from "@abfc/backend";
 import { main } from "../src/index.js";
 import { ALL_TOOLS, captureDeps, fakeEnvironmentFiles, fixInfo, scriptedBackend } from "./helpers.js";
@@ -53,10 +54,11 @@ const EXPORT = [
 ].join("\n");
 const EXPORT_PATH = "C:\\Runs\\r1\\export.t3d";
 
-async function fakeBackend(withReflect: boolean, calls: ReflectRequest[], reads: string[]): Promise<Backend> {
+async function fakeBackend(withReflect: boolean, calls: ReflectRequest[], reads: string[], gameTags?: string[]): Promise<Backend> {
   const tools = withReflect ? ALL_TOOLS : ALL_TOOLS.filter((t) => t !== "reflect");
   const real = scriptedBackend(tools, { backend_info: fixInfo(), abfc_extensions: EXT });
-  const info = await real.info();
+  const base = await real.info();
+  const info = gameTags === undefined ? base : { ...base, capabilities: { ...base.capabilities, gameplayTags: true } };
   const result = (data: ReflectData): ReflectResult => ({
     run: "C:\\Runs\\r1",
     seconds: 0.1,
@@ -67,10 +69,13 @@ async function fakeBackend(withReflect: boolean, calls: ReflectRequest[], reads:
   return {
     info: async () => info,
     stage: async () => ({ mod: "TestMod", files: 1, stagingPath: "C:\\Stage" }),
-    stageStatus: async () => ({ mod: "TestMod", stagingPath: "C:\\Stage", syncedAt: "t", changed: [], added: [], removed: [], conflicts: [] }),
+    stageStatus: async () => ({ mod: "TestMod", stagingPath: "C:\\Stage", syncedAt: "t", changed: [], added: [], removed: [], conflicts: [], stale: [] }),
     read: async (_mod, asset) => {
       reads.push(asset);
-      if (asset.endsWith("Missing")) throw new Error("not a blueprint");
+      if (asset.endsWith("Missing")) throw new Error("read failed");
+      if (asset.endsWith("Data")) {
+        throw new AbfcError({ severity: "error", code: "ABFC4002", message: `backend tool "bp_read" failed: ${asset} is not a Blueprint (DataAsset)` });
+      }
       return { asset, run: "C:\\Runs\\r1", exportPath: EXPORT_PATH, structure: { blueprint: { class: "Blueprint" }, functions: [] }, seconds: 1 };
     },
     applySpecs: async () => {
@@ -81,7 +86,7 @@ async function fakeBackend(withReflect: boolean, calls: ReflectRequest[], reads:
     },
     reflect: async (r) => {
       calls.push(r);
-      return result(calls.length === 1 ? firstData : secondData);
+      return result(calls.length === 1 ? (gameTags === undefined ? firstData : { ...firstData, gameplayTags: { tags: gameTags, sources: {} } }) : secondData);
     },
     gameTest: async () => {
       throw new Error("unused");
@@ -90,6 +95,9 @@ async function fakeBackend(withReflect: boolean, calls: ReflectRequest[], reads:
       throw new Error("unused");
     },
     publish: async () => {
+      throw new Error("unused");
+    },
+    assetOps: async () => {
       throw new Error("unused");
     },
     close: async () => {},
@@ -108,11 +116,12 @@ function setup(tmp: string, modAssets: "all" | string[]) {
       [EXPORT_PATH]: EXPORT,
     },
   });
-  // Mod assets on the (fake) disk: one real blueprint, one scratch folder entry that must be skipped, one non-blueprint.
+  // Mod assets on the (fake) disk: one real blueprint, one scratch folder entry that must be skipped, one that fails to read, one that is not a Blueprint.
   const content = `${fake.modDir}\\Content`;
   fake.files[`${content}\\Items\\BP_Hand.uasset`] = "x";
   fake.files[`${content}\\_McpTest\\BP_Scratch.uasset`] = "x";
   fake.files[`${content}\\Items\\Missing.uasset`] = "x";
+  fake.files[`${content}\\Items\\Data.uasset`] = "x";
   return fake;
 }
 
@@ -132,8 +141,11 @@ test("abfc stubs: reflect closure, mod assets, files, lock, paths and timings", 
     assert.deepEqual(calls[0]?.classes, ["/Game/Fake/BP_Fake.BP_Fake_C", THING]);
     assert.deepEqual(calls[0]?.castTargets, ["/Game/Fake/BP_Fake.BP_Fake_C"]);
     assert.deepEqual(calls[1]?.structs, [VEC]);
-    assert.deepEqual(reads, ["/TestMod/Items/BP_Hand", "/TestMod/Items/Missing"]);
+    assert.deepEqual(reads, ["/TestMod/Items/BP_Hand", "/TestMod/Items/Data", "/TestMod/Items/Missing"]);
     assert.match(out, /warning ABFC4002: could not read \/TestMod\/Items\/Missing/);
+    // An asset the backend says is not a Blueprint is skipped without a warning.
+    assert.doesNotMatch(out, /Items\/Data/);
+    assert.equal((out.match(/ABFC4002/g) ?? []).length, 1, out);
 
     const dir = join(tmp, ".abfc", "stubs", "ue5.4.4-1050002");
     const script = readFileSync(join(dir, "Script", "FakeEngine.d.ts"), "utf8");
@@ -165,6 +177,56 @@ test("abfc stubs: reflect closure, mod assets, files, lock, paths and timings", 
     assert.equal(await main(["stubs"], again.deps), 0, again.text());
     const lock2 = JSON.parse(readFileSync(join(dir, "stubs.lock.json"), "utf8")) as { createdAt: string };
     assert.notEqual(lock2.createdAt, (lock as { createdAt: string }).createdAt);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("abfc stubs: a backend without gameplayTags warns ABFC3012 and writes a tags file with the mod's ini tags only; with it the game list is requested, stored and written", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-stubs-"));
+  try {
+    const fake = setup(tmp, []);
+    fake.files[`${fake.modDir}\\Config\\Tags\\ExampleTags.ini`] = '[/Script/GameplayTags.GameplayTagsSettings]\r\n+GameplayTagList=(Tag="Mod.Own.Tag",DevComment="")\r\n';
+    const cap = captureDeps(fake, () => fakeBackend(true, [], []));
+    cap.deps.cwd = tmp;
+    assert.equal(await main(["stubs"], cap.deps), 0, cap.text());
+    assert.match(cap.text(), /warning ABFC3012: the backend cannot list the game's gameplay tags/);
+    const file = join(tmp, ".abfc", "tags.d.ts");
+    assert.match(readFileSync(file, "utf8"), /"Mod.Own.Tag": true/);
+    assert.doesNotMatch(readFileSync(file, "utf8"), /Game.Tag/);
+    assert.equal((JSON.parse(readFileSync(join(tmp, ".abfc", "tsconfig.paths.json"), "utf8")) as { files: string[] }).files[0], "./tags.d.ts");
+
+    const calls: ReflectRequest[] = [];
+    const withTags = captureDeps(fake, () => fakeBackend(true, calls, [], ["Game.Tag.One"]));
+    withTags.deps.cwd = tmp;
+    assert.equal(await main(["stubs"], withTags.deps), 0, withTags.text());
+    assert.doesNotMatch(withTags.text(), /ABFC3012/);
+    assert.equal(calls[0]?.gameplayTags, true);
+    assert.deepEqual(JSON.parse(readFileSync(join(tmp, ".abfc", "stubs", "ue5.4.4-1050002", "gameplay-tags.json"), "utf8")), ["Game.Tag.One"]);
+    const text = readFileSync(file, "utf8");
+    assert.match(text, /"Game.Tag.One": true/);
+    assert.match(text, /"Mod.Own.Tag": true/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("abfc stubs: a stage-only tag comes from the stage's Config/Tags ini and leaves tags.d.ts once the stage no longer has it", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-stubs-"));
+  try {
+    const fake = setup(tmp, []);
+    const stageIni = "C:\\Stage\\Config\\Tags\\StageTags.ini";
+    fake.files[stageIni] = '[/Script/GameplayTags.GameplayTagsSettings]\r\n+GameplayTagList=(Tag="Stage.Only.Tag",DevComment="")\r\n';
+    const first = captureDeps(fake, () => fakeBackend(true, [], []));
+    first.deps.cwd = tmp;
+    assert.equal(await main(["stubs"], first.deps), 0, first.text());
+    const file = join(tmp, ".abfc", "tags.d.ts");
+    assert.match(readFileSync(file, "utf8"), /"Stage.Only.Tag": true/);
+    delete fake.files[stageIni];
+    const second = captureDeps(fake, () => fakeBackend(true, [], []));
+    second.deps.cwd = tmp;
+    assert.equal(await main(["stubs"], second.deps), 0, second.text());
+    assert.doesNotMatch(readFileSync(file, "utf8"), /Stage.Only.Tag/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

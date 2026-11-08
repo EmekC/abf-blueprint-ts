@@ -37,15 +37,41 @@ export interface Manifest {
   compiler: string;
   profile: string;
   units: ManifestUnit[];
-  variables: Array<{ name: string; type: string; hash: string }>;
+  variables: Array<{ name: string; type: string; hash: string; default?: string }>;
   /** Hash of the class defaults (and class manager row) of the last pass 5 that succeeded; absent until then. */
   classDefaultsHash?: string;
   /** `StageStatus.syncedAt` of the stage the class defaults were applied to (a resync discards them). */
   classDefaultsStageSyncedAt?: string | null;
+  /**
+   * The class defaults recorded above reached the mod (a publish copied the asset while the stage still held the sync they were
+   * applied to). A later re-sync copies from the mod, so they are still there and the pass does not run again; cleared (absent)
+   * whenever a defaults pass applies new ones.
+   */
+  classDefaultsPublished?: true;
+  /** Asset path of the class-manager row abfc wrote for this class's `@director` (set after a defaults pass whose backend wrote the row). */
+  directorRow?: string;
   /** Hash of the fields of a mod-defined struct (`structFieldsHash`) the struct was created with; absent for a Blueprint asset. */
   structFieldsHash?: string;
+  /** A struct whose TypeScript is gone: ABFC5018 was reported once (abfc never deletes a struct); cleared when the struct is declared again. */
+  structRetired?: true;
   /** Unit ids a build removed from the stage that are not published yet (cleared by a successful publish). */
   retiredUnpublished?: string[];
+  /** Where the asset came from at the last build (docs/design.md 18.2); absent in manifests written before 1.0. */
+  source?: { file: string; class: string; derived: boolean };
+  /** abfc created the asset (its plan had `create`): only such assets are deleted when the class leaves the TS. Absent for hand-made/adopted assets and manifests written before 1.0. */
+  created?: boolean;
+  /** Class path of the parent the asset was last built with (`extends`); absent in manifests written before the reparent support. */
+  parent?: string;
+  /** Family of that parent (`actor`, `component`, `widget`, `object`); decides between reparent and recreate. */
+  parentFamily?: "actor" | "component" | "widget" | "object";
+  /** The asset path this asset was renamed from on the stage; the old files are deleted by the next publish (cleared by it). */
+  renamedFrom?: string;
+  /** Tombstone: the class left the TS and abfc deleted the asset from the stage; the next publish deletes its files, then the manifest goes. */
+  deleted?: boolean;
+  /** Packages other than the asset itself that a stage-only rename fixup saved (referencers); the next publish copies them. */
+  publishAlso?: string[];
+  /** Class-manager rows abfc deleted from the stage because the class's `@director` row changed or went away; the next publish deletes their files (cleared by it). */
+  retiredRows?: string[];
 }
 
 /** `/Mod/Dir/BP_X` -> `Mod__Dir__BP_X` */

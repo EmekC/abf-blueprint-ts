@@ -1,6 +1,7 @@
 // Per-unit IR builder: lowers the statements and expressions of one HIR event into nodes and wires.
 import { pinObjectText, unitHash } from "@abfc/ir";
 import type { IrNode, IrUnit, IrVariable, IrWire, Profile, SemanticTag, Span } from "@abfc/ir";
+import { FUNCTION_RETURN_PIN } from "../hir.js";
 import type { HirEvent, HirExpr, HirStmt, LocalId } from "../hir.js";
 import { eventMetaOf } from "./eventmeta.js";
 import { assignPositions } from "./layout.js";
@@ -43,6 +44,14 @@ interface Extra {
   pinTypes?: Record<string, string>;
 }
 
+/** A loop being lowered: where its `break` and `continue` exits go (macro loops wire `break` into the `Break` pin, counter loops collect the exits). */
+interface LoopCtx {
+  macro: boolean;
+  breakPin?: string;
+  breaks: Exit[];
+  continues: Exit[];
+}
+
 const REAL_TYPES = new Set(["float", "double", "real"]);
 
 const ARITH_NAMES = { "+": "Add", "-": "Subtract", "*": "Multiply", "/": "Divide" } as const;
@@ -53,6 +62,22 @@ const K2_SPAWN_ACTOR = "/Script/BlueprintGraph.K2Node_SpawnActorFromClass";
 /** Engine function libraries of native Map and Set operations (pin names verified against exports of the Mod Editor). */
 const MAP_LIBRARY = "/Script/Engine.BlueprintMapLibrary";
 const SET_LIBRARY = "/Script/Engine.BlueprintSetLibrary";
+const K2_MACRO_INSTANCE = "/Script/BlueprintGraph.K2Node_MacroInstance";
+/** Engine macro library of the standard loops (For Each Loop, For Loop). */
+const STD_MACROS_ASSET = "/Engine/EditorBlueprintResources/StandardMacros.StandardMacros";
+/** Pin names of the StandardMacros loop macros (their tunnel pins; ForEachLoop takes its exec input on `Exec`, ForLoop on `execute`, verified live). */
+const FOR_EACH = { exec: "Exec", array: "Array", body: "LoopBody", element: "Array Element", index: "Array Index", completed: "Completed" } as const;
+const FOR_LOOP = { exec: "execute", first: "FirstIndex", last: "LastIndex", body: "LoopBody", index: "Index", completed: "Completed" } as const;
+/** The ...WithBreak variants: the same pins plus the `Break` exec input (verified live: ForLoopWithBreak takes its exec input on `Execute`, capital E). */
+const FOR_EACH_BREAK = { ...FOR_EACH, brk: "Break" } as const;
+const FOR_LOOP_BREAK = { ...FOR_LOOP, exec: "Execute", brk: "Break" } as const;
+type StdLoop = "ForEachLoop" | "ForEachLoopWithBreak" | "ForLoop" | "ForLoopWithBreak";
+const STD_LOOP_EXEC: Record<StdLoop, string> = {
+  ForEachLoop: FOR_EACH.exec,
+  ForEachLoopWithBreak: FOR_EACH_BREAK.exec,
+  ForLoop: FOR_LOOP.exec,
+  ForLoopWithBreak: FOR_LOOP_BREAK.exec,
+};
 
 /** Splits `map:<K>:<V>` into key and value type, `set:<T>` into the element type (as `key`). */
 function containerTypes(type: string): { key: string; value?: string } {
@@ -84,9 +109,20 @@ export function formatLiteral(value: string | number | boolean | null, type: str
   return escapeT3dString(value);
 }
 
-/** Whether control never leaves the statement list normally: it ends in a `return`, or an `if` whose branches both do. */
+/** Whether control never leaves the statement list normally: it ends in a `return`, `break` or `continue`, or an `if` whose branches both do. */
 function exits(list: HirStmt[]): boolean {
-  return list.some((s) => s.k === "return" || (s.k === "if" && exits(s.then) && exits(s.else)));
+  return list.some((s) => s.k === "return" || s.k === "break" || s.k === "continue" || (s.k === "if" && exits(s.then) && exits(s.else)));
+}
+
+/** Number of `return <value>` statements anywhere in a body. */
+function valueReturns(list: HirStmt[]): number {
+  let n = 0;
+  for (const s of list) {
+    if (s.k === "return") n += s.value !== undefined ? 1 : 0;
+    else if (s.k === "if") n += valueReturns(s.then) + valueReturns(s.else);
+    else if (s.k === "forOf" || s.k === "forCount") n += valueReturns(s.body);
+  }
+  return n;
 }
 
 const idOf = (pin: string): string => pin.slice(0, pin.indexOf("."));
@@ -95,6 +131,10 @@ const shortName = (path: string): string => path.slice(path.lastIndexOf(".") + 1
 
 export class UnitBuilder {
   readonly vars: IrVariable[] = [];
+  /** Lower eligible loops to StandardMacros instances (ForEachLoop, ForLoop) instead of counter loops. */
+  loopMacros = true;
+  /** Enclosing loops of the statement being lowered, innermost last: where break and continue go. */
+  private readonly loops: LoopCtx[] = [];
   private readonly nodes: IrNode[] = [];
   private readonly wires: IrWire[] = [];
   private cur: Exit[] = [];
@@ -109,6 +149,10 @@ export class UnitBuilder {
   private entryId = "";
   private tempCount = 0;
   private loopCount = 0;
+  /** Functions: the only value `return` is the last top-level statement, so its value can feed the result node directly. */
+  private directReturn = false;
+  /** Functions: the return temp `abfc_<name>_r` exists and is read by the result node. */
+  private returnTemp = false;
   private readonly cross: NonNullable<IrUnit["crossWires"]> = [];
 
   constructor(
@@ -120,7 +164,12 @@ export class UnitBuilder {
   build(): IrUnit {
     const P = this.profile.pins;
     const ev = this.event;
-    if (ev.kind === "override") {
+    if (ev.kind === "function") {
+      // no entry node is emitted: the backend's function entry and result nodes are addressed by the reserved ids `entry` and `result`
+      this.entryId = "entry";
+      const last = ev.body[ev.body.length - 1];
+      this.directReturn = valueReturns(ev.body) === 1 && last !== undefined && last.k === "return" && last.value !== undefined;
+    } else if (ev.kind === "override") {
       if (ev.overrideOf === undefined) throw new Error(`ABFC2060: override ${ev.name} has no declaring class`);
       const sem: SemanticTag = { k: "override", class: ev.overrideOf, function: ev.name };
       const ref = `EventReference=(MemberParent="${pinObjectText("class", ev.overrideOf, this.classMeta)}",MemberName="${ev.name}")`;
@@ -139,8 +188,12 @@ export class UnitBuilder {
       id: `${ev.kind}:${ev.name}`,
       kind: ev.kind,
       name: ev.name,
-      graph: "EventGraph",
-      signature: { inputs: ev.params.map((p) => ({ name: p.name, type: p.type })), outputs: [] },
+      graph: ev.kind === "function" ? ev.name : "EventGraph",
+      signature: {
+        inputs: ev.params.map((p) => ({ name: p.name, type: p.type })),
+        outputs: ev.kind === "function" && ev.returnType !== undefined ? [{ name: FUNCTION_RETURN_PIN, type: ev.returnType }] : [],
+        ...(ev.kind === "function" ? { access: ev.access ?? "public" } : {}),
+      },
       locals: [],
       nodes: this.nodes,
       wires: this.wires,
@@ -484,6 +537,13 @@ export class UnitBuilder {
         const defaults: Record<string, string> = {};
         for (const x of ops) this.feed(x.o, id, x.a.name, defaults);
         this.settle(id, defaults);
+        if (e.type === "string") {
+          // `string` expected: Format Text -> Conv_TextToString (its input pin is InText).
+          const fn = this.profile.functions.textToString;
+          const conv = this.pureCall(fn.class, fn.name, e.span);
+          this.link(`${id}.Result`, `${conv}.InText`);
+          return { pin: `${conv}.${P.returnValue}`, nulls };
+        }
         return { pin: `${id}.Result`, nulls };
       }
       case "makeStruct": {
@@ -689,9 +749,34 @@ export class UnitBuilder {
         }
         return;
       }
-      case "return":
+      case "return": {
+        if (s.value === undefined) {
+          this.cur = [];
+          return;
+        }
+        const type = this.event.returnType!;
+        const o = this.operand(s.value, type);
+        if (o.nulls.length > 0) this.unsupported("an optional chain (?.) in a return value; check isValid first", s.span);
+        if (this.directReturn && o.pin !== undefined) {
+          this.link(o.pin, `result.${FUNCTION_RETURN_PIN}`);
+        } else {
+          const temp = `abfc_${this.event.name}_r`;
+          if (!this.returnTemp) this.vars.push({ name: temp, type, flags: ["transient"], origin: s.span, temp: true });
+          const defaults: Record<string, string> = {};
+          const objects: Record<string, string> = {};
+          const set = this.setVar(temp, s.span);
+          this.execInto(set);
+          this.feed(o, set, temp, defaults, objects);
+          this.settle(set, defaults, objects);
+          if (!this.returnTemp) {
+            this.returnTemp = true;
+            this.link(this.getVar(temp, s.span), `result.${FUNCTION_RETURN_PIN}`);
+          }
+        }
+        for (const x of this.cur) this.link(x, `result.${P.execute}`);
         this.cur = [];
         return;
+      }
       case "setSelfCond":
         // c ? a : b assigned to a variable is an if/else with one set per side
         this.stmt({
@@ -747,6 +832,10 @@ export class UnitBuilder {
         return;
       }
       case "forCount": {
+        if (this.loopMacros && s.step === 1 && !hasReturn(s.body)) {
+          const b = forLoopBound(s);
+          if (b) return this.forLoopMacro(s, b);
+        }
         const counter = `abfc_${this.event.name}_i${this.loopCount++}`;
         this.vars.push({ name: counter, type: "int", flags: ["transient"], origin: s.span, temp: true });
         this.locals.set(s.counter, { temp: counter });
@@ -765,7 +854,11 @@ export class UnitBuilder {
         const head = heads[0];
         if (head === undefined || heads.length !== 1) return this.unsupported("a loop condition without a single entry", s.span);
         this.cur = c.t;
+        const ctx: LoopCtx = { macro: false, breaks: [], continues: [] };
+        this.loops.push(ctx);
         this.stmts(s.body);
+        this.loops.pop();
+        this.cur = [...this.cur, ...ctx.continues];
         if (this.cur.length > 0) {
           const get = this.getVar(counter, s.span);
           const fn = this.mathFn(s.step === 1 ? "Add" : "Subtract", "int");
@@ -776,10 +869,11 @@ export class UnitBuilder {
           this.link(`${step}.${P.returnValue}`, `${next}.${counter}`);
           this.link(`${next}.${P.then}`, head);
         }
-        this.cur = c.f;
+        this.cur = [...c.f, ...ctx.breaks];
         return;
       }
       case "forOf": {
+        if (this.loopMacros && !hasReturn(s.body)) return this.forEachMacro(s);
         const arr = this.value(s.array);
         const counter = `abfc_${this.event.name}_i${this.loopCount++}`;
         this.vars.push({ name: counter, type: "int", flags: ["transient"], origin: s.span, temp: true });
@@ -803,7 +897,12 @@ export class UnitBuilder {
         this.link(arr.pin, `${item}.${P.getItemArray}`);
         this.link(getI2, `${item}.${P.getItemIndex}`);
         this.locals.set(s.local, { pin: `${item}.${P.getItemOutput}` });
+        if (s.index !== undefined) this.locals.set(s.index, { temp: counter });
+        const ctx: LoopCtx = { macro: false, breaks: [], continues: [] };
+        this.loops.push(ctx);
         this.stmts(s.body);
+        this.loops.pop();
+        this.cur = [...this.cur, ...ctx.continues];
         const getI3 = this.getVar(counter, s.span);
         const add = this.pureCall(this.profile.functions.addInt.class, this.profile.functions.addInt.name, s.span,
           { pinDefaults: { [P.opB]: "1" } });
@@ -812,9 +911,145 @@ export class UnitBuilder {
         this.execInto(inc);
         this.link(`${add}.${P.returnValue}`, `${inc}.${counter}`);
         this.link(`${inc}.${P.then}`, `${head}.${P.execute}`);
-        this.cur = [`${head}.${P.else}`];
+        this.cur = [`${head}.${P.else}`, ...ctx.breaks];
+        return;
+      }
+      case "break": {
+        const loop = this.loops[this.loops.length - 1];
+        if (loop === undefined) return this.unsupported("break outside a loop", s.span);
+        if (loop.breakPin !== undefined) for (const x of this.cur) this.link(x, loop.breakPin);
+        else loop.breaks.push(...this.cur);
+        this.cur = [];
+        return;
+      }
+      case "continue": {
+        const loop = this.loops[this.loops.length - 1];
+        if (loop === undefined) return this.unsupported("continue outside a loop", s.span);
+        if (!loop.macro) loop.continues.push(...this.cur); // in a macro body the end of the chain is the next iteration
+        this.cur = [];
         return;
       }
     }
+  }
+
+  /** Instances an engine StandardMacros loop macro; every current exit runs into its exec input pin (`Exec` for ForEachLoop, `execute` for ForLoop). */
+  private stdMacro(name: StdLoop, origin: Span, pinTypes?: Record<string, string>): string {
+    const id = this.emit(
+      "loop",
+      K2_MACRO_INSTANCE,
+      [`MacroGraphReference=(MacroGraph="/Script/Engine.EdGraph'${STD_MACROS_ASSET}:${name}'",GraphBlueprint="/Script/Engine.Blueprint'${STD_MACROS_ASSET}'")`],
+      { k: "std_macro", name },
+      origin,
+      pinTypes ? { pinTypes } : undefined,
+    );
+    for (const x of this.cur) this.link(x, `${id}.${STD_LOOP_EXEC[name]}`);
+    return id;
+  }
+
+  /** `for (const x of arr)` as a ForEachLoop instance: the element is the `Array Element` pin; the end of the body chain means "next iteration". */
+  private forEachMacro(s: Extract<HirStmt, { k: "forOf" }>): void {
+    const arr = this.value(s.array);
+    const brk = hasBreak(s.body);
+    const pins = brk ? FOR_EACH_BREAK : FOR_EACH;
+    const id = this.stdMacro(brk ? "ForEachLoopWithBreak" : "ForEachLoop", s.span, { [pins.array]: s.array.type, [pins.element]: s.elem });
+    this.link(arr.pin, `${id}.${pins.array}`);
+    this.locals.set(s.local, { pin: `${id}.${pins.element}` });
+    if (s.index !== undefined) this.locals.set(s.index, { pin: `${id}.${pins.index}` });
+    this.cur = [`${id}.${pins.body}`];
+    this.loops.push({ macro: true, ...(brk ? { breakPin: `${id}.${FOR_EACH_BREAK.brk}` } : {}), breaks: [], continues: [] });
+    this.stmts(s.body);
+    this.loops.pop();
+    this.cur = [`${id}.${pins.completed}`];
+  }
+
+  /** A counted `for` (see `forLoopBound`) as a ForLoop instance: FirstIndex = init, LastIndex = bound (`<`: bound - 1). */
+  private forLoopMacro(s: Extract<HirStmt, { k: "forCount" }>, b: { bound: HirExpr; inclusive: boolean }): void {
+    const start = this.operand(s.init, "int");
+    // On a null start the invalid exit still enters the loop: the macro then reads FirstIndex from an invalid object (Accessed None, reads
+    // as 0), whereas the manual lowering keeps a stale counter. Neither matches TypeScript exactly.
+    if (start.nulls.length > 0) this.cur = [...this.cur, ...start.nulls];
+    const last = this.operand(b.bound, "int");
+    const brk = hasBreak(s.body);
+    const id = this.stdMacro(brk ? "ForLoopWithBreak" : "ForLoop", s.span);
+    const defaults: Record<string, string> = {};
+    this.feed(start, id, FOR_LOOP.first, defaults);
+    if (b.inclusive) this.feed(last, id, FOR_LOOP.last, defaults);
+    else if (last.lit !== undefined) defaults[FOR_LOOP.last] = String(Number(last.lit) - 1);
+    else {
+      const P = this.profile.pins;
+      const fn = this.mathFn("Subtract", "int");
+      const sub = this.pureCall(fn.class, fn.name, s.span, { pinDefaults: { [P.opB]: "1" } });
+      this.link(last.pin!, `${sub}.${P.opA}`);
+      this.link(`${sub}.${P.returnValue}`, `${id}.${FOR_LOOP.last}`);
+    }
+    this.settle(id, defaults);
+    this.locals.set(s.counter, { pin: `${id}.${FOR_LOOP.index}` });
+    this.cur = [`${id}.${FOR_LOOP.body}`];
+    this.loops.push({ macro: true, ...(brk ? { breakPin: `${id}.${FOR_LOOP_BREAK.brk}` } : {}), breaks: [], continues: [] });
+    this.stmts(s.body);
+    this.loops.pop();
+    this.cur = [`${id}.${FOR_LOOP.completed}`];
+  }
+}
+
+/** Whether a `return` occurs anywhere in the statements (nested `if` and loop bodies included). */
+function hasReturn(list: HirStmt[]): boolean {
+  return list.some(
+    (s) =>
+      s.k === "return" ||
+      (s.k === "if" && (hasReturn(s.then) || hasReturn(s.else))) ||
+      ((s.k === "forOf" || s.k === "forCount") && hasReturn(s.body)),
+  );
+}
+
+/** Whether a `break` of this loop occurs in the statements (nested `if` bodies included, nested loops not: their break is their own). */
+function hasBreak(list: HirStmt[]): boolean {
+  return list.some((s) => s.k === "break" || (s.k === "if" && (hasBreak(s.then) || hasBreak(s.else))));
+}
+
+/** The bound of `for (let i = A; i < E | i <= E; i++)` when E is pure and does not read the counter (ForLoop-eligible), else undefined. */
+function forLoopBound(s: Extract<HirStmt, { k: "forCount" }>): { bound: HirExpr; inclusive: boolean } | undefined {
+  const c = s.cond;
+  if (c.k !== "cmp" || c.kind !== "int" || (c.op !== "<" && c.op !== "<=")) return undefined;
+  if (c.a.k !== "local" || c.a.id !== s.counter || !isPureBound(c.b, s.counter)) return undefined;
+  return { bound: c.b, inclusive: c.op === "<=" };
+}
+
+/** Whether evaluating the expression emits no exec node and no null exit, and does not read the loop counter. */
+function isPureBound(e: HirExpr, counter: LocalId): boolean {
+  switch (e.k) {
+    case "lit":
+    case "enumLit":
+    case "nameLit":
+    case "self":
+    case "param":
+    case "getSelf":
+      return true;
+    case "local":
+      return e.id !== counter;
+    case "getOn":
+    case "field":
+      return isPureBound(e.obj, counter);
+    case "length":
+      return isPureBound(e.array, counter);
+    case "index":
+      return isPureBound(e.array, counter) && isPureBound(e.index, counter);
+    case "arrayFind":
+      return isPureBound(e.array, counter) && isPureBound(e.value, counter);
+    case "arith":
+      return isPureBound(e.a, counter) && isPureBound(e.b, counter);
+    case "out":
+      return isPureBound(e.call, counter);
+    case "containerQuery":
+      return isPureBound(e.target, counter) && (e.key === undefined || isPureBound(e.key, counter));
+    case "call":
+      return (
+        e.pure &&
+        e.execOutputs === null &&
+        (e.target === null || isPureBound(e.target, counter)) &&
+        e.args.every((a) => isPureBound(a.value, counter))
+      );
+    default:
+      return false;
   }
 }

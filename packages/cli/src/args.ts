@@ -24,6 +24,20 @@ export interface CliFlags {
   removeNode: string[];
   /** `--watch`: `abfc check` stays running and checks again after every relevant file change. */
   watch: boolean;
+  /** `--mod <name>`: the mod `abfc init` links the project to. */
+  mod: string | undefined;
+  /** `--no-stubs`: `abfc init` does not run `abfc stubs`. */
+  noStubs: boolean;
+  /** `--deep`: `abfc doctor` checks the extracted runtime by sha256 (abfc.exe). */
+  deep: boolean;
+  /** `--clean-runtimes`: `abfc doctor` deletes the old extracted runtime folders (works outside a project). */
+  cleanRuntimes: boolean;
+  /** `--version`: print the abfc version (same as `abfc version`). */
+  version: boolean;
+  /** `--drift`: `abfc build` reads and drift-checks every owned asset, not only the changed ones. */
+  drift: boolean;
+  /** `--keep-failed-stage`: after an Unreal compile failure the stage keeps the failed graphs (no re-sync). */
+  keepFailedStage: boolean;
 }
 
 export interface ParsedArgs {
@@ -69,6 +83,16 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
         cold: { type: "boolean" },
         "remove-node": { type: "string", multiple: true },
         watch: { type: "boolean" },
+        mod: { type: "string" },
+        "no-stubs": { type: "boolean" },
+        deep: { type: "boolean" },
+        "clean-runtimes": { type: "boolean" },
+        version: { type: "boolean" },
+        drift: { type: "boolean" },
+        "keep-failed-stage": { type: "boolean" },
+        // `abfc lsp` accepts what language clients add; the values are ignored
+        stdio: { type: "boolean" },
+        clientProcessId: { type: "string" },
       },
     });
   } catch (e) {
@@ -77,6 +101,10 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
   const v = parsed.values;
   const [command, ...positionals] = parsed.positionals;
   if (command === "check" && v.watch === true && v.json === true) throw new UsageError("--watch cannot be combined with --json");
+  if (v.drift === true && command !== "build") throw new UsageError("--drift is an option of abfc build only");
+  if (v["keep-failed-stage"] === true && command !== "build" && command !== "test" && command !== "publish") {
+    throw new UsageError("--keep-failed-stage is an option of abfc build, test and publish");
+  }
   return {
     command: command ?? null,
     positionals,
@@ -100,6 +128,13 @@ export function parseCliArgs(argv: string[]): ParsedArgs {
       cold: v.cold === true,
       removeNode: v["remove-node"] ?? [],
       watch: v.watch === true,
+      mod: v.mod,
+      noStubs: v["no-stubs"] === true,
+      deep: v.deep === true,
+      cleanRuntimes: v["clean-runtimes"] === true,
+      version: v.version === true,
+      drift: v.drift === true,
+      keepFailedStage: v["keep-failed-stage"] === true,
     },
   };
 }

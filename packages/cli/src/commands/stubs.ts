@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { win32 } from "node:path";
 import type { Backend, ReflectData } from "@abfc/backend";
 import { ownedSets } from "@abfc/compiler";
-import { AbfcError } from "@abfc/env";
+import { AbfcError, runtimeLayout } from "@abfc/env";
 import {
   emitStubsWithIndex,
   manualFromExport,
@@ -12,6 +12,7 @@ import {
   newLock,
   sortedWidgetMembers,
   rulesFromPairs,
+  writeGameTags,
   writeLock,
   writeStubs,
   writeTsconfigPaths,
@@ -19,10 +20,15 @@ import {
 import type { ManualAsset } from "@abfc/stubgen";
 import type { CliContext } from "../context.js";
 import { recordRun } from "../runs.js";
+import { refreshTagsFile } from "../tags.js";
+import { pruneManifestsToStage } from "./common.js";
 import { ensureStage } from "./stage.js";
 
 /** Folders of the mod's Content that are never stubbed. */
 const SKIPPED_FOLDERS = ["_McpTest", "_McpTmp"];
+
+/** The backend's refusal to read an asset of another class (`<asset> is not a Blueprint (<Class>)`, `<asset> is a <Class>, not a Blueprint`). */
+const NOT_A_BLUEPRINT = /not a Blueprint/i;
 
 /** Every `*.uasset` below `<modDir>\Content`, as `/<mod>/<path without extension>`. */
 function listModAssets(ctx: CliContext, modDir: string): string[] {
@@ -86,7 +92,8 @@ async function reflectAndRead(ctx: CliContext, backend: Backend): Promise<number
   const owned = ownedSets(ctx.projectDir);
   const t0 = clock();
   if (assetList.length > 0) {
-    await ensureStage(backend, env, config, { resync: ctx.args.flags.resync });
+    const { resynced } = await ensureStage(backend, env, config, { resync: ctx.args.flags.resync, warn: (d) => ctx.output.diag(d) });
+    if (resynced) await pruneManifestsToStage(ctx, backend, mod);
     for (const asset of assetList) {
       try {
         const snap = await backend.read(mod, asset);
@@ -94,6 +101,8 @@ async function reflectAndRead(ctx: CliContext, backend: Backend): Promise<number
         manual.push(manualFromExport(asset, text, snap.structure, owned[asset] ?? { units: [], variables: [] }));
       } catch (e) {
         if (e instanceof AbfcError && e.diagnostic.code !== "ABFC4002" && e.diagnostic.code !== "ABFC4100") throw e;
+        // The mod also holds assets that are not Blueprints (mod config, class-manager rows, structs, metadata): the backend says so, and they have no stub to make.
+        if (e instanceof AbfcError && e.diagnostic.code === "ABFC4002" && NOT_A_BLUEPRINT.test(e.diagnostic.message)) continue;
         output.diag({
           severity: "warning",
           code: "ABFC4002",
@@ -112,7 +121,17 @@ async function reflectAndRead(ctx: CliContext, backend: Backend): Promise<number
     classes: [...classes, ...config.stubs.scriptClasses],
     structs: [],
     castTargets: classes,
+    ...(info.capabilities.gameplayTags ? { gameplayTags: true } : {}),
   });
+  const gameTags = info.capabilities.gameplayTags ? (first.data.gameplayTags?.tags ?? []) : null;
+  if (gameTags === null) {
+    output.diag({
+      severity: "warning",
+      code: "ABFC3012",
+      message: "the backend cannot list the game's gameplay tags; .abfc/tags.d.ts holds only the mod's own tags.",
+      fix: "update abf-mod-editor-mcp to 2.6.0 or newer, then run abfc stubs again.",
+    });
+  }
   const data: ReflectData = { engineVersion: null, classes: {}, structs: {}, errors: [] };
   merge(data, first.data);
   const manualRefs = manual.flatMap((m) => manualReferences(m));
@@ -181,8 +200,20 @@ async function reflectAndRead(ctx: CliContext, backend: Backend): Promise<number
     }),
   );
   writeFileSync(win32.join(profileDir, "_index.json"), JSON.stringify(index, null, 2) + "\n", "utf8");
+  if (gameTags !== null) writeGameTags(profileDir, gameTags);
   mkdirSync(paths.abfcDir, { recursive: true });
-  writeTsconfigPaths(paths.abfcDir, env.profile.id, mod, declarationOf("@abfc/runtime"), declarationOf("@abfc/testkit"));
+  const layout = runtimeLayout();
+  writeTsconfigPaths(
+    paths.abfcDir,
+    env.profile.id,
+    mod,
+    layout?.runtimeDts ?? declarationOf("@abfc/runtime"),
+    layout?.testkitDts ?? declarationOf("@abfc/testkit"),
+    layout?.irDts,
+  );
+  // The stage's own ini tags replace the old file's tags: a tag removed from the stage and the mod leaves tags.d.ts.
+  const stageNow = await backend.stageStatus(mod).catch(() => null);
+  refreshTagsFile(ctx, [], { stagingPath: stageNow?.stagingPath ?? null });
   recordRun(paths.runsFile, { at: at(), step: "stubs.emit", seconds: (clock() - t2) / 1000, ok: true, units: files.size, mode: "cold" });
 
   output.info(`stubs written to ${profileDir}`);

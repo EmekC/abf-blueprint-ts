@@ -35,7 +35,7 @@ export interface WBP_Subst extends WBP_ExampleInfo_Manual {}
 export class WBP_Subst extends UserWidget {
   @event
   Outside(a: text): void {
-    const t = `x ${a}`; // ABFC2099 @`x
+    this.NameText.SetFont({ Size: 1, Family: `f ${a}`, Label: a }); // ABFC2099 @`f
   }
 
   @event

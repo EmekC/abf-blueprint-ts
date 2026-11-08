@@ -2,10 +2,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { structFieldsHash, unitStateHash } from "@abfc/ir";
+import { parseExport, structFieldsHash, t3dNodeKey, unitStateHash } from "@abfc/ir";
 import type { IrModule, IrUnit, Profile, T3dNode } from "@abfc/ir";
 import { assetsNeedingRead, buildHir, loadProgram, lower, planBuild } from "../src/index.js";
 import type { Manifest, ManifestUnit } from "../src/index.js";
+import { irOf } from "./fn-harness.js";
 
 const projectDir = fileURLToPath(new URL("../../test/fixtures/project", import.meta.url));
 const profilePath = fileURLToPath(new URL("../../../env/profiles/ue5.4.4-1050002.json", import.meta.url));
@@ -15,7 +16,8 @@ function lowerFixture(): IrModule {
   const loaded = loadProgram(projectDir);
   const relay = loaded.files.classes.find((f) => f.fileName.endsWith("/Relay.ts"));
   assert.ok(relay);
-  return lower(buildHir(loaded, { mod: "TestMod" }, profile, [relay]), profile);
+  // the manual loop shape (counter temps) is what these plans are asserted on
+  return lower(buildHir(loaded, { mod: "TestMod" }, profile, [relay]), profile, { loopMacros: false });
 }
 
 const ir = lowerFixture();
@@ -35,8 +37,9 @@ function tagNode(name: string, unitId: string, ir = "0a1b2c3d"): T3dNode {
 }
 const CALL = "/Script/BlueprintGraph.K2Node_CallFunction";
 
+/** A stage snapshot: every node keyed like the parser keys it (nodes outside the EventGraph are `<graph>/<name>`). */
 function snapshotOf(...nodes: T3dNode[]): Map<string, T3dNode> {
-  return new Map(nodes.map((n) => [n.name, n]));
+  return new Map(nodes.map((n) => [t3dNodeKey(n.graph, n.name), n]));
 }
 
 function manifestOf(...units: ManifestUnit[]): Manifest {
@@ -60,7 +63,7 @@ function mu(over: Partial<ManifestUnit> = {}): ManifestUnit {
 
 const stage = { syncedAt: "T1" };
 
-test("a hand-made event of the same name with no manifest is ABFC5003", () => {
+test("a hand-made event of the same name with no manifest is replaced (TS wins): ABFC5014 warning, nothing is refused", () => {
   const snapshot = snapshotOf(node("CE_1", EVENT, [`CustomFunctionName="UpdateTarget"`]));
   const r = planBuild(ir, {
     manifests: new Map([[asset, null]]),
@@ -68,20 +71,23 @@ test("a hand-made event of the same name with no manifest is ABFC5003", () => {
     stage,
     handMadeUnits: new Map(),
   });
-  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5003"]);
-  assert.equal(r.diagnostics[0]!.severity, "error");
+  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5014"]);
+  assert.equal(r.diagnostics[0]!.severity, "warning");
   assert.equal(r.diagnostics[0]!.asset, asset);
-  assert.match(r.diagnostics[0]!.fix ?? "", /abfc adopt \/TestMod\/Relay\/BP_Relay UpdateTarget/);
-  assert.deepEqual(r.plan.assets, []);
+  assert.match(r.diagnostics[0]!.message, /replaced the hand-made event of the same name/);
+  assert.match(r.diagnostics[0]!.message, new RegExp(unit.id));
+  assert.deepEqual(r.plan.assets[0]!.units[0]!.removeNodes, ["CE_1"]);
+  assert.equal(r.plan.assets[0]!.removeGraphNodes, undefined); // the replaced entry is not listed twice
 
-  // the explicit hand-made list works the same
+  // the explicit hand-made list (the `_Manual` interface) with no entry in the snapshot: nothing to remove, still a warning-free plan
   const r2 = planBuild(ir, {
     manifests: new Map(),
     snapshots: new Map([[asset, snapshotOf()]]),
     stage,
     handMadeUnits: new Map([[asset, ["UpdateTarget"]]]),
   });
-  assert.deepEqual(r2.diagnostics.map((d) => d.code), ["ABFC5003"]);
+  assert.deepEqual(r2.diagnostics.map((d) => d.code), ["ABFC5014"]);
+  assert.deepEqual(r2.plan.assets[0]!.units[0]!.removeNodes, []);
 });
 
 test("a new unit in an empty asset is planned with origin (0, 600) and its temps", () => {
@@ -112,6 +118,7 @@ test("pendingAdoption plans the unit with the adopted nodes removed; the origin 
     snapshots: new Map([[asset, snapshot]]),
     stage,
     handMadeUnits: new Map(),
+    hybrid: new Set([asset]),
     snapshotVariables: new Map([[asset, ["abfc_UpdateTarget_t0"]]]),
   });
   assert.deepEqual(r.diagnostics, []);
@@ -123,7 +130,7 @@ test("pendingAdoption plans the unit with the adopted nodes removed; the origin 
   assert.deepEqual(r.plan.assets[0]!.graphNodes["EventGraph"]!.map((n) => n.name).sort(), ["CALL_1", "CE_1", "OTHER_1"]);
 });
 
-test("a changed adopted hand-made unit is ABFC5004 and nothing is planned", () => {
+test("a changed adopted hand-made unit is replaced (TS wins): ABFC5014 names ABFC5004", () => {
   const entry = node("CE_1", EVENT, [`CustomFunctionName="UpdateTarget"`]);
   const snapshot = snapshotOf(entry);
   const adopt = { entry: "CE_1", nodes: ["CE_1"], hash: "sha256:other", recordedAt: "2026-01-01T00:00:00Z", stageSyncedAt: null };
@@ -133,8 +140,9 @@ test("a changed adopted hand-made unit is ABFC5004 and nothing is planned", () =
     stage,
     handMadeUnits: new Map(),
   });
-  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5004"]);
-  assert.deepEqual(r.plan.assets, []);
+  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5014"]);
+  assert.match(r.diagnostics[0]!.message, /ABFC5004/);
+  assert.deepEqual(r.plan.assets[0]!.units[0]!.removeNodes, ["CE_1"]);
 });
 
 test("clean and the same irHash: up to date, nothing planned", () => {
@@ -171,7 +179,7 @@ test("clean but a different irHash: replaced, the owned nodes are removed", () =
   assert.deepEqual(r.plan.assets[0]!.units[0]!.removeNodes, ["N1"]);
 });
 
-test("an edited owned unit is ABFC5001, a missing owned node ABFC5002", () => {
+test("an edited owned unit and a missing owned node are replaced (TS wins): one ABFC5014 each, nothing is refused", () => {
   const n1 = node("N1", CALL, []);
   const manifest = manifestOf(mu({ irHash: unit.hash, nodes: ["N1"], assetHash: "sha256:stale", stageSyncedAt: "T1" }));
   const edited = planBuild(ir, {
@@ -180,8 +188,10 @@ test("an edited owned unit is ABFC5001, a missing owned node ABFC5002", () => {
     stage,
     handMadeUnits: new Map(),
   });
-  assert.deepEqual(edited.diagnostics.map((d) => d.code), ["ABFC5001"]);
-  assert.deepEqual(edited.plan.assets, []);
+  assert.deepEqual(edited.diagnostics.map((d) => d.code), ["ABFC5014"]);
+  assert.equal(edited.diagnostics[0]!.severity, "warning");
+  assert.match(edited.diagnostics[0]!.message, /ABFC5001/);
+  assert.deepEqual(edited.plan.assets[0]!.units[0]!.removeNodes, ["N1"]);
 
   const missing = planBuild(ir, {
     manifests: new Map([[asset, manifest]]),
@@ -189,7 +199,9 @@ test("an edited owned unit is ABFC5001, a missing owned node ABFC5002", () => {
     stage,
     handMadeUnits: new Map(),
   });
-  assert.deepEqual(missing.diagnostics.map((d) => d.code), ["ABFC5002"]);
+  assert.deepEqual(missing.diagnostics.map((d) => d.code), ["ABFC5014"]);
+  assert.match(missing.diagnostics[0]!.message, /ABFC5002/);
+  assert.deepEqual(missing.plan.assets[0]!.units[0]!.removeNodes, []); // nothing of it is left on the stage
 });
 
 // ---- Phase 2: class defaults, delegate owners, override units ----
@@ -260,6 +272,64 @@ test("class defaults are their own plan item, keyed by hash and by the stage the
   assert.equal(planBuild(ir2, input2(other, snapshot)).plan.assets[0]?.defaults?.hash, d.hash);
 });
 
+test("a director row is part of the defaults item (with the class path) and of its hash", () => {
+  const snapshot = snapshot2();
+  const plain = planBuild(ir2, input2(appliedManifest(snapshot), snapshot)).plan.assets[0]!.defaults!;
+  assert.equal(plain.director, undefined);
+  const row = "/TestMod/DataTables/DT_ClassManager/EntityDirector_Test";
+  const withDirector = { ...ir2, assets: [{ ...ir2.assets[0]!, director: { row: "EntityDirector_Test", asset: row } }] };
+  const d = planBuild(withDirector, input2(appliedManifest(snapshot), snapshot)).plan.assets[0]!.defaults!;
+  assert.deepEqual(d.director, { asset: row, classPath: `${asset2}.BP_Director_C` });
+  assert.notEqual(d.hash, plain.hash);
+  // a director alone (no class defaults) still produces the item, and an applied one is not planned again
+  const { classDefaults: _unused, ...noDefaults } = ir2.assets[0]!;
+  const bare = { ...ir2, assets: [{ ...noDefaults, director: { row: "EntityDirector_Test", asset: row } }] };
+  const bareItem = planBuild(bare, input2(appliedManifest(snapshot), snapshot)).plan.assets[0]!.defaults!;
+  assert.deepEqual(bareItem.director, d.director);
+  const done = appliedManifest(snapshot, { classDefaultsHash: bareItem.hash, classDefaultsStageSyncedAt: "T1" });
+  assert.deepEqual(planBuild(bare, input2(done, snapshot)).plan.assets, []);
+});
+
+test("a director row saved in the Mod Editor makes the defaults stale (its tag is applied again)", () => {
+  const snapshot = snapshot2();
+  const row = "/TestMod/DataTables/DT_ClassManager/EntityDirector_Test";
+  const { classDefaults: _unused, ...noDefaults } = ir2.assets[0]!;
+  const withDirector = { ...ir2, assets: [{ ...noDefaults, director: { row: "EntityDirector_Test", asset: row, tag: "ClassManager.EntityDirector.Test" } }] };
+  const built = planBuild(withDirector, input2(appliedManifest(snapshot), snapshot)).plan.assets[0]!.defaults!;
+  const applied = appliedManifest(snapshot, { classDefaultsHash: built.hash, classDefaultsStageSyncedAt: "T1", classDefaultsPublished: true, directorRow: row });
+  assert.deepEqual(planBuild(withDirector, input2(applied, snapshot)).plan.assets, []);
+  const edited = { ...input2(applied, snapshot), editedInMod: new Set([row.toLowerCase()]) };
+  const plan = planBuild(withDirector, edited).plan.assets;
+  assert.equal(plan.length, 1);
+  assert.equal(plan[0]!.defaults?.director?.asset, row);
+  assert.equal(plan[0]!.defaults?.director?.tag, "ClassManager.EntityDirector.Test");
+  // an unrelated saved file changes nothing
+  const other = { ...input2(applied, snapshot), editedInMod: new Set(["/testmod/datatables/dt_classmanager/other"]) };
+  assert.deepEqual(planBuild(withDirector, other).plan.assets, []);
+});
+
+test("a manifest directorRow without a director in the IR makes the defaults stale (and is read); a class with a director is unaffected", () => {
+  const snapshot = snapshot2();
+  const row = "/TestMod/DataTables/DT_ClassManager/EntityDirector_Test";
+  const { classDefaults: _unused, ...noDefaults } = ir2.assets[0]!;
+  const withDirector = { ...ir2, assets: [{ ...noDefaults, director: { row: "EntityDirector_Test", asset: row } }] };
+  const built = planBuild(withDirector, input2(appliedManifest(snapshot), snapshot)).plan.assets[0]!.defaults!;
+  const applied = appliedManifest(snapshot, { classDefaultsHash: built.hash, classDefaultsStageSyncedAt: "T1", directorRow: row });
+  assert.deepEqual(planBuild(withDirector, input2(applied, snapshot)).plan.assets, []);
+
+  // the decorator is gone: the same manifest is stale; the item has no director and no values
+  const removed = { ...ir2, assets: [noDefaults] };
+  const plan = planBuild(removed, input2(applied, snapshot)).plan.assets;
+  assert.equal(plan.length, 1);
+  assert.equal(plan[0]!.defaults?.director, undefined);
+  assert.deepEqual(plan[0]!.defaults?.values, {});
+  assert.ok(assetsNeedingRead(removed, { manifests: new Map([[asset2, applied]]), stage }).has(asset2));
+  // without a recorded row there is nothing to clear
+  const bareApplied = appliedManifest(snapshot);
+  assert.deepEqual(planBuild(removed, input2(bareApplied, snapshot)).plan.assets, []);
+  assert.equal(assetsNeedingRead(removed, { manifests: new Map([[asset2, bareApplied]]), stage }).has(asset2), false);
+});
+
 test("a changed delegate target replans the unit that takes its delegate; the reverse does not", () => {
   const snapshot = snapshot2();
   const hash = planBuild(ir2, input2(appliedManifest(snapshot), snapshot)).plan.assets[0]!.defaults!.hash;
@@ -280,18 +350,20 @@ test("a changed delegate target replans the unit that takes its delegate; the re
   assert.deepEqual(startChanged.plan.assets[0]!.entryNames, { "event:Scan": "Scan_1" }, "the untouched target is wired by its real entry name");
 });
 
-test("an override unit without a manifest: a hand-made enabled override is ABFC5003, a disabled default node is not", () => {
+test("an override unit without a manifest: a hand-made enabled override is replaced (ABFC5014), a disabled default node is kept", () => {
   const over = unitOf("override:ReceiveTick");
   const ev = (extra: string[]) => node("EV_1", "/Script/BlueprintGraph.K2Node_Event", [`EventReference=(MemberParent="x",MemberName="ReceiveTick")`, ...extra]);
   const run = (snapshot: Map<string, T3dNode>) =>
     planBuild(ir2, { manifests: new Map(), snapshots: new Map([[asset2, snapshot]]), stage, handMadeUnits: new Map() });
   const made = run(snapshotOf(ev([])));
-  const hit = made.diagnostics.find((d) => d.code === "ABFC5003");
-  assert.ok(hit && hit.span === over.origin);
-  assert.match(hit.fix ?? "", /abfc adopt \S+ override:ReceiveTick/);
+  const hit = made.diagnostics.find((d) => d.code === "ABFC5014");
+  assert.ok(hit);
+  assert.match(hit.message, /override:ReceiveTick: replaced the hand-made override of the same name/);
+  assert.deepEqual(made.plan.assets[0]!.units.find((u) => u.unit.id === over.id)!.removeNodes, ["EV_1"]);
   const disabled = run(snapshotOf(ev(["EnabledState=Disabled"])));
-  assert.ok(!disabled.diagnostics.some((d) => d.code === "ABFC5003"));
-  assert.ok(disabled.plan.assets[0]!.units.some((u) => u.unit.id === "override:ReceiveTick"));
+  assert.deepEqual(disabled.diagnostics, []);
+  assert.deepEqual(disabled.plan.assets[0]!.units.find((u) => u.unit.id === over.id)!.removeNodes, []);
+  assert.equal(disabled.plan.assets[0]!.removeGraphNodes, undefined, "the disabled engine default event is not swept");
 });
 
 test("several pending adoptions in one asset are applied in one build: each removes its own adopted nodes", () => {
@@ -368,12 +440,13 @@ test("a renamed event: the old unit's nodes and tag are removed, the new event a
   assert.deepEqual(a.forgetUnits ?? [], []);
 });
 
-test("an edited removed unit is ABFC5001 and nothing is removed", () => {
+test("an edited removed unit is removed anyway (TS wins): ABFC5014 names the edit, the nodes still on the stage go", () => {
   const snapshot = renameSnapshot();
-  const r = planBuild(irRenamed, renameInput(renameManifest(snapshot, { assetHash: "sha256:stale" }), snapshot));
-  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5001"]);
+  const r = planBuild(irRenamed, renameInput(renameManifest(snapshot, { assetHash: "sha256:stale" }), snapshot, { hybrid: new Set([asset]) }));
+  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5014"]);
   assert.equal(r.diagnostics[0]!.asset, asset);
-  assert.deepEqual(r.plan.assets[0]?.removeUnits ?? [], []);
+  assert.match(r.diagnostics[0]!.message, /ABFC5001/);
+  assert.deepEqual(r.plan.assets[0]?.removeUnits, [{ id: "event:A", graph: "EventGraph", nodes: ["A_1", "A_2", "CMT_A"] }]);
   assert.deepEqual(r.plan.assets[0]?.forgetUnits ?? [], []);
 });
 
@@ -390,13 +463,17 @@ test("a removed event still called by a unit that stays up to date is refused be
   assert.deepEqual(r.diagnostics[0]!.span, callerOfB.origin);
 });
 
-test("a removed event still called by a hand-made node is refused and the node is named", () => {
+test("a removed event still called by a hand-made node: hybrid class is refused naming the node, a non-hybrid class sweeps the node", () => {
   const hand = node("H_1", CALL, callsA);
   const snapshot = snapshotOf(node("A_1", CALL, []), node("A_2", CALL, []), tagNode("CMT_A", "event:A"), node("C_1", CALL, []), hand);
-  const r = planBuild(irRenamed, renameInput(renameManifest(snapshot), snapshot));
+  const r = planBuild(irRenamed, renameInput(renameManifest(snapshot), snapshot, { hybrid: new Set([asset]) }));
   assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5009"]);
-  assert.match(r.diagnostics[0]!.message, /the hand-made node H_1 in graph EventGraph still calls it/);
-  assert.match(r.diagnostics[0]!.fix ?? "", /abfc build --resync/);
+  assert.match(r.diagnostics[0]!.message, /the hand-made node H_1 in graph EventGraph .* still calls it/);
+  assert.doesNotMatch(r.diagnostics[0]!.fix ?? "", /resync|adopt/);
+
+  const swept = planBuild(irRenamed, renameInput(renameManifest(snapshot), snapshot));
+  assert.deepEqual(swept.diagnostics.map((d) => d.code), ["ABFC5014"]);
+  assert.deepEqual(swept.plan.assets[0]!.removeGraphNodes, [{ graph: "EventGraph", nodes: ["H_1"] }]);
 });
 
 test("a removed event whose caller is replanned in the same build is fine", () => {
@@ -418,7 +495,7 @@ test("a removed event declared again as another unit of the same name does not r
 
 test("a removed unit that was never applied is only forgotten", () => {
   const snapshot = renameSnapshot();
-  const r = planBuild(irRenamed, renameInput(renameManifest(snapshot, { assetHash: null, nodes: [], tag: null }), snapshot));
+  const r = planBuild(irRenamed, renameInput(renameManifest(snapshot, { assetHash: null, nodes: [], tag: null }), snapshot, { hybrid: new Set([asset]) }));
   assert.deepEqual(r.diagnostics, []);
   assert.deepEqual(r.plan.assets[0]!.forgetUnits, ["event:A"]);
   assert.deepEqual(r.plan.assets[0]!.removeUnits ?? [], []);
@@ -463,7 +540,7 @@ test("a re-planned unit removes its old tag comment and any orphan tag of the sa
     node("CMT_fake", COMMENT, [`NodeComment="see abfc:owned unit=${unit.id} src=x"`]),
   );
   const manifest = manifestOf(mu({ irHash: "sha256:old", nodes: ["N1"], tag: "CMT_cur", assetHash: unitStateHash(snapshot, ["N1"]), stageSyncedAt: "T1" }));
-  const r = planBuild(ir, { manifests: new Map([[asset, manifest]]), snapshots: new Map([[asset, snapshot]]), stage, handMadeUnits: new Map() });
+  const r = planBuild(ir, { manifests: new Map([[asset, manifest]]), snapshots: new Map([[asset, snapshot]]), stage, handMadeUnits: new Map(), hybrid: new Set([asset]) });
   assert.deepEqual(r.diagnostics, []);
   const u = r.plan.assets[0]!.units[0]!;
   assert.deepEqual([...u.removeNodes].sort(), ["CMT_cur", "CMT_old", "N1"]);
@@ -481,7 +558,7 @@ test("a tag comment is only removed from the graph of its unit", () => {
 function orphanSetup(over: Partial<ManifestUnit> = {}, extra: T3dNode[] = []) {
   const snapshot = snapshotOf(node("N1", CALL, []), tagNode("CMT_cur", unit.id), tagNode("CMT_orphan1", unit.id, "92f777f3"), tagNode("CMT_orphan2", unit.id, "de5b7500"), tagNode("CMT_ghost", "event:NotInManifest"), node("CMT_hand", COMMENT, ['NodeComment="note"']), ...extra);
   const manifest = manifestOf(mu({ irHash: unit.hash, nodes: ["N1"], tag: "CMT_cur", assetHash: unitStateHash(snapshot, ["N1"]), stageSyncedAt: "T1", ...over }));
-  const r = planBuild(ir, { manifests: new Map([[asset, manifest]]), snapshots: new Map([[asset, snapshot]]), stage, handMadeUnits: new Map() });
+  const r = planBuild(ir, { manifests: new Map([[asset, manifest]]), snapshots: new Map([[asset, snapshot]]), stage, handMadeUnits: new Map(), hybrid: new Set([asset]) });
   return r;
 }
 
@@ -537,17 +614,56 @@ test("a new own field is declared once, and not again when the asset already has
   assert.deepEqual(again.plan.assets[0]!.variables.map((v) => v.name).includes("Score"), false);
 });
 
-test("an own field whose type changed is ABFC2047 and nothing is planned", () => {
-  const r = fieldPlan(withFields(["Score", "float"]), fieldManifest(["Score", "int"]), ["Score"]);
-  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC2047"]);
-  assert.equal(r.diagnostics[0]!.severity, "error");
-  assert.deepEqual(r.plan.assets, []);
+test("a retyped own field is removed and re-added with the new type (ABFC2047 warning), units re-planned", () => {
+  const snapshot = snapshotOf(node("N1", CALL, []));
+  const keep = mu({ irHash: unit.hash, nodes: ["N1"], assetHash: unitStateHash(snapshot, ["N1"]), stageSyncedAt: "T1" });
+  const manifest = { ...manifestOf(keep), variables: [{ name: "Score", type: "int" }] } as unknown as Manifest;
+  const plan = (irm: IrModule) =>
+    planBuild(irm, { manifests: new Map([[asset, manifest]]), snapshots: new Map([[asset, snapshot]]), stage, handMadeUnits: new Map(), snapshotVariables: new Map([[asset, ["Score", "abfc_UpdateTarget_t0", "abfc_UpdateTarget_i0"]]]) });
+  const same = plan(withFields(["Score", "int"]));
+  assert.deepEqual(same.plan.assets, [], "an unchanged type plans nothing");
+  const r = plan(withFields(["Score", "float"]));
+  assert.deepEqual(r.diagnostics.map((d) => [d.code, d.severity]), [["ABFC2047", "warning"]]);
+  assert.match(r.diagnostics[0]!.message, /changed the type of own field Score \(int -> float\): the variable is recreated/);
+  const a = r.plan.assets[0]!;
+  assert.deepEqual(a.removeVariables, ["Score"]);
+  assert.deepEqual(a.variables.filter((v) => v.temp !== true).map((v) => [v.name, v.type]), [["Score", "float"]]);
+  assert.deepEqual(a.units.map((u) => u.unit.id), [unit.id], "the unit that was up to date is re-planned");
+  // a retyped field the asset lacks (the variable was deleted in the Mod Editor) is only added
+  const lacking = planBuild(withFields(["Score", "float"]), { manifests: new Map([[asset, manifest]]), snapshots: new Map([[asset, snapshot]]), stage, handMadeUnits: new Map(), snapshotVariables: new Map([[asset, []]]) });
+  assert.equal(lacking.plan.assets[0]!.removeVariables, undefined);
+  assert.ok(lacking.plan.assets[0]!.variables.some((v) => v.name === "Score" && v.type === "float"));
 });
 
-test("an own field removed from the TS is ABFC5011 and stays in the manifest", () => {
+test("an own field removed from the TS is removed from the asset (ABFC5011 warning); one the asset lacks is only forgotten", () => {
   const r = fieldPlan(ir, fieldManifest(["Gone", "int"]), ["Gone"]);
   assert.deepEqual(r.diagnostics.map((d) => [d.code, d.severity]), [["ABFC5011", "warning"]]);
+  assert.match(r.diagnostics[0]!.message, /removed own field Gone/);
+  assert.deepEqual(r.plan.assets[0]!.removeVariables, ["Gone"]);
   for (const a of r.plan.assets) assert.equal(a.variables.some((v) => v.name === "Gone"), false);
+  const absent = fieldPlan(ir, fieldManifest(["Gone", "int"]), []);
+  assert.equal(absent.plan.assets[0]!.removeVariables, undefined);
+  assert.deepEqual(absent.plan.assets[0]!.forgetVariables, ["Gone"]);
+});
+
+test("a loop counter temp the IR no longer declares is removed silently; one it still declares and other abfc_ names are kept", () => {
+  const stale = "abfc_UpdateTarget_i7";
+  const other = ["abfc_UpdateTarget_r", "abfc_UpdateTarget_t9", "abfc_Fn_i", "abfc_i3"];
+  const live = ir.assets[0]!.variables.filter((v) => v.temp === true && /^abfc_.+_i\d+$/.test(v.name)).map((v) => v.name);
+  assert.ok(live.length > 0, "the fixture has a manual loop counter");
+  // an old counter the asset still holds and the manifest records
+  const manifest = { ...manifestOf(), variables: [{ name: stale, type: "int" }, ...other.map((name) => ({ name, type: "int" }))] } as unknown as Manifest;
+  const r = fieldPlan(ir, manifest, [stale, ...other, ...live]);
+  assert.deepEqual(r.diagnostics.filter((d) => d.code === "ABFC5011" || d.severity === "warning"), []);
+  const a = r.plan.assets[0]!;
+  assert.deepEqual(a.removeVariables, [stale], "only the orphaned counter goes; the live counter and the other abfc_ names stay");
+  // recorded but already gone from the asset: only forgotten
+  const gone = fieldPlan(ir, manifest, [...other, ...live]);
+  assert.equal(gone.plan.assets[0]!.removeVariables, undefined);
+  assert.deepEqual(gone.plan.assets[0]!.forgetVariables, [stale]);
+  // nothing orphaned: nothing removed
+  const clean = fieldPlan(ir, manifestOf(), [...other, ...live]);
+  assert.equal(clean.plan.assets[0]?.removeVariables, undefined);
 });
 
 test("an asset whose only news is a field is still planned, with no units", () => {
@@ -567,6 +683,56 @@ test("an asset whose only news is a field is still planned, with no units", () =
   assert.equal(r.plan.assets.length, 1);
   assert.deepEqual(r.plan.assets[0]!.units, []);
   assert.deepEqual(r.plan.assets[0]!.variables.map((v) => v.name), ["Score"]);
+});
+
+test("a changed or removed own field default of a variable in the asset is planned as variableDefaults; equal defaults plan nothing", () => {
+  const snapshot = snapshotOf(node("N1", CALL, []));
+  const keep = mu({ irHash: unit.hash, nodes: ["N1"], assetHash: unitStateHash(snapshot, ["N1"]), stageSyncedAt: "T1" });
+  const manifest = { ...manifestOf(keep), variables: [{ name: "Speed", type: "float", hash: "h", default: "2.5" }] } as Manifest;
+  const withDefault = (def?: string): IrModule => {
+    const a = ir.assets[0]!;
+    const v = { name: "Speed", type: "float", ...(def !== undefined ? { default: def } : {}), flags: [], origin: span0 };
+    return { ...ir, assets: [{ ...a, variables: [v, ...a.variables] }] } as unknown as IrModule;
+  };
+  const plan = (irm: IrModule, variableDefaults?: boolean) =>
+    planBuild(irm, {
+      manifests: new Map([[asset, manifest]]),
+      snapshots: new Map([[asset, snapshot]]),
+      stage,
+      handMadeUnits: new Map(),
+      snapshotVariables: new Map([[asset, ["Speed", "abfc_UpdateTarget_t0", "abfc_UpdateTarget_i0"]]]),
+      ...(variableDefaults !== undefined ? { variableDefaults } : {}),
+    });
+  const changed = plan(withDefault("4"));
+  assert.deepEqual(changed.diagnostics, []);
+  assert.equal(changed.plan.assets.length, 1);
+  assert.deepEqual(changed.plan.assets[0]!.variableDefaults, { Speed: "4" });
+  assert.deepEqual(changed.plan.assets[0]!.units, []);
+  assert.deepEqual(changed.plan.assets[0]!.variables, []);
+  assert.equal(changed.plan.assets[0]!.removeVariables, undefined);
+  const dropped = plan(withDefault());
+  assert.deepEqual(dropped.diagnostics, []);
+  assert.deepEqual(dropped.plan.assets[0]!.variableDefaults, { Speed: null });
+  const same = plan(withDefault("2.5"));
+  assert.deepEqual(same.plan.assets, []);
+  assert.deepEqual(same.diagnostics, []);
+  assert.equal(assetsNeedingRead(withDefault("2.5"), { manifests: new Map([[asset, manifest]]), stage }).has(asset), false);
+  assert.equal(assetsNeedingRead(withDefault("4"), { manifests: new Map([[asset, manifest]]), stage }).has(asset), true);
+  assert.equal(assetsNeedingRead(withDefault(), { manifests: new Map([[asset, manifest]]), stage }).has(asset), true);
+  // a backend without variable_defaults: a warning per field, nothing planned, the default stays
+  const old = plan(withDefault("4"), false);
+  assert.deepEqual(old.diagnostics.map((d) => [d.code, d.severity]), [["ABFC2084", "warning"]]);
+  assert.match(old.diagnostics[0]!.message, /cannot change the default of the existing variable Speed/);
+  assert.deepEqual(old.plan.assets, []);
+});
+
+test("a new own field with a default carries it in the variable spec", () => {
+  const r = fieldPlan(
+    { ...ir, assets: [{ ...ir.assets[0]!, variables: [{ name: "Speed", type: "float", default: "2.5", flags: [], origin: span0 }, ...ir.assets[0]!.variables] }] } as unknown as IrModule,
+    null,
+  );
+  assert.equal(r.plan.assets[0]!.variables[0]!.default, "2.5");
+  assert.equal(r.plan.assets[0]!.variableDefaults, undefined);
 });
 
 test("assetsNeedingRead includes an asset whose fields differ from the manifest", () => {
@@ -672,4 +838,323 @@ test("a @struct missing from the stage is a fresh create even when its manifest 
   const present = planBuild(ir, { ...base, manifests, missing: new Set() });
   assert.deepEqual(present.diagnostics.map((d) => d.code), ["ABFC2046"]);
   assert.equal(present.plan.assets.length, 0);
+});
+
+// ---- TS wins: the sweep of hand-made content (non-hybrid classes) ----
+
+function sweepSetup(over: { hybrid?: boolean } = {}) {
+  const n1 = node("N1", CALL, []);
+  const fnEntry = (graph: string, extra: string[] = []): T3dNode => ({ name: `FE_${graph}`, cls: "/Script/BlueprintGraph.K2Node_FunctionEntry", graph, head: extra, pins: [] });
+  const snapshot = snapshotOf(
+    n1,
+    node("HAND_1", CALL, []),
+    node("HAND_2", EVENT, [`CustomFunctionName="MyOwnEvent"`]),
+    node("GHOST_1", "/Script/BlueprintGraph.K2Node_Event", [`EventReference=(MemberParent="x",MemberName="ReceiveBeginPlay")`, "EnabledState=Disabled"]),
+    tagNode("CMT_cur", unit.id),
+    fnEntry("HandFunc"),
+    { ...node("HF_1", CALL, []), graph: "HandFunc" },
+    fnEntry("OnPing"),
+    fnEntry("Iface", [`FunctionReference=(MemberParent=/Script/CoreUObject.Class'/Mod/BPI_X.BPI_X_C',MemberName="Iface")`]),
+    { name: "TUN_1", cls: "/Script/BlueprintGraph.K2Node_Tunnel", graph: "MyMacro", head: [], pins: [] },
+    { ...node("MAC_1", CALL, []), graph: "MyMacro" },
+  );
+  const manifest = manifestOf(mu({ irHash: unit.hash, nodes: ["N1"], tag: "CMT_cur", assetHash: unitStateHash(snapshot, ["N1"]), stageSyncedAt: "T1" }));
+  return planBuild(ir, {
+    manifests: new Map([[asset, manifest]]),
+    snapshots: new Map([[asset, snapshot]]),
+    stage,
+    handMadeUnits: new Map(),
+    snapshotVariables: new Map([[asset, ["Mine", "OnPing", "abfc_UpdateTarget_t0"]]]),
+    snapshotVariableTypes: new Map([[asset, new Map([["Mine", "int"], ["OnPing", "unsupported:mcdelegate"], ["abfc_UpdateTarget_t0", "int"]])]]),
+    ...(over.hybrid === true ? { hybrid: new Set([asset]) } : {}),
+  });
+}
+
+test("TS wins, non-hybrid: hand-made nodes, function graphs and variables are swept; dispatchers, macros, interface functions, ghosts and abfc tags stay", () => {
+  const r = sweepSetup();
+  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5014"]);
+  assert.equal(r.diagnostics[0]!.severity, "warning");
+  assert.match(r.diagnostics[0]!.message, /removed 2 hand-made nodes from EventGraph \(HAND_1, HAND_2\)/);
+  assert.match(r.diagnostics[0]!.message, /removed the hand-made function HandFunc/);
+  assert.match(r.diagnostics[0]!.message, /removed the hand-made variable Mine/);
+  const a = r.plan.assets[0]!;
+  assert.deepEqual(a.removeGraphNodes, [{ graph: "EventGraph", nodes: ["HAND_1", "HAND_2"] }]);
+  assert.deepEqual(a.removeFunctions, ["HandFunc"]);
+  assert.deepEqual(a.removeVariables, ["Mine"]);
+  assert.deepEqual(r.upToDate, [`${asset} ${unit.id}`]);
+});
+
+test("TS wins, hybrid class (the _Manual merge): nothing hand-made is swept", () => {
+  const r = sweepSetup({ hybrid: true });
+  assert.deepEqual(r.diagnostics, []);
+  assert.deepEqual(r.plan.assets, []);
+});
+
+test("TS wins, non-hybrid: the compiler's intermediate event stub graphs and nodes (bIsIntermediateNode) are not hand-made and are never swept", () => {
+  const n1 = node("N1", CALL, []);
+  const inter = ["bIsIntermediateNode=True"];
+  const stubEntry = (graph: string, extra: string[] = []): T3dNode => ({ name: "K2Node_FunctionEntry_0", cls: "/Script/BlueprintGraph.K2Node_FunctionEntry", graph, head: [...inter, ...extra], pins: [] });
+  const stubCall = (graph: string): T3dNode => ({ name: "K2Node_CallFunction_0", cls: CALL, graph, head: [...inter, `FunctionReference=(MemberName="ExecuteUbergraph_Relay",bSelfContext=True)`], pins: [] });
+  const snapshot = new Map<string, T3dNode>([
+    ["N1", n1],
+    ["CMT_cur", tagNode("CMT_cur", unit.id)],
+    // stub graphs holding nodes of the same name: nodes outside the EventGraph are keyed <graph>/<name> by the parser
+    ["ReceiveBeginPlay/K2Node_FunctionEntry_0", stubEntry("ReceiveBeginPlay", [`FunctionReference=(MemberParent=/Script/CoreUObject.Class'/Script/Engine.ActorComponent',MemberName="ReceiveBeginPlay")`])],
+    ["ReceiveBeginPlay/K2Node_CallFunction_0", stubCall("ReceiveBeginPlay")],
+    ["Bump/K2Node_FunctionEntry_0", stubEntry("Bump")],
+    ["Bump/K2Node_CallFunction_0", stubCall("Bump")],
+  ]);
+  const manifest = manifestOf(mu({ irHash: unit.hash, nodes: ["N1"], tag: "CMT_cur", assetHash: unitStateHash(snapshot, ["N1"]), stageSyncedAt: "T1" }));
+  const input = {
+    manifests: new Map([[asset, manifest]]),
+    snapshots: new Map([[asset, snapshot]]),
+    stage,
+    handMadeUnits: new Map<string, string[]>(),
+  };
+  const r = planBuild(ir, input);
+  assert.deepEqual(r.diagnostics, []);
+  assert.deepEqual(r.plan.assets, []);
+  // a genuinely hand-made function graph next to them is still swept, and only it
+  const hand: T3dNode = { name: "FE_Hand", cls: "/Script/BlueprintGraph.K2Node_FunctionEntry", graph: "HandFunc", head: [], pins: [] };
+  const withHand = planBuild(ir, { ...input, snapshots: new Map([[asset, new Map([...snapshot, ["HandFunc/FE_Hand", hand]])]]) });
+  assert.deepEqual(withHand.plan.assets[0]!.removeFunctions, ["HandFunc"]);
+  assert.match(withHand.diagnostics[0]!.message, /removed the hand-made function HandFunc/);
+  assert.doesNotMatch(withHand.diagnostics[0]!.message, /Bump|ReceiveBeginPlay/);
+});
+
+test("a unit the manifest lost (pruned) that is applied again also removes the tag comment it left on the stage", () => {
+  const snapshot = snapshotOf(node("N1", CALL, []), tagNode("CMT_old", unit.id, "92f777f3"));
+  const r = planBuild(ir, { manifests: new Map(), snapshots: new Map([[asset, snapshot]]), stage, handMadeUnits: new Map() });
+  assert.ok(r.plan.assets[0]!.units[0]!.removeNodes.includes("CMT_old"));
+});
+
+test("TS wins, non-hybrid: components (SimpleConstructionScript), designer widgets (WidgetTree) and timeline curves are not graph nodes and are never swept", () => {
+  const t3d = [
+    `Begin Object Class=/Script/Engine.Blueprint Name="BP_X" ExportPath="/Script/Engine.Blueprint'${asset}.BP_X'"`,
+    `   Begin Object Class=/Script/Engine.SimpleConstructionScript Name="SimpleConstructionScript" ExportPath="x"`,
+    `      Begin Object Class=/Script/Engine.SCS_Node Name="SCS_Node_0" ExportPath="x"`,
+    `      End Object`,
+    `   End Object`,
+    `   Begin Object Class=/Script/UMG.WidgetTree Name="WidgetTree" ExportPath="x"`,
+    `      Begin Object Class=/Script/UMG.TextBlock Name="NameText" ExportPath="x"`,
+    `      End Object`,
+    `   End Object`,
+    `   Begin Object Class=/Script/Engine.TimelineTemplate Name="Fade_Template" ExportPath="x"`,
+    `      Begin Object Class=/Script/Engine.CurveFloat Name="CurveFloat_0" ExportPath="x"`,
+    `      End Object`,
+    `   End Object`,
+    `   Begin Object Class=/Script/Engine.EdGraph Name="EventGraph" ExportPath="x"`,
+    `   End Object`,
+    `   ParentClass="/Script/CoreUObject.Class'/Script/Engine.Actor'"`,
+    `End Object`,
+  ].join("\n");
+  const parsed = parseExport(t3d);
+  assert.deepEqual([...parsed.nodes.values()].map((n) => n.graph).sort(), ["Fade_Template", "SimpleConstructionScript", "WidgetTree"]);
+  const snapshot = new Map(parsed.nodes);
+  const hand = node("HAND_1", CALL, []);
+  const umg = node("HAND_UMG", "/Script/UMGEditor.K2Node_CreateWidget", []); // a K2 node of another editor module is a graph node too
+  const r = planBuild(ir, {
+    manifests: new Map([[asset, manifestOf()]]),
+    snapshots: new Map([[asset, new Map([...snapshot, [hand.name, hand], [umg.name, umg]])]]),
+    stage,
+    handMadeUnits: new Map(),
+    snapshotVariables: new Map([[asset, []]]),
+    snapshotVariableTypes: new Map([[asset, new Map()]]),
+  });
+  const a = r.plan.assets[0]!;
+  assert.deepEqual(a.removeGraphNodes, [{ graph: "EventGraph", nodes: ["HAND_1", "HAND_UMG"] }]); // only the real graph nodes go
+  assert.equal(a.removeFunctions, undefined);
+  const only = planBuild(ir, {
+    manifests: new Map([[asset, manifestOf()]]),
+    snapshots: new Map([[asset, snapshot]]),
+    stage,
+    handMadeUnits: new Map(),
+    snapshotVariables: new Map([[asset, []]]),
+    snapshotVariableTypes: new Map([[asset, new Map()]]),
+  });
+  assert.equal(only.plan.assets[0]?.removeGraphNodes, undefined);
+  assert.ok(only.diagnostics.every((d) => !/SCS_Node_0|NameText|CurveFloat_0|SimpleConstructionScript|WidgetTree|Fade_Template/.test(d.message)));
+});
+
+// ---- Function graphs (undecorated methods): owned whole, recreated on any change ----
+
+const fnMembers = (body: string, withCall = true): string => `
+  @event Go(): void {
+    ${withCall ? "this.Last = this.runTest(5);" : "this.Last = 1;"}
+  }
+  ${body}`;
+const RUN_TEST = `private runTest(amount: int): int { this.Count = this.Count + amount; return this.Count; }`;
+const irFn = irOf(fnMembers(RUN_TEST));
+const fa = irFn.assets[0]!.path;
+const fnU = irFn.assets[0]!.units.find((u) => u.id === "function:runTest")!;
+const goU = irFn.assets[0]!.units.find((u) => u.id === "event:Go")!;
+const FUNCTION_ENTRY = "/Script/BlueprintGraph.K2Node_FunctionEntry";
+const fnVars = new Map([[fa, ["Count", "Last", "Label", ...irFn.assets[0]!.variables.map((v) => v.name)]]]);
+
+const entryOf = (graph: string, extra: string[] = []): T3dNode => ({ name: `FE_${graph}`, cls: FUNCTION_ENTRY, graph, head: extra, pins: [] });
+const inGraph = (n: T3dNode, graph: string): T3dNode => ({ ...n, graph });
+const callsRunTest = [`FunctionReference=(MemberName="runTest",bSelfContext=True)`];
+
+/** A stage holding the applied Go event (GO_1, GO_2) and the applied runTest graph (entry FE_runTest + FN_1). */
+function fnSnapshot(): Map<string, T3dNode> {
+  return snapshotOf(node("GO_1", CALL, []), node("GO_2", CALL, callsRunTest), entryOf("runTest"), inGraph(node("FN_1", CALL, []), "runTest"));
+}
+
+function fnManifest(snapshot: Map<string, T3dNode>, over: { fnHash?: string; goHash?: string; units?: ManifestUnit[] } = {}): Manifest {
+  const goNodes = ["GO_1", "GO_2"];
+  return {
+    asset: fa,
+    compiler: "test",
+    profile: profile.id,
+    variables: [],
+    units: over.units ?? [
+      { id: "event:Go", graph: "EventGraph", irHash: over.goHash ?? goU.hash, assetHash: unitStateHash(snapshot, goNodes), nodes: goNodes, nodeIds: {}, tag: null, stageSyncedAt: "T1", adopt: null },
+      { id: "function:runTest", graph: "runTest", irHash: over.fnHash ?? fnU.hash, assetHash: unitStateHash(snapshot, ["runTest/FN_1"]), nodes: ["runTest/FN_1"], nodeIds: {}, tag: null, stageSyncedAt: "T1", adopt: null },
+    ],
+  };
+}
+
+const fnInput = (manifest: Manifest | null, snapshot: Map<string, T3dNode>, over: Record<string, unknown> = {}) => ({
+  manifests: new Map([[fa, manifest]]),
+  snapshots: new Map([[fa, snapshot]]),
+  stage,
+  handMadeUnits: new Map<string, string[]>(),
+  snapshotVariables: fnVars,
+  ...over,
+});
+
+test("a new function unit is created: a functions entry, no remove_functions, no node removal, origin below the entry", () => {
+  const snapshot = snapshotOf(node("GO_1", CALL, []), node("GO_2", CALL, []));
+  const manifest = fnManifest(snapshot, { units: [] });
+  const r = planBuild(irFn, fnInput(manifest, snapshot, { hybrid: new Set([fa]) }));
+  assert.deepEqual(r.diagnostics, []);
+  const a = r.plan.assets[0]!;
+  assert.deepEqual(a.functions, [{ name: "runTest", inputs: [{ name: "amount", type: "int" }], outputs: [{ name: "ReturnValue", type: "int" }], access: "private" }]);
+  assert.equal(a.removeFunctions, undefined);
+  const u = a.units.find((x) => x.unit.id === "function:runTest")!;
+  assert.deepEqual(u.removeNodes, []);
+  assert.deepEqual(u.origin, [0, 250]);
+});
+
+test("a hand-made function of the same name is replaced (TS wins): ABFC5014 report, remove_functions + functions", () => {
+  const snapshot = snapshotOf(node("GO_1", CALL, []), entryOf("runTest"), inGraph(node("HF_1", CALL, []), "runTest"));
+  const r = planBuild(irFn, fnInput(null, snapshot, { hybrid: new Set([fa]) }));
+  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5014"]);
+  assert.match(r.diagnostics[0]!.message, /function:runTest: replaced the hand-made function of the same name/);
+  const a = r.plan.assets[0]!;
+  assert.deepEqual(a.removeFunctions, ["runTest"]);
+  assert.equal(a.functions?.length, 1);
+  assert.equal(a.removeGraphNodes, undefined); // the recreated graph is not swept node by node
+});
+
+test("a changed function is recreated (remove_functions + functions, removeNodes []); its same-asset caller is applied again", () => {
+  const snapshot = fnSnapshot();
+  const r = planBuild(irFn, fnInput(fnManifest(snapshot, { fnHash: "sha256:old" }), snapshot));
+  assert.deepEqual(r.diagnostics, []);
+  const a = r.plan.assets[0]!;
+  assert.deepEqual(a.removeFunctions, ["runTest"]);
+  assert.deepEqual(a.functions?.map((f) => f.name), ["runTest"]);
+  const byId = new Map(a.units.map((u) => [u.unit.id, u]));
+  assert.deepEqual(byId.get("function:runTest")!.removeNodes, []);
+  // the caller keeps its own node-by-node replacement, so its call node is templated against the new signature
+  assert.deepEqual(byId.get("event:Go")!.removeNodes, ["GO_1", "GO_2"]);
+  assert.equal(a.removeGraphNodes, undefined);
+  assert.equal(a.removeUnits, undefined);
+  assert.deepEqual(r.upToDate, []);
+});
+
+test("an unchanged function and caller are up to date; the non-hybrid sweep leaves the owned function graph alone", () => {
+  const snapshot = snapshotOf(...fnSnapshot().values(), entryOf("HandFunc"), inGraph(node("HF_9", CALL, []), "HandFunc"));
+  const r = planBuild(irFn, fnInput(fnManifest(snapshot), snapshot));
+  assert.deepEqual([...r.upToDate].sort(), [`${fa} event:Go`, `${fa} function:runTest`]);
+  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5014"]);
+  assert.match(r.diagnostics[0]!.message, /removed the hand-made function HandFunc/);
+  const a = r.plan.assets[0]!;
+  assert.deepEqual(a.removeFunctions, ["HandFunc"]); // only the hand-made one
+  assert.equal(a.removeGraphNodes, undefined);
+  assert.equal(a.units.length, 0);
+
+  // without the hand-made graph nothing is planned at all
+  const clean = fnSnapshot();
+  const none = planBuild(irFn, fnInput(fnManifest(clean), clean));
+  assert.deepEqual(none.diagnostics, []);
+  assert.deepEqual(none.plan.assets, []);
+});
+
+test("TS wins, non-hybrid: an up-to-date owned function graph whose node names repeat the event graph's is not swept", () => {
+  // Unreal names nodes uniquely per graph only: runTest's body node and Go's call node are both K2Node_CallFunction_9001
+  const same = "K2Node_CallFunction_9001";
+  const snapshot = snapshotOf(
+    node(same, CALL, []),
+    { ...entryOf("runTest"), name: "K2Node_FunctionEntry_0" },
+    inGraph(node(same, CALL, []), "runTest"),
+    { ...entryOf("HandFunc"), name: "K2Node_FunctionEntry_0" },
+    inGraph(node(same, CALL, []), "HandFunc"),
+  );
+  const manifest = fnManifest(snapshot, {
+    units: [
+      { id: "event:Go", graph: "EventGraph", irHash: goU.hash, assetHash: unitStateHash(snapshot, [same]), nodes: [same], nodeIds: {}, tag: null, stageSyncedAt: "T1", adopt: null },
+      { id: "function:runTest", graph: "runTest", irHash: fnU.hash, assetHash: unitStateHash(snapshot, [`runTest/${same}`]), nodes: [`runTest/${same}`], nodeIds: {}, tag: null, stageSyncedAt: "T1", adopt: null },
+    ],
+  });
+  const r = planBuild(irFn, fnInput(manifest, snapshot));
+  assert.deepEqual([...r.upToDate].sort(), [`${fa} event:Go`, `${fa} function:runTest`]);
+  const a = r.plan.assets[0]!;
+  assert.equal(a.removeGraphNodes, undefined, JSON.stringify(a.removeGraphNodes)); // neither runTest's body nor the EventGraph's call node
+  assert.deepEqual(a.removeFunctions, ["HandFunc"]);
+});
+
+test("an edited function graph (drift) is recreated whole: ABFC5014, not an error", () => {
+  const snapshot = fnSnapshot();
+  const manifest = fnManifest(snapshot);
+  manifest.units[1]!.assetHash = "sha256:stale";
+  const r = planBuild(irFn, fnInput(manifest, snapshot));
+  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5014"]);
+  assert.deepEqual(r.plan.assets[0]!.removeFunctions, ["runTest"]);
+  assert.deepEqual(r.plan.assets[0]!.units.find((u) => u.unit.id === "function:runTest")!.removeNodes, []);
+});
+
+test("a function gone from the TS is removed whole (removeUnits with no nodes + remove_functions); the record of a vanished graph is only forgotten", () => {
+  const irGone = irOf(fnMembers("", false));
+  const snapshot = fnSnapshot();
+  const manifest = fnManifest(snapshot); // the caller changed too (its call is gone), so it is planned again
+  const r = planBuild(irGone, fnInput(manifest, snapshot));
+  assert.deepEqual(r.diagnostics, []);
+  const a = r.plan.assets[0]!;
+  assert.deepEqual(a.removeUnits, [{ id: "function:runTest", graph: "runTest", nodes: [] }]);
+  assert.deepEqual(a.removeFunctions, ["runTest"]);
+  assert.equal(a.functions, undefined);
+  assert.deepEqual(a.forgetUnits ?? [], []);
+
+  // the graph is not on the stage any more: only the manifest record goes
+  const lonely = snapshotOf(node("GO_1", CALL, []), node("GO_2", CALL, []));
+  const manifest2 = fnManifest(lonely);
+  const f = planBuild(irGone, fnInput(manifest2, lonely));
+  assert.deepEqual(f.plan.assets[0]?.removeUnits ?? [], []);
+  assert.deepEqual(f.plan.assets[0]?.forgetUnits, ["function:runTest"]);
+});
+
+test("a removed function still called by a hand-made node of a hybrid class is refused (ABFC5009)", () => {
+  const irGone = irOf(fnMembers("", false));
+  const goGone = irGone.assets[0]!.units.find((u) => u.id === "event:Go")!;
+  const snapshot = snapshotOf(node("GO_1", CALL, []), node("GO_2", CALL, []), entryOf("runTest"), inGraph(node("FN_1", CALL, []), "runTest"), node("H_1", CALL, callsRunTest));
+  const manifest = fnManifest(snapshot);
+  manifest.units[0]!.irHash = goGone.hash;
+  const r = planBuild(irGone, fnInput(manifest, snapshot, { hybrid: new Set([fa]) }));
+  assert.deepEqual(r.diagnostics.map((d) => d.code), ["ABFC5009"]);
+  assert.match(r.diagnostics[0]!.message, /runTest is no longer declared in TypeScript/);
+});
+
+test("a renamed function: the old graph goes, the new one is created, the caller is applied again", () => {
+  const irRen = irOf(`
+  @event Go(): void { this.Last = this.runTwo(5); }
+  private runTwo(amount: int): int { this.Count = this.Count + amount; return this.Count; }`);
+  const snapshot = fnSnapshot();
+  const r = planBuild(irRen, fnInput(fnManifest(snapshot), snapshot));
+  assert.deepEqual(r.diagnostics, []);
+  const a = r.plan.assets[0]!;
+  assert.deepEqual(a.removeUnits, [{ id: "function:runTest", graph: "runTest", nodes: [] }]);
+  assert.deepEqual(a.removeFunctions, ["runTest"]);
+  assert.deepEqual(a.functions?.map((f) => f.name), ["runTwo"]);
+  assert.deepEqual(a.units.map((u) => u.unit.id).sort(), ["event:Go", "function:runTwo"]);
 });

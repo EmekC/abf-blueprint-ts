@@ -71,7 +71,7 @@ test("pass 5 sends one python spec per asset after the tag pass; ABFC2070 lines 
   const out = await applyPlan(backend, plan, c, profile, { cacheDir: "cache", record: (s) => timings.push(s) });
   assert.equal(out.ok, true);
   assert.deepEqual(backend.calls.map((x) => x.label), ["main", "tags", "defaults"]);
-  assert.deepEqual(backend.calls[2]!.specs, [renderDefaultsSpec(asset)]);
+  assert.deepEqual(backend.calls[2]!.specs, [renderDefaultsSpec(asset, c)]);
   const sent = backend.calls[2]!.specs[0]! as { raw: Array<{ kind: string }> };
   assert.equal(sent.raw[0]?.kind, "python");
   assert.deepEqual(timings, ["apply.main", "apply.tags", "apply.defaults"]);
@@ -100,4 +100,64 @@ test("an asset that only carries defaults takes part in pass 5 only", async () =
   assert.equal(out.ok, true);
   assert.deepEqual(backend.calls.map((x) => x.label), ["defaults"]);
   assert.equal(out.perAsset[0]!.defaultsApplied, true);
+});
+
+function plannedWithDirector(): ApplyPlan {
+  const plan = planOf(ir);
+  const a = plan.assets[0]!;
+  const row = "/TestMod/DataTables/DT_ClassManager/EntityDirector_Test";
+  return { ...plan, assets: [{ ...a, units: [], variables: [], graphNodes: {}, defaults: { classPath: CLASS, values: {}, hash: "sha256:d", director: { asset: row, classPath: CLASS } } }] };
+}
+
+test("with the classManagerRows capability the defaults spec carries class_manager_row and the template does not verify the row", () => {
+  const plan = plannedWithDirector();
+  const on = renderDefaultsSpec(plan.assets[0]!, { ...caps(true, true), classManagerRows: true });
+  assert.deepEqual(on.class_manager_row, { asset_path: "/TestMod/DataTables/DT_ClassManager/EntityDirector_Test", class_path: CLASS });
+  assert.doesNotMatch((on.raw![0] as { code: string }).code, /row_asset/);
+  const off = renderDefaultsSpec(plan.assets[0]!, caps(true, true));
+  assert.equal(off.class_manager_row, undefined);
+  assert.match((off.raw![0] as { code: string }).code, /row_asset = unreal\.load_asset\("\/TestMod\/DataTables\/DT_ClassManager\/EntityDirector_Test"\)/);
+});
+
+test("pass 5 reads the rows of the bp_apply result; a missing row is ABFC5102 and not applied", async () => {
+  const plan = plannedWithDirector();
+  const c = { ...caps(true, true), classManagerRows: true };
+  const rowAsset = "/TestMod/DataTables/DT_ClassManager/EntityDirector_Test";
+  const ok = await applyPlan(new FakeBackend(() => result({ rows: [{ asset: rowAsset, created: true, changed: true }] })), plan, c, profile, { cacheDir: "cache", record: () => {} });
+  assert.deepEqual(ok.perAsset[0]!.directorRow, { asset: rowAsset, created: true, changed: true });
+  assert.equal(ok.perAsset[0]!.defaultsApplied, true);
+  assert.deepEqual(ok.perAsset[0]!.defaultsWarnings, []);
+  const missing = await applyPlan(new FakeBackend(() => result()), plan, c, profile, { cacheDir: "cache", record: () => {} });
+  assert.equal(missing.perAsset[0]!.defaultsApplied, false);
+  assert.equal(missing.perAsset[0]!.directorRow, undefined);
+  assert.equal(missing.perAsset[0]!.defaultsWarnings[0]!.code, "ABFC5102");
+});
+
+test("without the capability a director row is verified and ABFC2077 is reported once", async () => {
+  const plan = plannedWithDirector();
+  const out = await applyPlan(new FakeBackend(() => result()), plan, caps(true, true), profile, { cacheDir: "cache", record: () => {} });
+  assert.equal(out.perAsset[0]!.defaultsApplied, true);
+  assert.equal(out.perAsset[0]!.directorRow, undefined);
+  assert.deepEqual(out.perAsset[0]!.defaultsWarnings.map((d) => d.code), ["ABFC2077"]);
+});
+
+test("a director tag: the spec carries class_manager_row.gameplay_tag with classManagerRowTag; without it ABFC2082 once per asset and no tag in the spec", async () => {
+  const plan = plannedWithDirector();
+  const TAG = "ClassManager.EntityDirector.Test";
+  const a = plan.assets[0]!;
+  const tagged: ApplyPlan = { ...plan, assets: [{ ...a, defaults: { ...a.defaults!, director: { ...a.defaults!.director!, tag: TAG } } }] };
+  const on = renderDefaultsSpec(tagged.assets[0]!, { ...caps(true, true), classManagerRows: true, classManagerRowTag: true });
+  assert.equal(on.class_manager_row!.gameplay_tag, TAG);
+  const old = renderDefaultsSpec(tagged.assets[0]!, { ...caps(true, true), classManagerRows: true });
+  assert.equal(old.class_manager_row!.gameplay_tag, undefined);
+  // the untagged director has no key at all
+  assert.ok(!("gameplay_tag" in renderDefaultsSpec(plan.assets[0]!, { ...caps(true, true), classManagerRows: true, classManagerRowTag: true }).class_manager_row!));
+
+  const c = { ...caps(true, true), classManagerRows: true };
+  const ids = nodeIdsFor(tagged, c);
+  const backend = new FakeBackend(() => result({ assets: [{ asset: tagged.assets[0]!.asset, node_ids: ids }], rows: [{ asset: tagged.assets[0]!.defaults!.director!.asset, created: true, changed: true }] }));
+  const out = await applyPlan(backend, tagged, c, profile, { cacheDir: "cache", record: () => {} });
+  const warnings = out.perAsset[0]!.defaultsWarnings.filter((w) => w.code === "ABFC2082");
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0]!.message, /update abf-mod-editor-mcp to 2\.6\.0 or newer/);
 });

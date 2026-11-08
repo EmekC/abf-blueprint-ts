@@ -1,17 +1,20 @@
 // HIR builder: checks the TypeScript subset and resolves every name through the stub tags.
 import ts from "typescript";
-import { BpTypeError, parseBpType } from "@abfc/ir";
+import { BpTypeError, DEFAULT_CLASS_MANAGER_TABLE, DIRECTOR_TAG_PREFIX, gameplayTagProblem, joinModPath, parseBpType, segmentProblem } from "@abfc/ir";
 import type { Diagnostic, Profile, Span } from "@abfc/ir";
 import type { BpType, HirClass, HirEvent, HirField, HirExpr, HirProgram, HirStmt, HirStruct, LocalId } from "../hir.js";
+import { assetPathOf, bindPathContext, modImportHints, pathContextOf } from "./assetpaths.js";
+import type { AssetPathInfo, CompilerProjectConfig } from "./assetpaths.js";
 import { DiagSink, Fail, relFile, spanOf } from "./diag.js";
 import type { LoadedProgram } from "./program.js";
-import { BLUEPRINT_META, WIDGET_META, bpPathOf, bpTagsOfSymbol, bpTypeOf, bpTypeOfMember, classInfo, classPathOf, functionInfo, ownEventInfo, resolveAlias, splitMemberPath, tsStructMemberName, tsStructOfDecl } from "./tags.js";
+import { BLUEPRINT_META, WIDGET_META, bpPathOf, bpTagsOfSymbol, bpTypeOf, bpTypeOfMember, classInfo, classPathOf, functionInfo, ownEventInfo, resolveAlias, splitMemberPath, tsStructMemberName } from "./tags.js";
 import { udsMemberName } from "./structnames.js";
 import type { FunctionInfo } from "./tags.js";
 
 export { classPathOf } from "./tags.js";
 
 const USER_WIDGET = "/Script/UMG.UserWidget";
+const ACTOR_COMPONENT = "/Script/Engine.ActorComponent";
 const NUMERIC = new Set(["int", "int64", "byte", "float", "double", "real"]);
 const STRINGY = new Set(["name", "text", "string"]);
 /** `@blueprint` options that set class defaults (applied by the class-defaults pass). */
@@ -46,6 +49,9 @@ function splitContainerType(type: string): { key: string; value: string } {
 }
 
 type EqKind = "object" | "name" | "string" | "int" | "real" | "bool" | "byte";
+
+/** A TypeScript `enum` declaration cannot become a Blueprint enum (the asset kind is not created yet): say so and name the way out. */
+const TS_ENUM_HINT = "a TypeScript enum has no Blueprint equivalent (abfc cannot create Blueprint enums yet); use an int or byte field, or an enum of the game or the engine";
 
 export function kindOfBpType(t: string): EqKind | undefined {
   if (t === "bool") return "bool";
@@ -85,19 +91,24 @@ export function runtimeName(checker: ts.TypeChecker, expr: ts.Expression): strin
   return imp && imp.module === "@abfc/runtime" ? imp.name : undefined;
 }
 
-/** `path` option of the `@blueprint({ path })` decorator of a class declaration. */
+/** Asset path of a class declaration carrying `@blueprint(...)`: the `path` option, else the path derived from the file location. */
 export function blueprintPathOf(checker: ts.TypeChecker, decl: ts.ClassDeclaration): string | undefined {
   for (const d of ts.getDecorators(decl) ?? []) {
     if (runtimeName(checker, d.expression) !== "blueprint" || !ts.isCallExpression(d.expression)) continue;
-    const opts = d.expression.arguments[0];
-    if (!opts || !ts.isObjectLiteralExpression(opts)) continue;
-    for (const p of opts.properties) {
-      if (ts.isPropertyAssignment(p) && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) && p.name.text === "path") {
-        if (ts.isStringLiteral(p.initializer) || ts.isNoSubstitutionTemplateLiteral(p.initializer)) return p.initializer.text;
-      }
-    }
+    return assetPathOf(decl, "blueprint")?.path;
   }
   return undefined;
+}
+
+/** Reports the problems of an asset path; true when one of them is an error. */
+function reportPathProblems(sink: DiagSink, info: AssetPathInfo, mapCode?: (code: string) => string): boolean {
+  let failed = false;
+  for (const p of info.problems) {
+    sink.report(p.severity, mapCode ? mapCode(p.code) : p.code, p.message, p.node);
+    if (p.fix !== undefined) sink.diagnostics[sink.diagnostics.length - 1]!.fix = p.fix;
+    if (p.severity === "error") failed = true;
+  }
+  return failed;
 }
 
 function children(e: HirExpr): HirExpr[] {
@@ -143,11 +154,15 @@ function docOf(node: ts.Node): string | undefined {
   return text === "" ? undefined : text;
 }
 
-/** Signature of an owned `@event`/`@override` method, known before any body is built (calls can point forward). */
+/** Signature of an owned `@event`/`@override` method or undecorated method (a function), known before any body is built (calls can point forward). */
 interface OwnSig {
   node: ts.MethodDeclaration;
-  kind: "event" | "override";
+  kind: "event" | "override" | "function";
   params: HirEvent["params"];
+  /** Functions: the Blueprint type of the return value; absent = void. */
+  returnType?: BpType;
+  /** Functions: the access specifier. */
+  access?: "public" | "protected" | "private";
   /** The TypeScript parameter symbols, in order (for binding the body). */
   paramSyms: Array<ts.Symbol | undefined>;
   overrideOf?: string;
@@ -176,6 +191,7 @@ function directExprs(s: HirStmt): HirExpr[] {
     case "expr": return [s.e];
     case "setSelf": return [s.value];
     case "const": return [s.init];
+    case "return": return s.value ? [s.value] : [];
     case "if": return [s.cond];
     case "forOf": return [s.array];
     case "setSelfCond": return [s.cond, s.a, s.b];
@@ -211,6 +227,14 @@ class HirBuilder {
   private nextLocal = 0;
   /** Owned `@event`/`@override` methods of the class being built, by name. */
   private ownSigs = new Map<string, OwnSig>();
+  /** Kind, name and return type of the unit whose body is being built (functions: no await, no latent calls, returns carry a value). */
+  private unitKind: HirEvent["kind"] = "event";
+  private unitName = "";
+  private unitReturn: BpType | undefined;
+  /** Calls between the owned units of the class being built: caller -> callees (for the recursion check). */
+  private ownCalls = new Map<string, Set<string>>();
+  /** Name node of every owned function of the class being built. */
+  private fnNames = new Map<string, ts.Identifier>();
   /** Own fields (`Name!: T;`) by the symbol of their declaration. */
   private ownFields = new Map<ts.Symbol, HirField>();
   private holes = new Map<ts.Node, HirExpr>();
@@ -234,14 +258,17 @@ class HirBuilder {
     const st = (ts.getDecorators(node) ?? []).find((d) => runtimeName(this.checker, d.expression) === "struct");
     if (st) {
       if (bp) this.sink.error("ABFC2046", `${node.name?.text ?? "(anonymous)"} cannot be both a @blueprint and a @struct`, node.name ?? node);
-      else this.structDecl(node, st);
+      else {
+        this.directorOf(node, true, undefined);
+        this.structDecl(node, st);
+      }
       return;
     }
     if (!bp) return;
     const name = node.name?.text ?? "(anonymous)";
-    let path: string | undefined;
     let parentOption: string | undefined;
     let classManagerRow: string | undefined;
+    let classManagerRowNode: ts.Node | undefined;
     let widget = false;
     const defaultOpts: Array<{ key: string; prop: string; value: string; node: ts.Node }> = [];
     const opts = ts.isCallExpression(bp.expression) ? bp.expression.arguments[0] : undefined;
@@ -249,9 +276,13 @@ class HirBuilder {
       for (const p of opts.properties) {
         const key = ts.isPropertyAssignment(p) && (ts.isIdentifier(p.name) || ts.isStringLiteral(p.name)) ? p.name.text : undefined;
         const lit = ts.isPropertyAssignment(p) && (ts.isStringLiteral(p.initializer) || ts.isNoSubstitutionTemplateLiteral(p.initializer)) ? p.initializer.text : undefined;
-        if (key === "path") path = lit;
-        else if (key === "parent") parentOption = lit;
-        else if (key === "classManagerRow") classManagerRow = lit;
+        if (key === "path") {
+          // the asset path is resolved by assetPathOf below
+        } else if (key === "parent") parentOption = lit;
+        else if (key === "classManagerRow") {
+          classManagerRow = lit;
+          classManagerRowNode = p;
+        }
         else if (key === "tickEnabled") {
           this.sink.error(
             "ABFC2063",
@@ -279,7 +310,14 @@ class HirBuilder {
         } else this.sink.warning("ABFC2099", `@blueprint option "${key ?? "?"}" is not supported`, p);
       }
     }
-    if (path === undefined || !path.startsWith(`/${this.mod}/`) || path.endsWith("/")) {
+    const pathInfo = assetPathOf(node, "blueprint");
+    if (pathInfo === undefined) {
+      this.sink.error("ABFC2001", `@blueprint path of ${name} must be a string literal under "/${this.mod}/"`, opts ?? bp);
+      return;
+    }
+    if (reportPathProblems(this.sink, pathInfo)) return;
+    const path = pathInfo.path;
+    if (path === undefined) {
       this.sink.error("ABFC2001", `@blueprint path of ${name} must be a string literal under "/${this.mod}/"`, opts ?? bp);
       return;
     }
@@ -309,6 +347,15 @@ class HirBuilder {
     } else if (!widget && parentIsWidget) {
       this.sink.error("ABFC2065", `${name} extends UserWidget: add kind: "widget" to @blueprint`, node.name ?? node);
     }
+    const director = this.directorOf(node, widget || parentIsWidget, classManagerRowNode);
+    if (director !== undefined && !this.derivesFromComponent(parentType0)) {
+      const dec = (ts.getDecorators(node) ?? []).find((d) => runtimeName(this.checker, d.expression) === "director")!;
+      this.sink.warning("ABFC2089", `${name} has @director but does not derive from ActorComponent: the game adds every director as a component of its AI director, so ${parentIsActor ? "an Actor" : "this"} class is never started. Extend ActorComponent.`, dec);
+    }
+    if (!(ts.getDecorators(node) ?? []).some((d) => runtimeName(this.checker, d.expression) === "director") && classManagerRow !== undefined && classManagerRowNode !== undefined && pathContextOf(node.getSourceFile())?.migrationHints === true) {
+      this.sink.warning("ABFC2076", `classManagerRow is deprecated; use @director("${classManagerRow.slice(classManagerRow.lastIndexOf("/") + 1)}")`, classManagerRowNode);
+      this.sink.diagnostics[this.sink.diagnostics.length - 1]!.fix = "replace classManagerRow with @director (quick fix)";
+    }
     for (const o of defaultOpts) {
       if (ACTOR_ONLY_OPTIONS.has(o.key) && !parentIsActor) {
         this.sink.error("ABFC2062", `@blueprint option "${o.key}" only applies to an Actor, but ${name} does not derive from Actor`, o.node);
@@ -320,14 +367,18 @@ class HirBuilder {
     const cls: HirClass = {
       name,
       path,
+      pathDerived: pathInfo.explicit === undefined,
       classPath: classPathOf(path),
       parent,
+      family: parentIsActor ? "actor" : parentIsWidget || widget ? "widget" : this.derivesFrom(parentType0, ACTOR_COMPONENT) ? "component" : "object",
       span: this.sp(node.name ?? node),
       events: [],
       fields: [],
       manualUnits: this.manualUnits(node),
+      hybrid: this.isHybrid(node),
       defaults,
       ...(classManagerRow !== undefined ? { classManagerRow } : {}),
+      ...(director !== undefined ? { director } : {}),
       ...(widget ? { kind: "widget" as const } : {}),
     };
     this.classMeta[cls.classPath] = widget ? WIDGET_META : BLUEPRINT_META;
@@ -335,6 +386,8 @@ class HirBuilder {
     // Signatures first: a call or delegate reference may point to an event declared further down.
     this.cls = cls;
     this.ownSigs = new Map();
+    this.ownCalls = new Map();
+    this.fnNames = new Map();
     const parentType = this.checker.getDeclaredTypeOfSymbol(resolveAlias(this.checker, extSym!));
     const methodKind = (m: ts.MethodDeclaration): "event" | "override" | undefined => {
       const names = (ts.getDecorators(m) ?? []).map((d) => runtimeName(this.checker, d.expression));
@@ -352,7 +405,24 @@ class HirBuilder {
     for (const m of node.members) {
       if (!ts.isMethodDeclaration(m) || !ts.isIdentifier(m.name) || !m.body) continue;
       const kind = methodKind(m);
-      if (kind === undefined) continue;
+      if (kind === undefined) {
+        if ((ts.getDecorators(m) ?? []).length > 0 || !this.functionAllowed(m, parentType)) continue;
+        const fsig = this.signature(m, "function", parentType);
+        if (fsig) {
+          this.ownSigs.set(m.name.text, fsig);
+          this.fnNames.set(m.name.text, m.name);
+        }
+        continue;
+      }
+      if (kind === "event" && this.shadowsParentEvent(m, parentType)) continue; // ABFC2078 reported, not lowered
+      if (kind === "override" && m.name.text === "UserConstructionScript") {
+        this.sink.error(
+          "ABFC2083",
+          "UserConstructionScript cannot be overridden: Unreal refuses a Construction Script event node (ABFC6001). Put the logic in an @override of ReceiveBeginPlay or in a custom @event.",
+          m.name,
+        );
+        continue;
+      }
       const sig = this.signature(m, kind, parentType);
       if (sig) this.ownSigs.set(m.name.text, sig);
     }
@@ -367,9 +437,23 @@ class HirBuilder {
           } else if (sig && sig.node === m) {
             cls.events.push(this.event(m, cls, sig));
           }
+        } else if ((ts.getDecorators(m) ?? []).length > 0) {
+          this.sink.error("ABFC2099", `method ${m.name.getText()} has an unsupported decorator (only @event and @override are supported on a method)`, m.name);
+        } else if (ts.isPrivateIdentifier(m.name)) {
+          this.sink.error("ABFC2099", "private names (#x) are not supported; use the private keyword", m.name);
+        } else if (!ts.isIdentifier(m.name)) {
+          this.sink.error("ABFC2099", "a method needs an identifier name", m.name);
+        } else if (!m.body) {
+          this.sink.error("ABFC2099", `method ${m.name.text} needs a body`, m.name);
         } else {
-          this.sink.error("ABFC2099", `method ${m.name.getText()} is not supported (only @event and @override methods)`, m.name);
+          const sig = this.ownSigs.get(m.name.text);
+          if (sig && sig.node === m) cls.events.push(this.event(m, cls, sig));
+          // else: the signature pass reported why the function is not supported
         }
+        continue;
+      }
+      if (ts.isGetAccessorDeclaration(m) || ts.isSetAccessorDeclaration(m)) {
+        this.sink.error("ABFC2099", "getters and setters are not supported; write a method (getX(): T)", m.name);
         continue;
       }
       if (ts.isPropertyDeclaration(m) && ts.isIdentifier(m.name) && this.isDesignerWidget(node, m.name.text)) {
@@ -379,7 +463,196 @@ class HirBuilder {
       if (ts.isPropertyDeclaration(m) && !isLegacyProperty(m)) continue; // own field: checked and recorded above
       this.sink.error("ABFC2099", `class member of kind ${ts.SyntaxKind[m.kind]} is not supported`, m);
     }
+    this.checkRecursion();
     this.classes.push(cls);
+  }
+
+  /**
+   * ABFC2085: a call cycle among the owned units of the class that contains a function. A function has no local variables in bp_apply (its
+   * temporaries are member variables), so a recursive call would overwrite them. Strongly connected components (Tarjan) of the call graph:
+   * one error per component that has a cycle and contains a function (also when the cycle runs through events), at the first function of
+   * the component in sorted order.
+   */
+  private checkRecursion(): void {
+    const succ = (u: string): string[] => [...(this.ownCalls.get(u) ?? [])].sort();
+    const index = new Map<string, number>();
+    const low = new Map<string, number>();
+    const onStack = new Set<string>();
+    const stack: string[] = [];
+    const sccs: string[][] = [];
+    let counter = 0;
+    const visit = (u: string): void => {
+      index.set(u, counter);
+      low.set(u, counter);
+      counter++;
+      stack.push(u);
+      onStack.add(u);
+      for (const v of succ(u)) {
+        if (!index.has(v)) {
+          visit(v);
+          low.set(u, Math.min(low.get(u)!, low.get(v)!));
+        } else if (onStack.has(v)) low.set(u, Math.min(low.get(u)!, index.get(v)!));
+      }
+      if (low.get(u) === index.get(u)) {
+        const comp: string[] = [];
+        for (;;) {
+          const w = stack.pop()!;
+          onStack.delete(w);
+          comp.push(w);
+          if (w === u) break;
+        }
+        sccs.push(comp);
+      }
+    };
+    for (const u of [...this.ownCalls.keys()].sort()) if (!index.has(u)) visit(u);
+
+    const found: { fn: string; path: string[] }[] = [];
+    for (const comp of sccs) {
+      const members = new Set(comp);
+      const fn = [...comp].sort().find((n) => this.fnNames.has(n));
+      if (fn === undefined) continue;
+      if (comp.length === 1 && !succ(fn).includes(fn)) continue;
+      // shortest way from fn back to fn inside the component (sorted, so deterministic)
+      const prev = new Map<string, string>();
+      const queue = [fn];
+      let closing: string | undefined;
+      for (let i = 0; i < queue.length && closing === undefined; i++) {
+        for (const v of succ(queue[i]!)) {
+          if (!members.has(v)) continue;
+          if (v === fn) {
+            closing = queue[i];
+            break;
+          }
+          if (!prev.has(v)) {
+            prev.set(v, queue[i]!);
+            queue.push(v);
+          }
+        }
+      }
+      const path: string[] = [];
+      for (let n = closing; n !== undefined && n !== fn; n = prev.get(n)) path.unshift(n);
+      found.push({ fn, path: [fn, ...path, fn] });
+    }
+    found.sort((x, y) => (x.fn < y.fn ? -1 : x.fn > y.fn ? 1 : 0));
+    for (const { fn, path } of found) {
+      this.sink.error(
+        "ABFC2085",
+        `${fn} calls itself (${path.join(" -> ")}). Recursion is not supported: a function's temporaries are member variables, so a recursive call would overwrite them. Rewrite it as a loop.`,
+        this.fnNames.get(fn),
+      );
+    }
+  }
+
+  /**
+   * Checks that decide whether an undecorated method can become a function at all (static, generic, async, name of a parent member);
+   * reports and returns false when not.
+   */
+  private functionAllowed(m: ts.MethodDeclaration, parentType: ts.Type): boolean {
+    const name = (m.name as ts.Identifier).text;
+    const mods = ts.getModifiers(m) ?? [];
+    if (mods.some((k) => k.kind === ts.SyntaxKind.StaticKeyword)) {
+      this.sink.error("ABFC2099", `static method ${name}: static methods are not supported: a Blueprint function belongs to an instance`, m.name);
+      return false;
+    }
+    if (m.typeParameters !== undefined && m.typeParameters.length > 0) {
+      this.sink.error("ABFC2099", `method ${name}: generic methods are not supported`, m.name);
+      return false;
+    }
+    if (mods.some((k) => k.kind === ts.SyntaxKind.AsyncKeyword)) {
+      this.sink.error("ABFC2086", `${name} is async: a Blueprint function finishes in one frame, so it cannot await; make it an @event`, m.name);
+      return false;
+    }
+    const prop = this.checker.getPropertyOfType(parentType, name);
+    const reserved = name === "UserConstructionScript" || name.startsWith("ExecuteUbergraph");
+    if (prop !== undefined || reserved || mods.some((k) => k.kind === ts.SyntaxKind.OverrideKeyword)) {
+      const owner = prop !== undefined ? functionInfo(prop)?.owner : undefined;
+      this.sink.error(
+        "ABFC2087",
+        `method ${name} has the name of ${owner ?? "a member of the parent class"}; a Blueprint function cannot reuse it. Rename the method, or use @override to implement a parent event.`,
+        m.name,
+      );
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * The `@director("Row")` of a class: undefined when there is none or it has an error (reported here). `notAllowed` is true for a
+   * widget class or a `@struct` (ABFC2074).
+   */
+  private directorOf(node: ts.ClassDeclaration, notAllowed: boolean, classManagerRowNode: ts.Node | undefined): { row: string; asset: string; tag?: string } | undefined {
+    const decs = (ts.getDecorators(node) ?? []).filter((d) => runtimeName(this.checker, d.expression) === "director");
+    if (decs.length === 0) return undefined;
+    const dec = decs[0]!;
+    if (decs.length > 1) {
+      this.sink.error("ABFC2061", "one @director per class", decs[1]!);
+      return undefined;
+    }
+    if (notAllowed) {
+      this.sink.error("ABFC2074", "@director only applies to a non-widget @blueprint class", dec);
+      return undefined;
+    }
+    const args = ts.isCallExpression(dec.expression) ? dec.expression.arguments : undefined;
+    const arg = args !== undefined && args.length >= 1 && args.length <= 2 ? args[0]! : undefined;
+    if (arg === undefined || !(ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg))) {
+      this.sink.error("ABFC2061", "@director takes the row name as a string literal", arg ?? dec);
+      return undefined;
+    }
+    const row = arg.text;
+    const why = segmentProblem(row);
+    if (why !== null) {
+      this.sink.error("ABFC2073", `row name "${row}" ${why}`, arg);
+      return undefined;
+    }
+    if (classManagerRowNode !== undefined) {
+      this.sink.error("ABFC2061", "use @director or classManagerRow, not both", classManagerRowNode);
+      return undefined;
+    }
+    const tagArg = args![1];
+    let tag: string | undefined;
+    if (tagArg !== undefined && !(ts.isIdentifier(tagArg) && tagArg.text === "undefined")) {
+      tag = this.gameplayTagOf(tagArg);
+      if (tag === undefined) return undefined;
+    }
+    if (tag === undefined) {
+      const suggested = DIRECTOR_TAG_PREFIX + row;
+      this.sink.warning(
+        "ABFC2079",
+        `@director("${row}") has no gameplay tag: a new class-manager row then has no tag and the director never starts (an existing row keeps its tag). Add "${suggested}".`,
+        dec,
+        { tag: suggested },
+      );
+    } else if (!tag.startsWith(DIRECTOR_TAG_PREFIX)) {
+      this.sink.warning("ABFC2081", `gameplay tag ${tag} is not under ${DIRECTOR_TAG_PREFIX}; the game may never start a director with another tag`, tagArg);
+    }
+    const table = pathContextOf(node.getSourceFile())?.classManagerTable ?? DEFAULT_CLASS_MANAGER_TABLE;
+    return { row, asset: joinModPath(this.mod, `${table}/${row}`), ...(tag !== undefined ? { tag } : {}) };
+  }
+
+  /**
+   * The gameplay tag named by the second `@director` argument: a string literal, or an expression whose type has a string-literal
+   * `__gameplayTag` property (a `GameplayTag<"x.y">` constant of the generated `.abfc/tags.d.ts`). Anything else, or a malformed
+   * tag, is ABFC2080 and undefined.
+   */
+  private gameplayTagOf(arg: ts.Expression): string | undefined {
+    let tag: string | undefined;
+    if (ts.isStringLiteral(arg) || ts.isNoSubstitutionTemplateLiteral(arg)) {
+      tag = arg.text;
+    } else {
+      const prop = this.checker.getPropertyOfType(this.checker.getTypeAtLocation(arg), "__gameplayTag");
+      const type = prop === undefined ? undefined : this.checker.getTypeOfSymbolAtLocation(prop, arg);
+      if (type !== undefined && type.isStringLiteral()) tag = type.value;
+    }
+    if (tag === undefined) {
+      this.sink.error("ABFC2080", "the @director gameplay tag must be a string literal or a GameplayTag constant such as ClassManager.EntityDirector.MyDirector (run abfc stubs to generate the constants)", arg);
+      return undefined;
+    }
+    const why = gameplayTagProblem(tag);
+    if (why !== null) {
+      this.sink.error("ABFC2080", `gameplay tag "${tag}" ${why}`, arg);
+      return undefined;
+    }
+    return tag;
   }
 
   /**
@@ -388,13 +661,16 @@ class HirBuilder {
    */
   private structDecl(node: ts.ClassDeclaration, dec: ts.Decorator): void {
     const name = node.name?.text ?? "(anonymous)";
-    const before = this.sink.diagnostics.length;
+    const errors = (): number => this.sink.diagnostics.filter((d) => d.severity === "error").length;
+    const before = errors();
     const bad = (why: string, at: ts.Node): void => this.sink.error("ABFC2046", why, at);
-    const s = tsStructOfDecl(node);
-    if (s === undefined || !s.path.startsWith(`/${this.mod}/`)) {
-      bad(`@struct path of ${name} must be a string literal under "/${this.mod}/"`, dec);
+    const pathInfo = assetPathOf(node, "struct");
+    // a path outside the mod stays ABFC2046 for structs (the code structs have always used)
+    if (pathInfo === undefined || reportPathProblems(this.sink, pathInfo, (c) => (c === "ABFC2001" ? "ABFC2046" : c)) || pathInfo.path === undefined) {
+      if (pathInfo === undefined || pathInfo.problems.every((p) => p.severity !== "error")) bad(`@struct path of ${name} must be a string literal under "/${this.mod}/"`, dec);
       return;
     }
+    const s = { path: pathInfo.path, objectPath: `${pathInfo.path}.${pathInfo.path.slice(pathInfo.path.lastIndexOf("/") + 1)}` };
     if (node.heritageClauses !== undefined && node.heritageClauses.length > 0) bad(`@struct ${name} cannot extend or implement anything`, node.heritageClauses[0]!);
     const fields: HirStruct["fields"] = [];
     const FORM = "a struct field is declared as `Name!: Type;` (no initializer, not static/readonly/optional)";
@@ -423,7 +699,7 @@ class HirBuilder {
       }
       const type = bpTypeOf(this.checker, tsType);
       if (type === undefined) {
-        bad(`field ${shown}: field type has no Blueprint equivalent`, m.name);
+        bad(`field ${shown}: ${(tsType.flags & ts.TypeFlags.EnumLike) !== 0 ? TS_ENUM_HINT : "field type has no Blueprint equivalent"}`, m.name);
         continue;
       }
       try {
@@ -441,14 +717,15 @@ class HirBuilder {
       }
       fields.push({ name: m.name.text, type, memberName: udsMemberName(s.objectPath, m.name.text, at), span: this.sp(m.name) });
     }
-    if (fields.length === 0 && this.sink.diagnostics.length === before) bad(`@struct ${name} needs at least one field`, node.name ?? node);
-    if (this.sink.diagnostics.length > before) return;
-    this.structs.push({ name, path: s.path, objectPath: s.objectPath, fields, span: this.sp(node.name ?? node) });
+    if (fields.length === 0 && errors() === before) bad(`@struct ${name} needs at least one field`, node.name ?? node);
+    if (errors() > before) return;
+    this.structs.push({ name, path: s.path, pathDerived: pathInfo.explicit === undefined, objectPath: s.objectPath, fields, span: this.sp(node.name ?? node) });
   }
 
   /**
-   * An own field: `Name!: Type;` with no initializer and no modifiers other than `public`. Reports ABFC2047 and returns undefined
-   * for any other property declaration, a type without a Blueprint equivalent, or a name that collides with an inherited member.
+   * An own field: `Name!: Type;` or `Name: Type = <literal>;` with no modifiers other than `public`; a literal initializer becomes
+   * the variable's default. Reports ABFC2047 and returns undefined for any other property declaration, an initializer that is not a
+   * literal of the field type, a type without a Blueprint equivalent, or a name that collides with an inherited member.
    */
   private ownField(node: ts.ClassDeclaration, m: ts.PropertyDeclaration): HirField | undefined {
     const shown = m.name.getText();
@@ -456,10 +733,10 @@ class HirBuilder {
       this.sink.error("ABFC2047", `field ${shown}: ${why}`, m.name);
       return undefined;
     };
-    const FORM = "an own field is declared as `Name!: Type;` (no initializer, not static/readonly/optional)";
+    const FORM = "an own field is declared as `Name!: Type;` or `Name: Type = <literal>;` (not static/readonly/optional)";
     if (!ts.isIdentifier(m.name)) return bad(FORM);
     const mods = (ts.getModifiers(m) ?? []).filter((x) => x.kind !== ts.SyntaxKind.PublicKeyword);
-    if (mods.length > 0 || m.questionToken !== undefined || m.exclamationToken === undefined || m.initializer !== undefined || (ts.getDecorators(m) ?? []).length > 0 || m.type === undefined) {
+    if (mods.length > 0 || m.questionToken !== undefined || (m.exclamationToken !== undefined) === (m.initializer !== undefined) || (ts.getDecorators(m) ?? []).length > 0 || m.type === undefined) {
       return bad(FORM);
     }
     const tsFieldType = this.checker.getTypeFromTypeNode(m.type);
@@ -469,7 +746,7 @@ class HirBuilder {
         this.sink.error("ABFC2043", `field ${shown}: unsupported Map/Set type; keys and set elements are int, int64, byte, name or string, and a map value is any single (non-container) type`, m.name);
         return undefined;
       }
-      return bad("field type has no Blueprint equivalent");
+      return bad((tsFieldType.flags & ts.TypeFlags.EnumLike) !== 0 ? TS_ENUM_HINT : "field type has no Blueprint equivalent");
     }
     try {
       parseBpType(type);
@@ -488,12 +765,66 @@ class HirBuilder {
     if (ctype?.isClassOrInterface() && this.checker.getBaseTypes(ctype).some((b) => this.checker.getPropertyOfType(b, m.name.getText()) !== undefined)) {
       return bad("the name collides with a member of the parent class or a hand-made member of the asset; rename the field");
     }
-    return { name: m.name.text, type, span: this.sp(m.name) };
+    let def: string | undefined;
+    if (m.initializer !== undefined) {
+      def = this.fieldDefault(m.initializer, type, shown);
+      if (def === undefined) return undefined;
+    }
+    return { name: m.name.text, type, ...(def !== undefined ? { default: def } : {}), span: this.sp(m.name) };
+  }
+
+  /** The Unreal default-value text of an own field's literal initializer, or undefined (after reporting ABFC2047/ABFC2015) when it is not a literal of the field type. */
+  private fieldDefault(init: ts.Expression, type: BpType, shown: string): string | undefined {
+    const e = stripParens(init);
+    let num: number | undefined;
+    if (ts.isNumericLiteral(e)) num = Number(e.text);
+    else if (ts.isPrefixUnaryExpression(e) && e.operator === ts.SyntaxKind.MinusToken) {
+      const operand = stripParens(e.operand);
+      if (ts.isNumericLiteral(operand)) num = -Number(operand.text);
+    }
+    if (type === "float" || type === "double" || type === "real") {
+      if (num !== undefined && Number.isFinite(num)) return String(num);
+    } else if (type === "int" || type === "int64" || type === "byte") {
+      if (num !== undefined && Number.isInteger(num)) {
+        const [lo, hi] = type === "int" ? [-2147483648, 2147483647] : type === "byte" ? [0, 255] : [undefined, undefined];
+        const inRange = lo === undefined || hi === undefined ? Number.isSafeInteger(num) : num >= lo && num <= hi;
+        if (inRange) return String(num);
+        this.sink.error("ABFC2047", `field ${shown}: ${init.getText()} is out of range for ${type}`, init);
+        return undefined;
+      }
+    } else if (type === "bool") {
+      if (e.kind === ts.SyntaxKind.TrueKeyword) return "true";
+      if (e.kind === ts.SyntaxKind.FalseKeyword) return "false";
+    } else if (type === "string" || type === "name") {
+      if (ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e)) return e.text;
+    } else if (type.startsWith("enum:") && ts.isStringLiteral(e)) {
+      const ctx = this.checker.getContextualType(e);
+      if (ctx) {
+        const members = ctx.isUnion() ? ctx.types : [ctx];
+        const known = members.filter((x): x is ts.StringLiteralType => x.isStringLiteral()).map((x) => x.value);
+        if (known.length > 0 && !known.includes(e.text)) {
+          this.sink.error("ABFC2015", `"${e.text}" is not a value of ${type.slice("enum:".length)} (${known.join(", ")})`, e);
+          return undefined;
+        }
+      }
+      return e.text;
+    }
+    this.sink.error(
+      "ABFC2047",
+      `field ${shown}: the initializer must be a literal of the field type: a number (int, int64, byte, float, double), true or false (boolean), a string (string, name) or an enum value; struct, object, array, Map, Set and text fields have no default`,
+      init,
+    );
+    return undefined;
   }
 
   /** True when the class or one of its base classes is an engine Actor (`@bpPath /Script/<Module>.Actor`). */
   private derivesFromActor(type: ts.Type): boolean {
     return this.derivesWhere(type, (p) => /^\/Script\/[^.]+\.Actor$/.test(p));
+  }
+
+  /** True when the class or one of its base classes is an engine ActorComponent (`@bpPath /Script/<Module>.ActorComponent`). */
+  private derivesFromComponent(type: ts.Type): boolean {
+    return this.derivesWhere(type, (p) => /^\/Script\/[^.]+\.ActorComponent$/.test(p));
   }
 
   /** True when the class or one of its base classes has `@bpPath <classPath>`. */
@@ -526,8 +857,29 @@ class HirBuilder {
     return walk(type);
   }
 
+  /**
+   * ABFC2078: an `@event` method named like a Blueprint member of the parent class (or carrying the TS `override` modifier) would create a
+   * custom event with a native name, which Unreal refuses. Reported at the `@event` decorator with a fix to `@override`; true = reported.
+   * Only the parent's declared type counts (not the class's own `_Manual` merge), so hand-made events are not affected.
+   */
+  private shadowsParentEvent(m: ts.MethodDeclaration, parentType: ts.Type): boolean {
+    const name = (m.name as ts.Identifier).text;
+    const prop = this.checker.getPropertyOfType(parentType, name);
+    const hasOverride = (ts.getModifiers(m) ?? []).some((k) => k.kind === ts.SyntaxKind.OverrideKeyword);
+    if (!((prop !== undefined && functionInfo(prop) !== undefined) || hasOverride)) return false;
+    const dec = (ts.getDecorators(m) ?? []).find((x) => runtimeName(this.checker, x.expression) === "event");
+    const owner = prop !== undefined ? functionInfo(prop)?.owner : undefined;
+    this.sink.error(
+      "ABFC2078",
+      `@event ${name} would create a custom event named like the parent's ${name}${owner !== undefined ? ` (${owner})` : ""}; Unreal refuses that (ABFC6001). Use @override to implement the parent's event.`,
+      dec ?? m.name,
+      { fix: "useOverride" },
+    );
+    return true;
+  }
+
   /** Parameters of an owned method; for `@override` they come from the parent stub (`@bpParam`), not from the annotations. */
-  private signature(m: ts.MethodDeclaration, kind: "event" | "override", parentType: ts.Type): OwnSig | undefined {
+  private signature(m: ts.MethodDeclaration, kind: "event" | "override" | "function", parentType: ts.Type): OwnSig | undefined {
     const name = (m.name as ts.Identifier).text;
     const params: HirEvent["params"] = [];
     const paramSyms: OwnSig["paramSyms"] = [];
@@ -536,13 +888,22 @@ class HirBuilder {
         this.sink.error("ABFC2099", "destructured parameters are not supported", p);
         continue;
       }
+      if (kind === "function") {
+        if (p.questionToken || p.initializer) {
+          this.sink.error("ABFC2099", `parameter ${p.name.text}: optional parameters and default values are not supported in a function`, p);
+        }
+        if (p.dotDotDotToken) this.sink.error("ABFC2099", `parameter ${p.name.text}: rest parameters are not supported`, p);
+      }
       const t = this.checker.getTypeAtLocation(p);
       let type = bpTypeOf(this.checker, t);
       if (this.containerKind(t) !== undefined) {
         this.sink.error("ABFC2043", `parameter ${p.name.text}: Map and Set parameters are not supported`, p);
         type = "unknown";
-      } else if (type === undefined && kind === "event") {
-        if (t.flags & ts.TypeFlags.NumberLike) {
+      } else if (type === undefined && kind !== "override") {
+        if (t.flags & ts.TypeFlags.EnumLike) {
+          this.sink.error("ABFC2099", `parameter ${p.name.text}: ${TS_ENUM_HINT}`, p);
+          type = "unknown";
+        } else if (t.flags & ts.TypeFlags.NumberLike) {
           this.sink.error("ABFC2014", `number kind of parameter ${p.name.text} is not inferable: use int, int64, byte, float or double`, p);
           type = "number";
         } else {
@@ -555,6 +916,33 @@ class HirBuilder {
       paramSyms.push(this.checker.getSymbolAtLocation(p.name));
     }
     if (kind === "event") return { node: m, kind, params, paramSyms };
+    if (kind === "function") {
+      const decl = this.checker.getSignatureFromDeclaration(m);
+      const rt = decl ? this.checker.getReturnTypeOfSignature(decl) : undefined;
+      let returnType: BpType | undefined;
+      if (rt !== undefined && !(rt.flags & (ts.TypeFlags.Void | ts.TypeFlags.Undefined | ts.TypeFlags.Never))) {
+        returnType = bpTypeOf(this.checker, rt);
+        if (this.containerKind(rt) !== undefined) {
+          this.sink.error("ABFC2043", `the return type of ${name}: Map and Set are not supported`, m.type ?? m.name);
+          returnType = "unknown";
+        } else if (returnType === undefined) {
+          if (rt.flags & ts.TypeFlags.NumberLike) {
+            this.sink.error("ABFC2014", `the return type of ${name} is not inferable: use int, int64, byte, float or double`, m.type ?? m.name);
+          } else {
+            this.sink.error("ABFC2099", `the return type of ${name} has no Blueprint equivalent`, m.type ?? m.name);
+          }
+          returnType = "unknown";
+        }
+        this.noteTypes(rt);
+      }
+      const mods = ts.getModifiers(m) ?? [];
+      const access = mods.some((k) => k.kind === ts.SyntaxKind.PrivateKeyword)
+        ? "private"
+        : mods.some((k) => k.kind === ts.SyntaxKind.ProtectedKeyword)
+          ? "protected"
+          : "public";
+      return { node: m, kind, params, paramSyms, ...(returnType !== undefined ? { returnType } : {}), access };
+    }
 
     const prop = this.checker.getPropertyOfType(parentType, name);
     const fi = prop ? functionInfo(prop) : undefined;
@@ -567,6 +955,11 @@ class HirBuilder {
       return undefined;
     }
     return { node: m, kind, params: fi.params.map((p) => ({ name: p.pin, type: p.type })), paramSyms, overrideOf: fi.owner };
+  }
+
+  private isHybrid(node: ts.ClassDeclaration): boolean {
+    const sym = node.name ? this.checker.getSymbolAtLocation(node.name) : undefined;
+    return (sym?.declarations ?? []).some((d) => ts.isInterfaceDeclaration(d));
   }
 
   private manualUnits(node: ts.ClassDeclaration): string[] {
@@ -594,6 +987,9 @@ class HirBuilder {
       const p = sig.params[i];
       if (sym && p) this.params.set(sym, { name: p.name, type: p.type });
     });
+    this.unitKind = sig.kind;
+    this.unitName = name.text;
+    this.unitReturn = sig.returnType;
     const body = this.stmts(m.body!.statements);
     const doc = docOf(m);
     return {
@@ -602,6 +998,7 @@ class HirBuilder {
       ...(sig.overrideOf !== undefined ? { overrideOf: sig.overrideOf } : {}),
       ...(doc !== undefined ? { doc } : {}),
       params: sig.params,
+      ...(sig.kind === "function" ? { ...(sig.returnType !== undefined ? { returnType: sig.returnType } : {}), access: sig.access ?? "public" } : {}),
       body,
       span: this.sp(name),
     };
@@ -655,12 +1052,19 @@ class HirBuilder {
       const els = node.elseStatement ? this.block(node.elseStatement) : [];
       return { k: "if", cond, then, else: els, span: this.sp(node) };
     }
+    if (ts.isReturnStatement(node) && this.jumps.callback) return this.callbackReturn(node);
     if (ts.isReturnStatement(node)) {
-      if (node.expression) f.fail("ABFC2099", "returning a value is not supported", node);
-      return { k: "return", span: this.sp(node) };
+      if (!node.expression) return { k: "return", span: this.sp(node) };
+      if (this.unitKind !== "function") {
+        f.fail("ABFC2099", "an @event or @override cannot return a value; put the logic in an undecorated method (a Blueprint function) to return one", node);
+      }
+      if (this.unitReturn === undefined) f.fail("ABFC2099", "a void function cannot return a value", node);
+      const value = this.expr(node.expression, this.unitReturn);
+      return { k: "return", value, span: this.sp(node) };
     }
     if (ts.isForOfStatement(node)) return this.forOf(node);
     if (ts.isForStatement(node)) return this.forCount(node);
+    if (ts.isBreakStatement(node) || ts.isContinueStatement(node)) return this.jump(node);
     if (ts.isTryStatement(node) || ts.isThrowStatement(node)) f.fail("ABFC2020", "try/catch/throw are not supported", node);
     if (ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) f.fail("ABFC2020", "local functions and classes are not supported", node);
     return f.fail("ABFC2099", `statement of kind ${ts.SyntaxKind[node.kind]} is not supported`, node);
@@ -679,7 +1083,7 @@ class HirBuilder {
     if (declType.flags & ts.TypeFlags.Any) f.fail("ABFC2020", "'any' is not supported", d.name);
     let init: HirExpr;
     try {
-      init = this.expr(d.initializer);
+      init = this.expr(d.initializer, d.type ? bpTypeOf(this.checker, declType) : undefined);
     } catch (e) {
       if (e instanceof Fail && sym) this.locals.set(sym, { id: -1, name: d.name.text, type: "unknown", poison: true });
       throw e;
@@ -689,6 +1093,18 @@ class HirBuilder {
     const fn = init.type === "result" ? this.callInfo.get(init) : undefined;
     if (sym) this.locals.set(sym, { id, name: d.name.text, type: init.type, poison: false, ...(fn ? { fn } : {}) });
     return { k: "const", local: id, name: d.name.text, init, uses: sym ? this.countUses(sym, d.name) : 0, span: this.sp(node) };
+  }
+
+  /** `await`: ABFC2086 inside a function (it finishes in one frame), otherwise unsupported. */
+  private awaitFail(node: ts.Node): never {
+    if (this.unitKind === "function") {
+      return this.sink.fail(
+        "ABFC2086",
+        `await cannot be used inside the function ${this.unitName}: a Blueprint function finishes in one frame; move the latent call into an @event`,
+        node,
+      );
+    }
+    return this.sink.fail("ABFC2099", "await is not supported", node);
   }
 
   private countUses(sym: ts.Symbol, declName: ts.Node): number {
@@ -709,13 +1125,16 @@ class HirBuilder {
       if (op === ts.SyntaxKind.EqualsToken) return this.assign(e);
       if (op >= ts.SyntaxKind.FirstAssignment && op <= ts.SyntaxKind.LastAssignment) f.fail("ABFC2099", "compound assignment is not supported", e);
     }
-    if (ts.isAwaitExpression(e)) f.fail("ABFC2099", "await is not supported", e);
+    if (ts.isAwaitExpression(e)) this.awaitFail(e);
     if (ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression) && this.containerKind(e.expression.expression) !== undefined) {
       const op = this.containerStatement(e, e.expression, this.sp(node));
       if (op !== undefined) return op;
     }
     if (ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression) && ARRAY_MUTATORS.has(e.expression.name.text) && this.isArrayNode(e.expression.expression)) {
       return this.arrayMutation(e, e.expression, this.sp(node));
+    }
+    if (ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression) && e.expression.name.text === "forEach" && this.isArrayNode(e.expression.expression)) {
+      return this.forEachCall(e, e.expression, this.sp(node));
     }
     const h = this.expr(e);
     if (h.k !== "call" && h.k !== "optional" && h.k !== "callOwn") f.fail("ABFC2099", "this expression statement has no effect", e);
@@ -849,6 +1268,9 @@ class HirBuilder {
     return { k: "arrayOp", op: "removeAt", array: self, index, span };
   }
 
+  /** Loops around the statement being built, counted from the nearest event body or forEach callback (`callback`). */
+  private jumps: { loops: number; callback: boolean } = { loops: 0, callback: false };
+
   private forOf(node: ts.ForOfStatement): HirStmt {
     const f: DiagSink = this.sink;
     if (node.awaitModifier) f.fail("ABFC2099", "for await is not supported", node);
@@ -864,7 +1286,13 @@ class HirBuilder {
     const sym = this.checker.getSymbolAtLocation(d.name);
     const id = this.nextLocal++;
     if (sym) this.locals.set(sym, { id, name: d.name.text, type: elem, poison: false });
-    const body = this.block(node.statement);
+    this.jumps.loops++;
+    let body: HirStmt[];
+    try {
+      body = this.block(node.statement);
+    } finally {
+      this.jumps.loops--;
+    }
     return { k: "forOf", local: id, name: d.name.text, array, elem, body, span: this.sp(node) };
   }
 
@@ -889,7 +1317,13 @@ class HirBuilder {
     try {
       const cond = this.expr(node.condition, "bool", true);
       if (cond.type !== "bool") return f.fail("ABFC2012", `the condition of a for loop must be a boolean, not ${cond.type}`, node.condition);
-      const body = this.block(node.statement);
+      this.jumps.loops++;
+      let body: HirStmt[];
+      try {
+        body = this.block(node.statement);
+      } finally {
+        this.jumps.loops--;
+      }
       return { k: "forCount", counter: id, name: d.name.text, init: initE, cond, step, body, span: this.sp(node) };
     } finally {
       if (sym) this.locals.delete(sym); // the counter is not visible after the loop
@@ -917,6 +1351,67 @@ class HirBuilder {
     return undefined;
   }
 
+  private jump(node: ts.BreakStatement | ts.ContinueStatement): HirStmt {
+    const f: DiagSink = this.sink;
+    if (node.label) return f.fail("ABFC2099", "labeled break/continue is not supported", node);
+    if (this.jumps.loops === 0) {
+      if (this.jumps.callback) return f.fail("ABFC2090", "break and continue cannot leave a forEach callback; use for..of, or return; to skip to the next element", node);
+      return f.fail("ABFC2099", "break/continue outside a loop", node);
+    }
+    return { k: ts.isBreakStatement(node) ? "break" : "continue", span: this.sp(node) };
+  }
+
+  /** `return` inside a forEach callback: `return;` directly in the callback skips to the next element. */
+  private callbackReturn(node: ts.ReturnStatement): HirStmt {
+    const f: DiagSink = this.sink;
+    if (node.expression) return f.fail("ABFC2090", "a forEach callback cannot return a value", node);
+    if (this.jumps.loops > 0) return f.fail("ABFC2090", "return inside a loop of a forEach callback is not supported; use for..of with break or continue", node);
+    return { k: "continue", span: this.sp(node) };
+  }
+
+  /** `<array>.forEach((x, i) => { ... })` as a statement: the same loop as `for (const x of <array>)`, with an optional index. */
+  private forEachCall(call: ts.CallExpression, callee: ts.PropertyAccessExpression, span: Span): HirStmt {
+    const f: DiagSink = this.sink;
+    if (callee.questionDotToken || call.questionDotToken) f.fail("ABFC2090", "?.forEach is not supported", call);
+    const arg = call.arguments[0];
+    if (call.arguments.length !== 1 || !arg) return f.fail("ABFC2090", "forEach takes exactly one inline callback (no thisArg)", call);
+    const cb = stripParens(arg);
+    if (!ts.isArrowFunction(cb)) return f.fail("ABFC2090", "the forEach callback must be an inline arrow function: (x, i) => { ... }", arg);
+    if (ts.getCombinedModifierFlags(cb) & ts.ModifierFlags.Async) f.fail("ABFC2090", "an async forEach callback is not supported", cb);
+    const third = cb.parameters[2];
+    if (third) f.fail("ABFC2090", "the forEach callback takes (element) or (element, index); the array parameter is not supported", third);
+    for (const p of cb.parameters) {
+      if (!ts.isIdentifier(p.name) || p.initializer || p.dotDotDotToken) f.fail("ABFC2090", "forEach callback parameters must be plain names", p);
+    }
+    if (!ts.isBlock(cb.body)) return f.fail("ABFC2090", "the forEach callback needs a block body: (x) => { ... }", cb.body);
+    const array = this.expr(callee.expression);
+    if (!array.type.startsWith("array:")) return f.fail("ABFC2090", "forEach is only supported over Blueprint arrays", callee.expression);
+    const elem = array.type.slice("array:".length);
+    const elemParam = cb.parameters[0];
+    const id = this.nextLocal++;
+    const name = elemParam && ts.isIdentifier(elemParam.name) ? elemParam.name.text : "item";
+    if (elemParam) {
+      const sym = this.checker.getSymbolAtLocation(elemParam.name);
+      if (sym) this.locals.set(sym, { id, name, type: elem, poison: false });
+    }
+    let index: LocalId | undefined;
+    const indexParam = cb.parameters[1];
+    if (indexParam && ts.isIdentifier(indexParam.name)) {
+      index = this.nextLocal++;
+      const sym = this.checker.getSymbolAtLocation(indexParam.name);
+      if (sym) this.locals.set(sym, { id: index, name: indexParam.name.text, type: "int", poison: false });
+    }
+    const outer = this.jumps;
+    this.jumps = { loops: 0, callback: true };
+    let body: HirStmt[];
+    try {
+      body = this.block(cb.body);
+    } finally {
+      this.jumps = outer;
+    }
+    return { k: "forOf", local: id, name, array, elem, body, span, ...(index !== undefined ? { index } : {}) };
+  }
+
   // ---- expressions ----
 
   private noteTypes(type: ts.Type): void {
@@ -939,10 +1434,14 @@ class HirBuilder {
     if (ci && ci.kind === "class") this.classMeta[ci.path] = ci.meta;
   }
 
-  /** `` `Hunger ${hunger}` `` where a text is expected: FormatText. Arg names come from the substitutions. */
+  /**
+   * `` `Hunger ${hunger}` ``: FormatText where a text is expected; FormatText then Conv_TextToString where a string is
+   * expected or nothing is expected (a const). Arg names come from the substitutions.
+   */
   private formatText(node: ts.TemplateExpression, expected: BpType | undefined): HirExpr {
     const f: DiagSink = this.sink;
-    if (expected !== "text") return f.fail("ABFC2099", "a template literal is only supported where a text value is expected", node);
+    if (expected === "name") return f.fail("ABFC2099", "a template literal cannot be a name; build a string and convert it, e.g. KismetStringLibrary.Conv_StringToName(`...`)", node);
+    if (expected !== undefined && expected !== "text" && expected !== "string") return f.fail("ABFC2099", `a template literal is only supported where a text or string value is expected, not ${expected}`, node);
     const esc = (s: string): string => s.replace(/`/g, "``").replace(/[{}]/g, (c) => "`" + c);
     const allowed = new Set(["text", "string", "name", "int", "int64", "float", "double", "real", "bool"]);
     const used = new Set<string>();
@@ -961,7 +1460,7 @@ class HirBuilder {
       args.push({ name, value });
       format += `{${name}}` + esc(span.literal.text);
     });
-    return { k: "formatText", format, args, type: "text", span: this.sp(node) };
+    return { k: "formatText", format, args, type: expected === "text" ? "text" : "string", span: this.sp(node) };
   }
 
   /** `{ A: 1, B }` where the contextual type is a stub struct: MakeStruct (full literals, property assignments only). */
@@ -1083,9 +1582,10 @@ class HirBuilder {
         return this.formatText(node as ts.TemplateExpression, expected);
       case ts.SyntaxKind.ObjectLiteralExpression:
         return this.makeStruct(node as ts.ObjectLiteralExpression, expected);
+      case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
       case ts.SyntaxKind.StringLiteral:
-        if (expected !== undefined && expected.startsWith("enum:")) return this.enumLit(node as ts.StringLiteral, expected);
-        return this.lit(node, (node as ts.StringLiteral).text, expected !== undefined && STRINGY.has(expected) ? expected : "string");
+        if (expected !== undefined && expected.startsWith("enum:")) return this.enumLit(node as ts.StringLiteral | ts.NoSubstitutionTemplateLiteral, expected);
+        return this.lit(node, (node as ts.StringLiteral | ts.NoSubstitutionTemplateLiteral).text, expected !== undefined && STRINGY.has(expected) ? expected : "string");
       case ts.SyntaxKind.Identifier: {
         if (expected !== undefined && expected.startsWith("class:")) {
           const ci = this.classArg(node as ts.Identifier);
@@ -1134,19 +1634,17 @@ class HirBuilder {
         return f.fail("ABFC2099", "array literals are not supported", node);
       }
       case ts.SyntaxKind.AwaitExpression:
-        return f.fail("ABFC2099", "await is not supported", node);
+        return this.awaitFail(node);
       case ts.SyntaxKind.ConditionalExpression:
         return f.fail("ABFC2099", "the conditional operator `?:` is only supported as the whole right-hand side of this.X = c ? a : b", node);
-      case ts.SyntaxKind.TemplateExpression:
-      case ts.SyntaxKind.NoSubstitutionTemplateLiteral:
       case ts.SyntaxKind.TaggedTemplateExpression:
-        return f.fail("ABFC2099", "template strings are not supported", node);
+        return f.fail("ABFC2099", "tagged template strings are not supported", node);
       default:
         return f.fail("ABFC2099", `expression of kind ${ts.SyntaxKind[node.kind]} is not supported`, node);
     }
   }
 
-  private enumLit(node: ts.StringLiteral, expected: BpType): HirExpr {
+  private enumLit(node: ts.StringLiteral | ts.NoSubstitutionTemplateLiteral, expected: BpType): HirExpr {
     const ctx = this.checker.getContextualType(node);
     if (ctx) {
       const members = ctx.isUnion() ? ctx.types : [ctx];
@@ -1334,12 +1832,22 @@ class HirBuilder {
         if (!p) f.fail("ABFC2099", `too many arguments for ${callee.name.text}`, a);
         ownArgs.push({ pin: p.name, value: this.expr(a, p.type) });
       });
-      return { k: "callOwn", name: callee.name.text, args: ownArgs, type: "void", span: sp };
+      const callees = this.ownCalls.get(this.unitName) ?? new Set<string>();
+      callees.add(callee.name.text);
+      this.ownCalls.set(this.unitName, callees);
+      return { k: "callOwn", name: callee.name.text, args: ownArgs, type: own.returnType ?? "void", span: sp };
     }
 
     const sym = this.checker.getSymbolAtLocation(callee.name);
     const fi = sym ? (functionInfo(sym) ?? ownEventInfo(this.checker, sym)) : undefined;
     if (!fi) return f.fail("ABFC2060", `function ${callee.name.text} has no Blueprint metadata (@bpPath)`, callee.name);
+    if (this.unitKind === "function" && fi.latent) {
+      f.fail(
+        "ABFC2086",
+        `${fi.name} is a latent action and cannot be called inside the function ${this.unitName} (Blueprint functions finish in one frame); call it from an @event or @override`,
+        callee.name,
+      );
+    }
 
     if (fi.execOutputs !== null) {
       const p = node.parent;
@@ -1356,9 +1864,14 @@ class HirBuilder {
     }
 
     const args: Array<{ pin: string; value: HirExpr }> = [];
-    node.arguments.forEach((a) => {
-      const p = fi.params[args.length];
+    node.arguments.forEach((a, argIndex) => {
+      const p = fi.params[argIndex];
       if (!p) f.fail("ABFC2099", `too many arguments for ${fi.name}`, a);
+      if (ts.isIdentifier(a) && a.text === "undefined") {
+        // an omitted argument sets no pin: the call node keeps the default Unreal fills in when the node is created
+        if (p.default === undefined) f.fail("ABFC2099", `argument ${p.pin} of ${fi.name} has no default`, a);
+        return;
+      }
       args.push({ pin: p.pin, value: p.type === "unsupported:delegate" ? this.delegateArg(a) : this.expr(a, p.type) });
     });
 
@@ -1598,16 +2111,55 @@ function orderStructs(structs: HirStruct[]): HirStruct[] {
  * Builds the HIR of the class files (or of `only`). Subset violations are ABFC2xxx diagnostics in the result; TypeScript's own
  * diagnostics are in `LoadedProgram.diagnostics`.
  */
-export function buildHir(loaded: LoadedProgram, config: { mod: string }, _profile: Profile, only?: readonly ts.SourceFile[]): HirProgram {
+export function buildHir(loaded: LoadedProgram, config: CompilerProjectConfig, _profile: Profile, only?: readonly ts.SourceFile[]): HirProgram {
+  bindPathContext(loaded, config);
   const b = new HirBuilder(loaded, config.mod);
   for (const sf of only ?? loaded.files.classes) {
+    b.sink.diagnostics.push(...modImportHints(sf));
     for (const st of sf.statements) if (ts.isClassDeclaration(st)) b.classDecl(st);
+  }
+  if (only === undefined) {
+    // whole program only: a subset cannot see the other file of a duplicate
+    const seen = new Map<string, { name: string; file: string }>();
+    // a class with a derived path is the established one; an explicit `path:` that lands on it is the odd one out
+    const all = [...b.classes, ...b.structs];
+    for (const x of [...all.filter((y) => y.pathDerived), ...all.filter((y) => !y.pathDerived)]) {
+      const key = x.path.toLowerCase();
+      const first = seen.get(key);
+      if (first === undefined) {
+        seen.set(key, { name: x.name, file: x.span.file });
+      } else {
+        b.sink.diagnostics.push({
+          severity: "error",
+          code: "ABFC2007",
+          message: `asset path ${x.path} of ${x.name} is already used by ${first.name} (${first.file})`,
+          span: x.span,
+        });
+      }
+    }
+  }
+  if (only === undefined) {
+    const rows = new Map<string, string>();
+    for (const c of b.classes) {
+      if (c.director === undefined) continue;
+      const key = c.director.row.toLowerCase();
+      const first = rows.get(key);
+      if (first === undefined) rows.set(key, c.name);
+      else {
+        b.sink.diagnostics.push({
+          severity: "error",
+          code: "ABFC2075",
+          message: `class-manager row ${c.director.row} of ${c.name} is already used by ${first}`,
+          span: c.span,
+        });
+      }
+    }
   }
   return { mod: config.mod, classes: b.classes, structs: orderStructs(b.structs), classMeta: b.classMeta, diagnostics: b.sink.diagnostics };
 }
 
-/** Diagnostics (TypeScript's and the subset checker's) of one file; the entry point of the future ts-plugin. */
-export function checkSubset(loaded: LoadedProgram, file: ts.SourceFile, config: { mod: string }, profile: Profile): Diagnostic[] {
+/** Diagnostics (TypeScript's and the subset checker's) of one file. */
+export function checkSubset(loaded: LoadedProgram, file: ts.SourceFile, config: CompilerProjectConfig, profile: Profile): Diagnostic[] {
   const hir = buildHir(loaded, config, profile, [file]);
   const rel = relFile(loaded.projectDir, file.fileName);
   return [...loaded.diagnostics.filter((d) => d.span?.file === rel), ...hir.diagnostics];

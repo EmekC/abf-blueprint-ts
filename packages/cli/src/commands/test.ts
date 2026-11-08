@@ -2,7 +2,7 @@ import { compileTests, loadProgram } from "@abfc/compiler";
 import type { TestCase } from "@abfc/ir";
 import { evaluateTest, toGameTestSteps } from "@abfc/testkit/runner";
 import type { CliContext } from "../context.js";
-import { BackendSession, Recorder, emitAll, lockDiagnostics, since } from "./common.js";
+import { BackendSession, Recorder, compilerConfigOf, emitAll, lockDiagnostics, since } from "./common.js";
 import { runBuild } from "./build.js";
 import { writeManualChecks } from "./manualchecks.js";
 
@@ -15,7 +15,7 @@ export async function runTests(ctx: CliContext, session: BackendSession, rec: Re
   const mod = config.mod.name;
   const loaded = loadProgram(ctx.projectDir);
   if (emitAll(ctx, loaded.diagnostics)) return false;
-  const compiled = compileTests(loaded, env.profile, pattern);
+  const compiled = compileTests(loaded, env.profile, pattern, compilerConfigOf(config));
   if (emitAll(ctx, compiled.diagnostics)) return false;
   const live: TestCase[] = compiled.cases.filter((c) => c.liveHud !== undefined);
   const cases: TestCase[] = compiled.cases.filter((c) => c.liveHud === undefined);

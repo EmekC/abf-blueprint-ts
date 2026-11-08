@@ -1,0 +1,43 @@
+{
+  "name": "@abfc/lsp",
+  "version": "1.0.0",
+  "description": "Language server of abfc (diagnostics and lint for Blueprint-targeted TypeScript).",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EmekC/abf-blueprint-ts.git",
+    "directory": "packages/lsp"
+  },
+  "homepage": "https://github.com/EmekC/abf-blueprint-ts#readme",
+  "bugs": {
+    "url": "https://github.com/EmekC/abf-blueprint-ts/issues"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "files": [
+    "dist/src/**/*.js",
+    "dist/src/**/*.d.ts"
+  ],
+  "dependencies": {
+    "@abfc/compiler": "1.0.0",
+    "@abfc/env": "1.0.0",
+    "@abfc/eslint-plugin": "1.0.0",
+    "@abfc/ir": "1.0.0",
+    "@abfc/stubgen": "1.0.0",
+    "@typescript-eslint/parser": "8.72.1",
+    "eslint": "10.14.0",
+    "vscode-languageserver": "9.0.1",
+    "vscode-languageserver-textdocument": "1.0.12"
+  }
+}

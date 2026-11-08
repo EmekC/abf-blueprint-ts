@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { AbfcError } from "@abfc/env";
 import { assertToolAllowed } from "./safety.js";
 import type { PublishGrant } from "./safety.js";
+import { CLIENT_VERSION } from "./version.js";
 
 export interface McpStartOptions {
   command: string;
@@ -32,7 +33,6 @@ interface Pending {
 }
 
 const liveClients = new Set<McpStdioClient>();
-const CLIENT_VERSION = "0.1.0";
 
 export class McpStdioClient {
   private readonly child: ChildProcessWithoutNullStreams;

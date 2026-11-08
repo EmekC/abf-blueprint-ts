@@ -1,122 +1,14 @@
 // CLI end-to-end on the step 23 fixture project (a synthetic mod, TestMod) against the in-memory fake backend.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join, win32 } from "node:path";
-import { fileURLToPath } from "node:url";
-import { buildHir, compileTests, loadProgram, lower, readManifest, readRetired, readSourceMap } from "@abfc/compiler";
-import { loadProfile, realHost, resolveEnvironment } from "@abfc/env";
-import type { Host } from "@abfc/env";
+import { buildHir, compileTests, loadProgram, lower, readManifest, readRetired, readSourceMap, writeManifest } from "@abfc/compiler";
 import type { IrModule, IrNode } from "@abfc/ir";
-import { newLock, writeLock } from "@abfc/stubgen";
 import { main, readRuns } from "../src/index.js";
-import type { CliDeps } from "../src/index.js";
 import { FakeBackend, RELAY_ASSET, SPARE_NODE } from "./fake-backend.js";
-import type { FakeBackendOptions } from "./fake-backend.js";
-import { fakeEnvironmentFiles } from "./helpers.js";
-
-const profile = loadProfile();
-// compiled to packages/cli/dist/test/ -> packages/compiler/test/fixtures/project
-const here = fileURLToPath(new URL("./", import.meta.url));
-const fixtureProject = fileURLToPath(new URL("../../../compiler/test/fixtures/project", import.meta.url));
-
-const key = (p: string): string => win32.normalize(p).replace(/[\\/]+$/, "").toLowerCase();
-
-/** The fake machine for everything outside `roots`; the real file system below them (the project and the fake run folders). */
-function hybridHost(fake: Host, roots: string[]): Host {
-  const real = realHost();
-  const keys = roots.map(key);
-  const isReal = (p: string): boolean => keys.some((r) => key(p) === r || key(p).startsWith(r + "\\"));
-  return {
-    ...fake,
-    exists: (p) => (isReal(p) ? real.exists(p) : fake.exists(p)),
-    readFile: (p) => (isReal(p) ? real.readFile(p) : fake.readFile(p)),
-    readDir: (p) => (isReal(p) ? real.readDir(p) : fake.readDir(p)),
-    stat: (p) => (isReal(p) ? real.stat(p) : fake.stat(p)),
-  };
-}
-
-const MATCHER = /^(.*\.ts):(\d+):(\d+): (error|warning) (ABFC\d+): (.*)$/;
-
-/** Every diagnostic line is either `abfc: <severity> <code>: ...` or the problem-matcher form. */
-function assertMatcherLines(text: string): void {
-  for (const l of text.split("\n")) {
-    if (!/\b(error|warning) ABFC\d+: /.test(l)) continue;
-    if (/^abfc: (error|warning) ABFC\d+: /.test(l)) continue;
-    assert.match(l, MATCHER, `not in problem-matcher form: ${l}`);
-  }
-}
-
-interface Run {
-  code: number;
-  out: string;
-}
-
-interface Rig {
-  dir: string;
-  backend: FakeBackend;
-  started: { count: number; cold: boolean[] };
-  run(argv: string[], extra?: Partial<CliDeps>): Promise<Run>;
-  lockFile: string;
-}
-
-async function withRig(o: FakeBackendOptions, fn: (r: Rig) => Promise<void>): Promise<void> {
-  // inside the package tree so that `@abfc/runtime` still resolves through the workspace node_modules
-  const dir = mkdtempSync(join(here, "e2e-"));
-  const backend = new FakeBackend(o);
-  try {
-    cpSync(fixtureProject, dir, { recursive: true });
-    rmSync(join(dir, "src", "Bad.ts"));
-    writeFileSync(
-      join(dir, "abf.config.json"),
-      JSON.stringify({ mod: { name: "TestMod" }, backend: { kind: "bp_apply", minProtocol: 1 } }),
-      "utf8",
-    );
-    const fake = fakeEnvironmentFiles({ headlessDir: "C:\\abfc-headless" });
-    const host = hybridHost(fake.host(), [dir, backend.root]);
-    const env = resolveEnvironment(host, { projectDir: dir, flags: {} });
-    const lockFile = join(dir, ".abfc", "stubs", profile.id);
-    writeLock(
-      lockFile,
-      newLock({
-        profile: profile.id,
-        engineVersion: null,
-        modEditorVersion: profile.modEditorVersion,
-        editorFingerprint: env.fingerprint ?? "",
-        filterContentVersion: null,
-        classes: [],
-        scriptClasses: [],
-        modAssets: [],
-        createdAt: "2026-01-02T00:00:00.000Z",
-      }),
-    );
-    const started = { count: 0, cold: [] as boolean[] };
-    const run = async (argv: string[], extra: Partial<CliDeps> = {}): Promise<Run> => {
-      const lines: string[] = [];
-      const deps: CliDeps = {
-        host,
-        startBackend: async (_env, o) => {
-          started.count++;
-          started.cold.push(o?.cold === true);
-          return backend;
-        },
-        now: () => new Date(2026, 0, 2, 3, 4, 5),
-        cwd: dir,
-        stdout: (l) => lines.push(l),
-        stderr: (l) => lines.push(l),
-        ...extra,
-      };
-      const code = await main(argv, deps);
-      const out = lines.join("\n");
-      assertMatcherLines(out);
-      return { code, out };
-    };
-    await fn({ dir, backend, started, run, lockFile });
-  } finally {
-    backend.dispose();
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
+import { OPS, TA, addParentStubs, countOf, fileExists, profile, tally, tallyOnly, withRig } from "./rig.js";
+import type { Run, Rig } from "./rig.js";
 
 function lowerProject(dir: string): IrModule {
   const hir = buildHir(loadProgram(dir), { mod: "TestMod" }, profile);
@@ -130,7 +22,6 @@ function irNode(ir: IrModule, fn: string): IrNode {
   return n;
 }
 
-const countOf = (text: string, needle: string): number => text.split(needle).length - 1;
 
 test("(a) adopt needs --yes; build on the fallback route writes manifest, hashes, source map and timings; rebuild is up to date", async () => {
   await withRig({}, async (r) => {
@@ -172,6 +63,7 @@ test("(a) adopt needs --yes; build on the fallback route writes manifest, hashes
     assert.match(unit.tag ?? "", /^EdGraphNode_Comment_\d+$/);
     assert.equal(unit.stageSyncedAt, "sync-1");
     assert.notEqual(unit.adopt, null, "the adoption record is kept");
+    assert.deepEqual(readManifest(r.dir, RELAY_ASSET)!.source, { file: "src/Relay.ts", class: "BP_Relay", derived: false }, "the manifest records where the class lives");
     const sm = readSourceMap(r.dir, RELAY_ASSET)!;
     const nodes = Object.values(sm.units["event:UpdateTarget"]!.nodes);
     assert.equal(nodes.length, 52);
@@ -194,7 +86,7 @@ test("(a) adopt needs --yes; build on the fallback route writes manifest, hashes
   });
 });
 
-test("(b) an edit of an owned node in the stage stops the build with ABFC5001 and applies nothing", async () => {
+test("(b) an edit of an owned node in the stage is replaced by the next build that re-plans the unit (TS wins): ABFC5014 warning, exit 0", async () => {
   await withRig({}, async (r) => {
     assert.equal((await r.run(["adopt", RELAY_ASSET, "UpdateTarget", "--yes"])).code, 0);
     assert.equal((await r.run(["build"])).code, 0);
@@ -210,17 +102,255 @@ test("(b) an edit of an owned node in the stage stops the build with ABFC5001 an
     assert.match(x.out, /up to date/);
     assert.equal(r.backend.applyLabels().length, before);
 
-    // once the unit is re-planned the drift is found
+    // status previews what the next build replaces, as a warning
+    x = await r.run(["status"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /event:UpdateTarget edited/);
+    assert.match(x.out, /warning ABFC5001/);
+    assert.match(x.out, /TypeScript wins/);
+
+    // once the unit is re-planned the edit is replaced, not refused
     const src = join(r.dir, "src", "Relay.ts");
     writeFileSync(src, readFileSync(src, "utf8").replace("const rowName = Lib.RowToName(pot.Row);", "const rowName = Lib.RowToName(pot.Row); this.LastName = rowName;"), "utf8");
     x = await r.run(["build"]);
-    assert.equal(x.code, 3, x.out);
-    assert.match(x.out, /error ABFC5001/);
-    assert.equal(r.backend.applyLabels().length, before, "no bp_apply after the drift");
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC5014/);
+    assert.match(x.out, /ABFC5001/);
+    assert.ok(r.backend.applyLabels().length > before, "the unit was applied again");
 
     x = await r.run(["status"]);
-    assert.equal(x.code, 3, x.out);
-    assert.match(x.out, /event:UpdateTarget edited/);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /warning ABFC5001/);
+  });
+});
+
+/** The number of `staging_sync` calls after the last `bp_compile_report` call. */
+function syncsAfterCompile(backend: FakeBackend): number {
+  const tools = backend.calls.map((c) => c.tool);
+  const last = tools.lastIndexOf("bp_compile_report");
+  return last < 0 ? 0 : tools.slice(last + 1).filter((t) => t === "staging_sync").length;
+}
+
+test("(b1k) build --keep-failed-stage leaves the stage as it is after a failed compile", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    r.backend.reportMessages = [{ severity: "error", asset: RELAY_ASSET, message: "boom" }];
+    const x = await r.run(["build", "--keep-failed-stage"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, /error ABFC6002/);
+    assert.equal(syncsAfterCompile(r.backend), 0, "no staging_sync after the compile report");
+    assert.match(x.out, /keeps the graphs/);
+    assert.doesNotMatch(x.out, /re-synced from the mod/);
+    const unit = readManifest(r.dir, RELAY_ASSET)!.units[0]!;
+    assert.equal(unit.irHash, "", "the IR hash is recorded only after the compile passed");
+    assert.ok(unit.nodes.length > 0, "the manifest still describes what is on the stage");
+  });
+});
+
+test("(b1w) a failing re-sync after a failed compile is the warning ABFC4016; the exit code stays the compile failure's", async () => {
+  await withRig({ handMadeEvent: false, failResync: true }, async (r) => {
+    r.backend.reportMessages = [{ severity: "error", asset: RELAY_ASSET, message: "boom" }];
+    const x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, /error ABFC6002/);
+    assert.match(x.out, /warning ABFC4016/);
+    assert.doesNotMatch(x.out, /re-synced from the mod/);
+    assert.equal(syncsAfterCompile(r.backend), 1, "the re-sync was tried once");
+    // the code is the compile failure's (the same as without the failing re-sync)
+    assert.equal(x.code, 1);
+  });
+});
+
+test("(b1r) a failed compile in one asset re-syncs the whole stage: unpublished units of another asset are applied again, without ABFC5002", async () => {
+  await withRig({ handMadeEvent: false, emptyAssets: [TALLY_ASSET] }, async (r) => {
+    // asset X (Relay): built and compiled, not published
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.units.length, 1);
+    const builtNodes = readManifest(r.dir, RELAY_ASSET)!.units[0]!.nodes;
+    assert.ok(builtNodes.length > 0);
+
+    // asset Y (Tally): its compile fails, the re-sync drops X's staged nodes too
+    writeFileSync(join(r.dir, "src", "Tally.ts"), TALLY, "utf8");
+    r.backend.reportMessages = [{ severity: "error", asset: TALLY_ASSET, message: "boom" }];
+    x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, /all unpublished changes in the staged copy were discarded/);
+    assert.ok(!r.backend.nodeNames(RELAY_ASSET).includes(builtNodes[0]!), "the re-synced stage does not hold the unit of the other asset");
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.units.length, 0, "the manifest of the other asset forgets its unpublished unit");
+    assert.equal(readManifest(r.dir, TALLY_ASSET)!.units.length, 0);
+
+    // the next build applies both again on the clean stage
+    r.backend.reportMessages = [];
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC5002/);
+    assert.match(x.out, /applied .*UpdateTarget/);
+    assert.match(x.out, /applied .*Bump/);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.units.length, 1);
+    assert.equal(readManifest(r.dir, TALLY_ASSET)!.units.length, 1);
+    const held = r.backend.nodeNames(RELAY_ASSET);
+    assert.ok(readManifest(r.dir, RELAY_ASSET)!.units[0]!.nodes.every((n) => held.includes(n)));
+  });
+});
+
+test("(b1s) build --resync drops the unpublished unit from the manifest and applies it again: no ABFC5002 loop (P3)", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    const builtNodes = readManifest(r.dir, RELAY_ASSET)!.units[0]!.nodes;
+    assert.ok(builtNodes.length > 0);
+    const first = r.backend.applyLabels().length;
+
+    // the fake stage forgets the never published unit, as a real re-sync from the mod does
+    x = await r.run(["build", "--resync"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC5002/);
+    assert.doesNotMatch(x.out, /--resync/);
+    assert.match(x.out, /applied .*UpdateTarget/);
+    assert.ok(r.backend.applyLabels().length > first, "the unit was applied again");
+    const held = r.backend.nodeNames(RELAY_ASSET);
+    assert.ok(readManifest(r.dir, RELAY_ASSET)!.units[0]!.nodes.every((n) => held.includes(n)));
+
+    // and the next plain build has nothing left to do
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /up to date/);
+  });
+});
+
+test("(b1t) status --resync prunes the manifest to the re-synced stage; the next build applies the unit without ABFC5002", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    x = await r.run(["status", "--resync"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC5002/);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.units.length, 0, "the unpublished unit is forgotten");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC5002/);
+    assert.match(x.out, /applied .*UpdateTarget/);
+  });
+});
+
+test("(b1u) a published unit survives build --resync (the mod holds its nodes)", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    r.backend.markPublished();
+    const nodes = readManifest(r.dir, RELAY_ASSET)!.units[0]!.nodes;
+    const first = r.backend.applyLabels().length;
+    x = await r.run(["build", "--resync"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC50/);
+    assert.match(x.out, /up to date/);
+    assert.equal(r.backend.applyLabels().length, first, "nothing is applied again");
+    assert.deepEqual(readManifest(r.dir, RELAY_ASSET)!.units[0]!.nodes, nodes);
+  });
+});
+
+test("(b1p) a published unit that is changed and fails to compile keeps the entry for the nodes the mod still holds", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    r.backend.markPublished();
+    const publishedNodes = readManifest(r.dir, RELAY_ASSET)!.units[0]!.nodes;
+    assert.ok(publishedNodes.length > 0);
+
+    // a changed re-apply gets new node names, then fails Unreal's compile
+    const src = join(r.dir, "src", "Relay.ts");
+    writeFileSync(src, readFileSync(src, "utf8").replace("const rowName = Lib.RowToName(pot.Row);", "const rowName = Lib.RowToName(pot.Row); this.LastName = rowName;"), "utf8");
+    r.backend.reportMessages = [{ severity: "error", asset: RELAY_ASSET, message: "boom" }];
+    x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, /re-synced from the mod/);
+    const kept = readManifest(r.dir, RELAY_ASSET)!.units;
+    assert.equal(kept.length, 1, "the published unit keeps its entry");
+    assert.deepEqual(kept[0]!.nodes, publishedNodes, "with the node names the mod holds");
+    const held = r.backend.nodeNames(RELAY_ASSET);
+    assert.ok(publishedNodes.every((n) => held.includes(n)), "the re-synced stage holds the published nodes");
+
+    // the next build replaces it: no existing hand-made event (ABFC5003), no missing nodes (ABFC5002)
+    r.backend.reportMessages = [];
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC500[23]/);
+    assert.match(x.out, /applied UpdateTarget/);
+  });
+});
+
+test("(b1q) a stage read that fails after the re-sync does not drop the units of that asset", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    r.backend.markPublished();
+    const before = readManifest(r.dir, RELAY_ASSET)!.units;
+    assert.ok(before.length > 0);
+
+    const src = join(r.dir, "src", "Relay.ts");
+    writeFileSync(src, readFileSync(src, "utf8").replace("const rowName = Lib.RowToName(pot.Row);", "const rowName = Lib.RowToName(pot.Row); this.LastName = rowName;"), "utf8");
+    r.backend.reportMessages = [{ severity: "error", asset: RELAY_ASSET, message: "boom" }];
+    r.backend.failReadsAfterResync = true;
+    x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    const after = readManifest(r.dir, RELAY_ASSET)!.units;
+    assert.equal(after.length, before.length, "the units are not dropped when the stage cannot be read");
+    assert.equal(after[0]!.irHash, "", "the manifest of the failed build stays as it is, no restore");
+  });
+});
+
+test("(d1) build --drift reads every owned asset, a plain build of an up-to-date project reads none", async () => {
+  await withRig({}, async (r) => {
+    assert.equal((await r.run(["adopt", RELAY_ASSET, "UpdateTarget", "--yes"])).code, 0);
+    assert.equal((await r.run(["build"])).code, 0);
+    const reads = (): number => r.backend.calls.filter((c) => c.tool === "bp_read").length;
+
+    let before = reads();
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /up to date/);
+    assert.equal(reads(), before, "a plain build of an up-to-date project reads nothing");
+
+    before = reads();
+    x = await r.run(["build", "--drift"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /up to date/);
+    assert.equal(reads() - before, 1, "--drift reads the one owned asset");
+  });
+});
+
+test("(d2) after an editor edit of an unchanged unit, build is up to date but build --drift reads every asset and replaces the edit (ABFC5014)", async () => {
+  await withRig({}, async (r) => {
+    assert.equal((await r.run(["adopt", RELAY_ASSET, "UpdateTarget", "--yes"])).code, 0);
+    assert.equal((await r.run(["build"])).code, 0);
+    const ir = lowerProject(r.dir);
+    const real = readManifest(r.dir, RELAY_ASSET)!.units[0]!.nodeIds[irNode(ir, "EqualEqual_DoubleDouble").id];
+    assert.ok(real);
+    r.backend.setPinDefault(RELAY_ASSET, real, "B", "5.0");
+
+    const before = r.backend.applyLabels().length;
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /up to date/);
+    x = await r.run(["build", "--drift"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC5014/);
+    assert.match(x.out, /ABFC5001/);
+    assert.ok(r.backend.applyLabels().length > before, "the edited unit was applied again");
+    x = await r.run(["build", "--drift"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC5014/);
+  });
+});
+
+test("(u1) --drift is an option of build only; --keep-failed-stage of build, test and publish", async () => {
+  await withRig({}, async (r) => {
+    let x = await r.run(["test", "--drift"]);
+    assert.equal(x.code, 2, x.out);
+    assert.match(x.out, /--drift is an option of abfc build only/);
+    x = await r.run(["check", "--keep-failed-stage"]);
+    assert.equal(x.code, 2, x.out);
+    assert.match(x.out, /--keep-failed-stage is an option of abfc build, test and publish/);
   });
 });
 
@@ -230,11 +360,12 @@ test("(b1) a build that applies but fails Unreal's compile is repeated by the ne
     let x = await r.run(["build"]);
     assert.notEqual(x.code, 0, x.out);
     assert.match(x.out, /error ABFC6002/);
+    assert.ok(syncsAfterCompile(r.backend) >= 1, "the failed compile re-syncs the stage");
+    assert.match(x.out, /re-synced from the mod/);
     const applies = r.backend.applyLabels().length;
     assert.ok(applies > 0);
-    const unit = readManifest(r.dir, RELAY_ASSET)!.units[0]!;
-    assert.equal(unit.irHash, "", "the IR hash is recorded only after the compile passed");
-    assert.ok(unit.nodes.length > 0, "the manifest still describes what is on the stage");
+    // the re-synced stage does not hold the unit (never published): the manifest forgets it, the next build applies it again
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.units.length, 0);
 
     // nothing changed in TypeScript: the next build re-applies and reports the error again; it is not "up to date"
     x = await r.run(["build"]);
@@ -268,7 +399,7 @@ test("(b1) a build that applies but fails Unreal's compile is repeated by the ne
   });
 });
 
-test("(b3) publish --full gate 3 reads every owned asset: an editor edit of an unchanged unit fails with ABFC5001 and nothing is applied", async () => {
+test("(b3) publish --full gate 3 reads every owned asset: an editor edit of an unchanged unit is replaced (TS wins) with ABFC5014 and the gate passes", async () => {
   await withRig({}, async (r) => {
     assert.equal((await r.run(["adopt", RELAY_ASSET, "UpdateTarget", "--yes"])).code, 0);
     assert.equal((await r.run(["build"])).code, 0);
@@ -280,12 +411,11 @@ test("(b3) publish --full gate 3 reads every owned asset: an editor edit of an u
     const before = r.backend.applyLabels().length;
     assert.equal((await r.run(["build"])).code, 0, "an unchanged build does not read the asset");
     const x = await r.run(["publish", "--full", "--dry-run"]);
-    assert.equal(x.code, 3, x.out);
-    assert.match(x.out, /error ABFC5001/);
-    assert.doesNotMatch(x.out, /would publish/);
-    assert.equal(r.backend.applyLabels().length, before, "no bp_apply after the drift");
+    assert.match(x.out, /warning ABFC5014/);
+    assert.match(x.out, /ABFC5001/);
+    assert.ok(r.backend.applyLabels().length > before, "the edited unit was applied again by gate 3");
     const gates = readRuns(join(r.dir, ".abfc", "runs.jsonl")).filter((e) => e.step === "gate.3");
-    assert.equal(gates[gates.length - 1]!.ok, false);
+    assert.equal(gates[gates.length - 1]!.ok, true);
   });
 });
 
@@ -618,7 +748,8 @@ test("(f9) a refusal of bp_publish becomes a diagnostic with a specific fix and 
       conflicts: ["Content/Relay/BP_Relay.uasset: changed"],
     });
     assert.equal(x.code, 3, x.out);
-    assert.match(x.out, /abfc build --resync/);
+    assert.match(x.out, /run abfc publish again/);
+    assert.doesNotMatch(x.out, /--resync/);
 
     x = await refuse({ refused: "editor unreachable", message: "The editor did not answer" });
     assert.equal(x.code, 2, x.out);
@@ -794,8 +925,53 @@ test("(h) native pin types: one main bp_apply call, no phase B, no pin_types on 
     const nodes: Array<Record<string, any>> = main0.graphs[0].add;
     assert.equal(nodes.filter((n) => n.k === "cast").length, 2);
     assert.equal(nodes.filter((n) => n.k === "cast" && n.pin_types !== undefined).length, 0);
-    assert.equal(nodes.filter((n) => n.pin_types !== undefined).length, 3);
+    // the For Each Loop macro node and two more typed nodes (the loop no longer needs Array_Length / Get a copy)
+    assert.equal(nodes.filter((n) => n.pin_types !== undefined).length, 2);
     assert.equal(r.backend.tools().filter((t) => t === "backend_info").length >= 1, true);
+  });
+});
+
+test("(h2) a backend with std_macro gets a For Each Loop macro node and no counter variable; a rebuild is up to date", async () => {
+  await withRig({ backendInfo: true, handMadeEvent: false }, async (r) => {
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC2088/);
+    const macros = r.backend.nodeNames(RELAY_ASSET).filter((n) => n.startsWith("K2Node_MacroInstance"));
+    assert.equal(macros.length, 1);
+    assert.ok(r.backend.nodeHead(RELAY_ASSET, macros[0]!).some((l) => l.includes("StandardMacros.StandardMacros:ForEachLoop'")));
+    assert.equal(r.backend.variableNames(RELAY_ASSET).filter((v) => v.startsWith("abfc_UpdateTarget_i")).length, 0);
+    const applies = r.backend.applyLabels().length;
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /up to date/);
+    assert.equal(r.backend.applyLabels().length, applies, "a second build applies nothing");
+  });
+});
+
+test("(h3) a backend without std_macro: ABFC2088 once, the loops are built with the counter variable and no macro node", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    const x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC2088/);
+    assert.equal(countOf(x.out, "ABFC2088"), 1);
+    assert.equal(r.backend.nodeNames(RELAY_ASSET).filter((n) => n.startsWith("K2Node_MacroInstance")).length, 0);
+    assert.ok(r.backend.variableNames(RELAY_ASSET).some((v) => v.startsWith("abfc_UpdateTarget_i")));
+  });
+});
+
+test("(h4) a build with std_macro after one without replaces the manual loop with the macro and removes the counter variable", async () => {
+  await withRig({ backendInfo: true, handMadeEvent: false, stdMacros: false }, async (r) => {
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC2088/);
+    assert.equal(r.backend.nodeNames(RELAY_ASSET).filter((n) => n.startsWith("K2Node_MacroInstance")).length, 0);
+    assert.ok(r.backend.variableNames(RELAY_ASSET).some((v) => v.startsWith("abfc_UpdateTarget_i")));
+    r.backend.setStdMacros(true);
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC2088/);
+    assert.equal(r.backend.nodeNames(RELAY_ASSET).filter((n) => n.startsWith("K2Node_MacroInstance")).length, 1);
+    assert.equal(r.backend.variableNames(RELAY_ASSET).filter((v) => /^abfc_.+_i\d+$/.test(v)).length, 0, "the orphaned counter variable is removed");
   });
 });
 
@@ -1448,6 +1624,31 @@ test("(h) test.liveHud: skipped hidden with ABFC6105, listed in manual-checks.md
   });
 });
 
+test("(p3) a class file whose derived path changed on a backend without bp_asset_ops: ABFC5012 stops the build before anything is applied, and path: keeps the asset", async () => {
+  await withRig({}, async (r) => {
+    assert.equal((await r.run(["adopt", RELAY_ASSET, "UpdateTarget", "--yes"])).code, 0);
+    assert.equal((await r.run(["build"])).code, 0);
+    const src = join(r.dir, "src", "Relay.ts");
+    const text = readFileSync(src, "utf8");
+    writeFileSync(src, text.replace('@blueprint({ path: "/TestMod/Relay/BP_Relay" })', "@blueprint()"), "utf8");
+    const applies = r.backend.applyLabels().length;
+    let x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, /error ABFC5012: BP_Relay was built as \/TestMod\/Relay\/BP_Relay \(from src\/Relay\.ts\) but its file now gives \/TestMod\/BP_Relay/);
+    assert.match(x.out, /path: "Relay\/BP_Relay"/);
+    assert.equal(r.backend.applyLabels().length, applies, "nothing is applied");
+    assert.equal(r.backend.assetOpsCalls.length, 0, "no asset operation is attempted");
+    // check has no backend: one earlier asset is only a warning (the next build with a rename-capable backend renames it)
+    x = await r.run(["check"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC5012: BP_Relay was built as \/TestMod\/Relay\/BP_Relay .*the next abfc build renames the asset/);
+    writeFileSync(src, text.replace('{ path: "/TestMod/Relay/BP_Relay" }', '{ path: "Relay/BP_Relay" }'), "utf8");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.source?.derived, false);
+  });
+});
+
 test("(p4) a class with an own field: the apply spec declares the variable, it enters the manifest, and a rebuild is up to date", async () => {
   await withRig({}, async (r) => {
     assert.equal((await r.run(["adopt", RELAY_ASSET, "UpdateTarget", "--yes"])).code, 0);
@@ -1506,11 +1707,207 @@ test("a class whose asset is not in the stage is created once, then built like a
     assert.ok(m, "manifest written");
     assert.deepEqual(m!.units.map((u) => u.id), ["event:Bump"]);
     assert.ok(m!.variables.some((v) => v.name === "Total" && v.type === "int"));
+    // the manifest records that abfc created the asset and which parent it was built with (reparent / delete decisions)
+    assert.equal(m!.created, true);
+    assert.equal(m!.parent, "/Script/FakeEngine.Actor");
+    assert.equal(m!.parentFamily, "actor");
 
     const again = r.backend.applyLabels().length;
     x = await r.run(["build"]);
     assert.equal(x.code, 0, x.out);
     assert.equal(r.backend.applyLabels().length, again, "a second build is up to date");
+  });
+});
+
+// ---- break / continue / forEach ----
+
+const LOOPS = `import { blueprint, event } from "@abfc/runtime";
+import type { int } from "@abfc/runtime";
+import { Actor } from "/Script/FakeEngine";
+
+@blueprint({ path: "/TestMod/Relay/BP_Loops" })
+export class BP_Loops extends Actor {
+  Items!: int[];
+  Total!: int;
+
+  @event
+  Scan(limit: int): void {
+    for (const x of this.Items) {
+      if (x > limit) break;
+      if (x === 0) continue;
+      this.Total = x;
+    }
+    this.Items.forEach((x, i) => {
+      if (i === 0) return;
+      this.Total = x + i;
+    });
+    for (let i = 0; i < 3; i++) {
+      if (i === limit) break;
+      this.Total = i;
+    }
+  }
+}
+`;
+const LOOPS_ASSET = "/TestMod/Relay/BP_Loops";
+
+test("(h5) a backend with std_macro: break uses the WithBreak macros wired into Break, forEach reads Array Index; a rebuild is up to date", async () => {
+  await withRig({ backendInfo: true, handMadeEvent: false }, async (r) => {
+    writeFileSync(join(r.dir, "src", "Loops.ts"), LOOPS, "utf8");
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC2088/);
+    const macros = r.backend.nodeNames(LOOPS_ASSET).filter((n) => n.startsWith("K2Node_MacroInstance"));
+    assert.equal(macros.length, 3);
+    const withHead = (marker: string): string[] => macros.filter((n) => r.backend.nodeHead(LOOPS_ASSET, n).some((l) => l.includes(marker)));
+    const forEachBreak = withHead(":ForEachLoopWithBreak'");
+    const forBreak = withHead(":ForLoopWithBreak'");
+    const forEach = withHead(":ForEachLoop'");
+    assert.equal(forEachBreak.length, 1);
+    assert.equal(forBreak.length, 1);
+    assert.equal(forEach.length, 1);
+    assert.ok(r.backend.pinLinkCount(LOOPS_ASSET, forEachBreak[0]!, "Break") >= 1);
+    assert.ok(r.backend.pinLinkCount(LOOPS_ASSET, forBreak[0]!, "Break") >= 1);
+    assert.ok(r.backend.pinLinkCount(LOOPS_ASSET, forEach[0]!, "Array Index") >= 1);
+    assert.equal(r.backend.variableNames(LOOPS_ASSET).filter((v) => /^abfc_Scan_i\d+$/.test(v)).length, 0);
+    const applies = r.backend.applyLabels().length;
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /up to date/);
+    assert.equal(r.backend.applyLabels().length, applies, "a second build applies nothing");
+  });
+});
+
+test("(h6) a backend without std_macro: break, continue and forEach are built as counter loops; ABFC2088 once", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    writeFileSync(join(r.dir, "src", "Loops.ts"), LOOPS, "utf8");
+    const x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(countOf(x.out, "ABFC2088"), 1);
+    assert.equal(r.backend.nodeNames(LOOPS_ASSET).filter((n) => n.startsWith("K2Node_MacroInstance")).length, 0);
+    assert.ok(r.backend.variableNames(LOOPS_ASSET).some((v) => /^abfc_Scan_i\d+$/.test(v)));
+  });
+});
+
+// ---- TS wins (A8): sweep of a non-hybrid class, hybrid class keeps hand-made members, automatic re-sync on a conflict ----
+
+const syncCount = (backend: FakeBackend): number => backend.calls.filter((c) => c.tool === "staging_sync").length;
+
+test("(A8-2) a hand-made event, variable and function graph on a non-hybrid asset are removed by the next build (ABFC5014, remove lists in the spec)", async () => {
+  await withRig({}, async (r) => {
+    rmSync(join(r.dir, "src", "Relay.ts"));
+    rmSync(join(r.dir, "src", "Relay.test.ts"));
+    writeFileSync(join(r.dir, "src", "Tally.ts"), TALLY, "utf8");
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.deepEqual(r.backend.variableNames(TALLY_ASSET), ["Total"]);
+
+    const handNodes = r.backend.addHandMadeEvent(TALLY_ASSET, "MyOwnEvent");
+    r.backend.addHandMadeVariable(TALLY_ASSET, "Mine", "int");
+    r.backend.addHandMadeFunction(TALLY_ASSET, "HandFn");
+    const before = appliedSpecs(r).length;
+
+    // nothing changed in TypeScript: only --drift reads the asset and finds the hand-made content
+    x = await r.run(["build", "--drift"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC5014/);
+    assert.match(x.out, /MyOwnEvent|hand-made/);
+    assert.doesNotMatch(x.out, /abfc adopt|--resync/);
+    const specs = appliedSpecs(r).slice(before).filter((s: any) => s.asset === TALLY_ASSET);
+    assert.ok(specs.some((s: any) => (s.remove_variables ?? []).includes("Mine")), JSON.stringify(specs.map((s: any) => s.remove_variables)));
+    assert.ok(specs.some((s: any) => (s.remove_functions ?? []).includes("HandFn")));
+    const removed = specs.flatMap((s: any) => (s.graphs ?? []).flatMap((g: any) => g.remove ?? []));
+    for (const n of handNodes) assert.ok(removed.includes(n), `${n} removed`);
+    assert.deepEqual(r.backend.variableNames(TALLY_ASSET), ["Total"]);
+    assert.deepEqual(r.backend.functionNames(TALLY_ASSET), []);
+    const held = r.backend.nodeNames(TALLY_ASSET);
+    for (const n of handNodes) assert.ok(!held.includes(n), `${n} is gone from the stage`);
+    assert.ok(readManifest(r.dir, TALLY_ASSET)!.units.every((u) => u.nodes.every((n) => held.includes(n))), "the built unit stays");
+
+    // and the next drift build has nothing left to replace
+    x = await r.run(["build", "--drift"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC5014/);
+  });
+});
+
+test("(R1) components, the widget tree and timeline templates in the stage export are not graphs: the sweep never lists them, only the hand-made event goes", async () => {
+  await withRig({}, async (r) => {
+    rmSync(join(r.dir, "src", "Relay.ts"));
+    rmSync(join(r.dir, "src", "Relay.test.ts"));
+    writeFileSync(join(r.dir, "src", "Tally.ts"), TALLY, "utf8");
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    r.backend.addNonGraphParts(TALLY_ASSET);
+    const handNodes = r.backend.addHandMadeEvent(TALLY_ASSET, "MyOwnEvent");
+    const before = appliedSpecs(r).length;
+    x = await r.run(["build", "--drift"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC5014/);
+    assert.doesNotMatch(x.out, /SCS_Node_0|NameText|CurveFloat_0|SimpleConstructionScript|WidgetTree|Fade_Template/);
+    const specs = appliedSpecs(r).slice(before).filter((s: any) => s.asset === TALLY_ASSET);
+    const touched = specs.flatMap((s: any) => (s.graphs ?? []).map((g: any) => g.name ?? g.graph));
+    for (const g of ["SimpleConstructionScript", "WidgetTree", "Fade_Template"]) assert.ok(!touched.includes(g), `${g} is not a graph`);
+    const removed = specs.flatMap((s: any) => (s.graphs ?? []).flatMap((g: any) => g.remove ?? []));
+    for (const n of handNodes) assert.ok(removed.includes(n), `${n} removed`);
+    for (const n of ["SCS_Node_0", "NameText", "CurveFloat_0"]) assert.ok(!removed.includes(n), `${n} kept`);
+  });
+});
+
+test("(A8-4) a hybrid class (the _Manual merge) keeps its hand-made variable, function graph and events", async () => {
+  await withRig({}, async (r) => {
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    r.backend.addHandMadeVariable(RELAY_ASSET, "Mine", "int");
+    r.backend.addHandMadeFunction(RELAY_ASSET, "HandFn");
+    const before = appliedSpecs(r).length;
+    x = await r.run(["build", "--drift"]);
+    assert.equal(x.code, 0, x.out);
+    const specs = appliedSpecs(r).slice(before);
+    assert.ok(specs.every((s: any) => s.remove_variables === undefined && s.remove_functions === undefined), JSON.stringify(specs));
+    assert.ok(r.backend.variableNames(RELAY_ASSET).includes("Mine"));
+    assert.ok(r.backend.functionNames(RELAY_ASSET).includes("HandFn"));
+    assert.ok(r.backend.nodeNames(RELAY_ASSET).includes("K2Node_CustomEvent_1"), "the hand-made OtherEvent stays");
+    assert.doesNotMatch(x.out, /hand-made (variable|function)/);
+  });
+});
+
+test("(A8-3) a conflict with the real mod: status only warns (ABFC4020); build re-syncs the stage by itself (ABFC4017) and applies the TypeScript again", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    const syncs = syncCount(r.backend);
+    r.backend.stageConflicts = ["Content/Relay/BP_Relay.uasset"];
+
+    x = await r.run(["status"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC4020/);
+    assert.match(x.out, /BP_Relay\.uasset/);
+    assert.equal(syncCount(r.backend), syncs, "status never re-syncs");
+
+    const before = r.backend.applyLabels().length;
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC4017/);
+    assert.match(x.out, /BP_Relay\.uasset/);
+    assert.doesNotMatch(x.out, /ABFC4020|--resync/);
+    assert.equal(syncCount(r.backend), syncs + 1);
+    assert.ok(r.backend.applyLabels().length > before, "the unit was applied to the fresh copy");
+    const held = r.backend.nodeNames(RELAY_ASSET);
+    assert.ok(readManifest(r.dir, RELAY_ASSET)!.units[0]!.nodes.every((n) => held.includes(n)));
+
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /up to date/);
+    assert.doesNotMatch(x.out, /ABFC4017/);
+  });
+});
+
+test("(A8-5) abfc adopt prints the deprecation warning ABFC5015 and still works", async () => {
+  await withRig({}, async (r) => {
+    const x = await r.run(["adopt", RELAY_ASSET, "UpdateTarget", "--yes"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC5015/);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.units[0]!.id, "event:UpdateTarget");
   });
 });
 
@@ -1618,5 +2015,604 @@ test("a @struct with a backend that cannot create a UserDefinedStruct is ABFC204
     assert.notEqual(x.code, 0, x.out);
     assert.match(x.out, /ABFC2044/);
     assert.equal(r.backend.calls.filter((c) => c.tool === "bp_apply").length, 0);
+  });
+});
+
+const DIRECTOR_ROW = "/TestMod/DataTables/DT_ClassManager/EntityDirector_Test";
+
+function addDirector(dir: string, row = "EntityDirector_Test", tag?: string): void {
+  const file = join(dir, "src", "Relay.ts");
+  const text = readFileSync(file, "utf8").replace(/@director\([^\n]*\)\n/, "");
+  const withImport = text.includes("director") ? text : `import { director } from "@abfc/runtime";\n${text}`;
+  const args = tag === undefined ? `"${row}"` : `"${row}", "${tag}"`;
+  writeFileSync(file, withImport.replace("@blueprint(", `@director(${args})\n@blueprint(`), "utf8");
+}
+
+const DIRECTOR_TAG = "ClassManager.EntityDirector.Test";
+
+test("(tag1) @director with a tag and classManagerRowTag: the spec carries gameplay_tag, the new tag is announced once, a rebuild is up to date; a changed tag re-runs the pass", async () => {
+  await withRig({ handMadeEvent: false, classManagerRows: true, classManagerRowTag: true, gameplayTags: true }, async (r) => {
+    addDirector(r.dir, "EntityDirector_Test", DIRECTOR_TAG);
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    const defaults = r.backend.calls.filter((c) => c.tool === "bp_apply" && c.label === "defaults");
+    assert.equal(defaults.length, 1);
+    assert.deepEqual(defaults[0]!.specs![0]!.class_manager_row, { asset_path: DIRECTOR_ROW, class_path: "/TestMod/Relay/BP_Relay.BP_Relay_C", gameplay_tag: DIRECTOR_TAG });
+    assert.match(x.out, new RegExp(`gameplay tag ${DIRECTOR_TAG.replaceAll(".", "\\.")}: added to the mod's tag list \\(published with abfc publish\\)`));
+    assert.doesNotMatch(x.out, /ABFC2079|ABFC2080|ABFC2081|ABFC2082/);
+    assert.equal(r.backend.tagIni.has(DIRECTOR_TAG), true);
+    assert.match(readFileSync(join(r.dir, ".abfc", "tags.d.ts"), "utf8"), /"ClassManager\.EntityDirector\.Test": true/);
+
+    x = await r.run(["build"]);
+    assert.match(x.out, /up to date/);
+    assert.doesNotMatch(x.out, /added to the mod's tag list/);
+
+    addDirector(r.dir, "EntityDirector_Test", "ClassManager.EntityDirector.Other");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /up to date/);
+    assert.match(x.out, /gameplay tag ClassManager\.EntityDirector\.Other: added to the mod's tag list/);
+    const tagsDts = readFileSync(join(r.dir, ".abfc", "tags.d.ts"), "utf8");
+    assert.match(tagsDts, /"ClassManager\.EntityDirector\.Other": true/);
+    assert.match(tagsDts, /"ClassManager\.EntityDirector\.Test": true/, "the earlier stage-only tag stays");
+    assert.equal(r.backend.calls.filter((c) => c.tool === "bp_apply" && c.label === "defaults").length, 2);
+  });
+});
+
+test("(tag2) @director with a tag but without classManagerRowTag warns ABFC2082 once and sends no gameplay_tag", async () => {
+  await withRig({ handMadeEvent: false, classManagerRows: true }, async (r) => {
+    addDirector(r.dir, "EntityDirector_Test", DIRECTOR_TAG);
+    const x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(x.out.match(/ABFC2082/g)?.length, 1, x.out);
+    assert.equal((r.backend.calls.find((c) => c.label === "defaults")!.specs![0]!.class_manager_row as { gameplay_tag?: string }).gameplay_tag, undefined);
+    assert.doesNotMatch(x.out, /added to the mod's tag list/);
+  });
+});
+
+test("(row1) @director with the classManagerRows capability: the spec carries class_manager_row, the manifest records directorRow, publish lists the row; a new row name warns ABFC5013", async () => {
+  await withRig({ handMadeEvent: false, classManagerRows: true }, async (r) => {
+    addDirector(r.dir);
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    const defaults = r.backend.calls.filter((c) => c.tool === "bp_apply" && c.label === "defaults");
+    assert.equal(defaults.length, 1);
+    assert.deepEqual(defaults[0]!.specs![0]!.class_manager_row, { asset_path: DIRECTOR_ROW, class_path: "/TestMod/Relay/BP_Relay.BP_Relay_C" });
+    assert.doesNotMatch(r.backend.pythonCode[0]!.code, /row_asset/);
+    assert.match(x.out, /class-manager row \/TestMod\/DataTables\/DT_ClassManager\/EntityDirector_Test: created/);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)?.directorRow, DIRECTOR_ROW);
+    assert.doesNotMatch(x.out, /ABFC2077|ABFC5013/);
+
+    const p = await r.run(["publish", "--dry-run"]);
+    assert.match(p.out, /DataTables\/DT_ClassManager\/EntityDirector_Test\.uasset/);
+
+    x = await r.run(["build"]);
+    assert.match(x.out, /up to date/);
+
+    addDirector(r.dir, "EntityDirector_Other");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC5013: the previous class-manager row \/TestMod\/DataTables\/DT_ClassManager\/EntityDirector_Test stays in the mod; delete it in the Mod Editor/);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)?.directorRow, "/TestMod/DataTables/DT_ClassManager/EntityDirector_Other");
+  });
+});
+
+test("(row3) removing @director: the defaults pass runs again, the manifest drops directorRow, ABFC5013 warns, publish no longer lists the row", async () => {
+  await withRig({ handMadeEvent: false, classManagerRows: true }, async (r) => {
+    addDirector(r.dir);
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)?.directorRow, DIRECTOR_ROW);
+    let p = await r.run(["publish", "--dry-run"]);
+    assert.match(p.out, /DataTables\/DT_ClassManager\/EntityDirector_Test\.uasset/);
+
+    const file = join(r.dir, "src", "Relay.ts");
+    writeFileSync(file, readFileSync(file, "utf8").replace(/@director\("[^"]*"\)\n/, ""), "utf8");
+    const before = r.backend.calls.filter((c) => c.tool === "bp_apply" && c.label === "defaults").length;
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /up to date/);
+    const defaults = r.backend.calls.filter((c) => c.tool === "bp_apply" && c.label === "defaults");
+    assert.equal(defaults.length, before + 1, "the defaults pass ran again");
+    assert.equal(defaults[defaults.length - 1]!.specs![0]!.class_manager_row, undefined);
+    assert.match(x.out, /warning ABFC5013: the class has no @director any more; its class-manager row \/TestMod\/DataTables\/DT_ClassManager\/EntityDirector_Test stays in the mod; delete it in the Mod Editor/);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)?.directorRow, undefined);
+
+    p = await r.run(["publish", "--dry-run"]);
+    assert.doesNotMatch(p.out, /EntityDirector_Test/);
+
+    x = await r.run(["build"]);
+    assert.match(x.out, /up to date/);
+    assert.doesNotMatch(x.out, /ABFC5013/);
+  });
+});
+
+test("(row2) @director without the capability keeps the verify route and warns ABFC2077; no directorRow is recorded", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    addDirector(r.dir);
+    const x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC2077: the backend cannot write class-manager rows; update abf-mod-editor-mcp to 2\.5\.0 or newer/);
+    assert.equal(r.backend.calls.find((c) => c.label === "defaults")!.specs![0]!.class_manager_row, undefined);
+    assert.match(r.backend.pythonCode[0]!.code, /row_asset = unreal\.load_asset\("\/TestMod\/DataTables\/DT_ClassManager\/EntityDirector_Test"\)/);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)?.directorRow, undefined);
+  });
+});
+
+// ---- Asset operations on the stage (A10): rename, move, delete, reparent, recreate ----
+
+test("(A10-1) a renamed class: the build renames the asset on the stage, moves manifest and source map, and a rebuild is up to date", async () => {
+  await withRig(OPS, async (r) => {
+    tallyOnly(r.dir, tally("BP_Tally"));
+    assert.equal((await r.run(["build"])).code, 0);
+    writeFileSync(join(r.dir, "src", "Tally.ts"), tally("BP_Tally2"), "utf8");
+    const x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /renamed \/TestMod\/BP_Tally -> \/TestMod\/BP_Tally2/);
+    assert.deepEqual(r.backend.assetOpsCalls, [[{ op: "rename", from: TA, to: "/TestMod/BP_Tally2" }]]);
+    assert.equal(readManifest(r.dir, TA), null);
+    const m = readManifest(r.dir, "/TestMod/BP_Tally2")!;
+    assert.equal(m.renamedFrom, TA);
+    assert.equal(m.created, true);
+    assert.deepEqual(m.units.map((u) => u.id), ["event:Bump"]);
+    assert.equal(m.source?.class, "BP_Tally2");
+    assert.equal(readSourceMap(r.dir, TA), null);
+    assert.equal(readSourceMap(r.dir, "/TestMod/BP_Tally2")?.asset, "/TestMod/BP_Tally2");
+    assert.deepEqual(r.backend.stageAssets().filter((a) => a.includes("Tally")), ["/TestMod/BP_Tally2"]);
+    const creates = r.backend.calls.filter((c) => c.tool === "bp_apply").flatMap((c) => c.specs ?? []).filter((s: any) => s.create !== undefined);
+    assert.equal(creates.length, 1, "no second asset is created");
+    const again = r.backend.applyLabels().length;
+    const y = await r.run(["build"]);
+    assert.equal(y.code, 0, y.out);
+    assert.equal(r.backend.applyLabels().length, again, "up to date");
+    assert.equal(r.backend.assetOpsCalls.length, 1);
+  });
+});
+
+test("(A10-2) a moved class file with @director: renamed, the row referencer lands in publishAlso, JSON lists the rename", async () => {
+  await withRig({ ...OPS, classManagerRows: true }, async (r) => {
+    tallyOnly(r.dir, tally("BP_Tally", "Actor", true));
+    assert.equal((await r.run(["build"])).code, 0);
+    mkdirSync(join(r.dir, "src", "Sub"));
+    renameSync(join(r.dir, "src", "Tally.ts"), join(r.dir, "src", "Sub", "Tally.ts"));
+    const x = await r.run(["build", "--json"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /"renamed":\s*\[\s*\{\s*"from":\s*"\/TestMod\/BP_Tally",\s*"to":\s*"\/TestMod\/Sub\/BP_Tally"/);
+    assert.equal(r.backend.assetOpsCalls.length, 1);
+    const m = readManifest(r.dir, "/TestMod/Sub/BP_Tally")!;
+    assert.equal(m.renamedFrom, TA);
+    assert.deepEqual(m.publishAlso, ["/TestMod/DataTables/DT_ClassManager/EntityDirector_Test"]);
+    assert.equal(m.directorRow, "/TestMod/DataTables/DT_ClassManager/EntityDirector_Test");
+    assert.equal(m.source?.file, "src/Sub/Tally.ts");
+  });
+});
+
+test("(A10-3) a deleted class file: the asset abfc created (and its row) is deleted, a tombstone stays, a rebuild does nothing", async () => {
+  const row = "/TestMod/DataTables/DT_ClassManager/EntityDirector_Test";
+  await withRig({ ...OPS, classManagerRows: true }, async (r) => {
+    tallyOnly(r.dir, tally("BP_Tally", "Actor", true));
+    assert.equal((await r.run(["build"])).code, 0);
+    rmSync(join(r.dir, "src", "Tally.ts"));
+    writeFileSync(join(r.dir, "src", "Empty.ts"), "export {};\n", "utf8");
+    const x = await r.run(["build", "--json"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /"deleted":\s*\[\s*"\/TestMod\/BP_Tally"/);
+    assert.deepEqual(r.backend.assetOpsCalls, [[{ op: "delete", asset: row }, { op: "delete", asset: TA }]]);
+    const m = readManifest(r.dir, TA)!;
+    assert.equal(m.deleted, true);
+    assert.deepEqual(m.units, []);
+    assert.equal(m.directorRow, row);
+    assert.equal(readSourceMap(r.dir, TA), null);
+    assert.equal(r.backend.stageAssets().includes(TA), false);
+    const y = await r.run(["build"]);
+    assert.equal(y.code, 0, y.out);
+    assert.equal(r.backend.assetOpsCalls.length, 1);
+    assert.doesNotMatch(y.out, /ABFC5010/);
+  });
+});
+
+test("(A10-4) a hand-made asset (not created by abfc) whose class file is deleted is not deleted", async () => {
+  await withRig(OPS, async (r) => {
+    assert.equal((await r.run(["adopt", RELAY_ASSET, "UpdateTarget", "--yes"])).code, 0);
+    assert.equal((await r.run(["build"])).code, 0);
+    rmSync(join(r.dir, "src", "Relay.ts"));
+    rmSync(join(r.dir, "src", "Relay.test.ts"));
+    writeFileSync(join(r.dir, "src", "Empty.ts"), "export {};\n", "utf8");
+    const x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(r.backend.assetOpsCalls.length, 0);
+    assert.ok(r.backend.stageAssets().includes(RELAY_ASSET));
+  });
+});
+
+test("(A10-5) extends Actor -> Pawn reparents the asset and applies every unit again", async () => {
+  await withRig(OPS, async (r) => {
+    addParentStubs(r.dir);
+    tallyOnly(r.dir, tally("BP_Tally"));
+    assert.equal((await r.run(["build"])).code, 0);
+    assert.equal(readManifest(r.dir, TA)!.parent, "/Script/FakeEngine.Actor");
+    writeFileSync(join(r.dir, "src", "Tally.ts"), tally("BP_Tally", "Pawn"), "utf8");
+    const before = r.backend.applyLabels().length;
+    const x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /reparented \/TestMod\/BP_Tally: \/Script\/FakeEngine.Actor -> \/Script\/FakeEngine.Pawn/);
+    assert.deepEqual(r.backend.assetOpsCalls, [[{ op: "reparent", asset: TA, parent: "/Script/FakeEngine.Pawn" }]]);
+    assert.equal(r.backend.parentOf(TA), "/Script/FakeEngine.Pawn");
+    assert.ok(r.backend.applyLabels().length > before, "the units were applied again");
+    const m = readManifest(r.dir, TA)!;
+    assert.equal(m.parent, "/Script/FakeEngine.Pawn");
+    assert.equal(m.parentFamily, "actor");
+    const again = r.backend.applyLabels().length;
+    assert.equal((await r.run(["build"])).code, 0);
+    assert.equal(r.backend.applyLabels().length, again);
+    assert.equal(r.backend.assetOpsCalls.length, 1);
+  });
+});
+
+test("(A10-6) extends Actor -> ActorComponent recreates an asset abfc created; an unknown family tries the reparent first; a hand-made asset is ABFC2048", async () => {
+  await withRig(OPS, async (r) => {
+    addParentStubs(r.dir);
+    tallyOnly(r.dir, tally("BP_Tally"));
+    assert.equal((await r.run(["build"])).code, 0);
+    writeFileSync(join(r.dir, "src", "Tally.ts"), tally("BP_Tally", "ActorComponent"), "utf8");
+    const x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.deepEqual(r.backend.assetOpsCalls, [[{ op: "recreate", asset: TA }]]);
+    assert.equal(r.backend.parentOf(TA), "/Script/Engine.ActorComponent");
+    const creates = r.backend.calls.filter((c) => c.tool === "bp_apply").flatMap((c) => c.specs ?? []).filter((s: any) => s.asset === TA && s.create !== undefined);
+    assert.equal(creates.length, 2, "created again");
+    const m = readManifest(r.dir, TA)!;
+    assert.equal(m.created, true);
+    assert.equal(m.parentFamily, "component");
+    // back to Actor, with a manifest that does not know the old family: the backend refuses the reparent, the build recreates
+    const { parentFamily: _f, ...unknownFamily } = m;
+    writeManifest(r.dir, unknownFamily);
+    writeFileSync(join(r.dir, "src", "Tally.ts"), tally("BP_Tally"), "utf8");
+    const y = await r.run(["build"]);
+    assert.equal(y.code, 0, y.out);
+    assert.deepEqual(r.backend.assetOpsCalls.slice(1), [[{ op: "reparent", asset: TA, parent: "/Script/FakeEngine.Actor" }], [{ op: "recreate", asset: TA }]]);
+    assert.equal(r.backend.parentOf(TA), "/Script/FakeEngine.Actor");
+  });
+  await withRig(OPS, async (r) => {
+    addParentStubs(r.dir);
+    assert.equal((await r.run(["adopt", RELAY_ASSET, "UpdateTarget", "--yes"])).code, 0);
+    assert.equal((await r.run(["build"])).code, 0);
+    const src = join(r.dir, "src", "Relay.ts");
+    writeFileSync(src, readFileSync(src, "utf8").replace('import { Actor } from "/Script/FakeEngine";', 'import { ActorComponent } from "/Script/FakeEngine";').replace("extends Actor {", "extends ActorComponent {"), "utf8");
+    const x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, /ABFC2048/);
+    assert.equal(r.backend.assetOpsCalls.length, 0);
+  });
+});
+
+test("(A10-7) a backend without bp_asset_ops: a changed extends is ABFC2048, nothing is applied", async () => {
+  await withRig({}, async (r) => {
+    addParentStubs(r.dir);
+    tallyOnly(r.dir, tally("BP_Tally"));
+    assert.equal((await r.run(["build"])).code, 0);
+    writeFileSync(join(r.dir, "src", "Tally.ts"), tally("BP_Tally", "Pawn"), "utf8");
+    const applies = r.backend.applyLabels().length;
+    const x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, /error ABFC2048: .*extends \/Script\/FakeEngine.Pawn now, but its asset was built with \/Script\/FakeEngine.Actor/);
+    assert.equal(r.backend.applyLabels().length, applies);
+  });
+});
+
+test("(A10-8) a failed asset operation is ABFC5016, nothing on disk moves, the next build succeeds", async () => {
+  await withRig(OPS, async (r) => {
+    tallyOnly(r.dir, tally("BP_Tally"));
+    assert.equal((await r.run(["build"])).code, 0);
+    writeFileSync(join(r.dir, "src", "Tally.ts"), tally("BP_Tally2"), "utf8");
+    r.backend.assetOpsError = "rename failed: /TestMod/BP_Tally2 is referenced by /TestMod/BP_Other";
+    const x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, /error ABFC5016: the backend could not rename \/TestMod\/BP_Tally to \/TestMod\/BP_Tally2: .*BP_Other/);
+    assert.ok(readManifest(r.dir, TA), "the old manifest is still there");
+    assert.equal(readManifest(r.dir, "/TestMod/BP_Tally2"), null);
+    const y = await r.run(["build"]);
+    assert.equal(y.code, 0, y.out);
+    assert.ok(readManifest(r.dir, "/TestMod/BP_Tally2"));
+  });
+});
+
+test("(A10-9) a re-sync before the publish gives the old asset back: the next build repeats the rename, and a tombstone repeats its delete", async () => {
+  const EMPTY = "/TestMod/BP_Gone";
+  await withRig({ ...OPS, emptyAssets: [EMPTY] }, async (r) => {
+    assert.equal((await r.run(["adopt", RELAY_ASSET, "UpdateTarget", "--yes"])).code, 0);
+    assert.equal((await r.run(["build"])).code, 0);
+    const src = join(r.dir, "src", "Relay.ts");
+    writeFileSync(src, readFileSync(src, "utf8").replace('{ path: "/TestMod/Relay/BP_Relay" }', '{ path: "Relay/BP_Relay2" }'), "utf8");
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(readManifest(r.dir, "/TestMod/Relay/BP_Relay2")!.renamedFrom, RELAY_ASSET);
+    // a tombstone for an asset the mod still holds
+    writeManifest(r.dir, { asset: EMPTY, deleted: true, units: [], variables: [], compiler: "abfc 0.1.0", profile: profile.id });
+    x = await r.run(["build", "--resync"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC5002/);
+    assert.match(x.out, /renamed \/TestMod\/Relay\/BP_Relay -> \/TestMod\/Relay\/BP_Relay2 \(again/);
+    assert.match(x.out, /deleted \/TestMod\/BP_Gone \(again/);
+    const stage = r.backend.stageAssets();
+    assert.ok(stage.includes("/TestMod/Relay/BP_Relay2"));
+    assert.equal(stage.includes(RELAY_ASSET), false);
+    assert.equal(stage.includes(EMPTY), false);
+    assert.equal(readManifest(r.dir, "/TestMod/Relay/BP_Relay2")!.renamedFrom, RELAY_ASSET);
+    assert.equal(fileExists(join(r.backend.root, "stage", "Content", "BP_Gone.uasset")), false);
+  });
+});
+
+test("(A10-10) a manifest without a recorded parent learns it when its asset is read", async () => {
+  await withRig(OPS, async (r) => {
+    tallyOnly(r.dir, tally("BP_Tally"));
+    assert.equal((await r.run(["build"])).code, 0);
+    const { parent: _p, parentFamily: _f, ...old } = readManifest(r.dir, TA)!;
+    writeManifest(r.dir, old);
+    const x = await r.run(["build", "--drift"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(readManifest(r.dir, TA)!.parent, "/Script/FakeEngine.Actor");
+    assert.equal(readManifest(r.dir, TA)!.parentFamily, "actor");
+    assert.equal(r.backend.assetOpsCalls.length, 0);
+  });
+});
+
+test("(R2) a reparent lost by a re-sync before the publish is done again by the next build (the manifest follows the stage's parent), also across families", async () => {
+  await withRig(OPS, async (r) => {
+    addParentStubs(r.dir);
+    tallyOnly(r.dir, tally("BP_Tally"));
+    assert.equal((await r.run(["build"])).code, 0);
+    r.backend.markPublished();
+    writeFileSync(join(r.dir, "src", "Tally.ts"), tally("BP_Tally", "Pawn"), "utf8");
+    assert.equal((await r.run(["build"])).code, 0);
+    assert.equal(r.backend.parentOf(TA), "/Script/FakeEngine.Pawn");
+    // the re-sync gives the published Actor asset back
+    let x = await r.run(["build", "--resync"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(r.backend.parentOf(TA), "/Script/FakeEngine.Pawn", "the build reparented it again");
+    assert.deepEqual(r.backend.assetOpsCalls.map((c) => c[0]!.op), ["reparent", "reparent"]);
+    assert.equal(readManifest(r.dir, TA)!.parent, "/Script/FakeEngine.Pawn");
+    // across families: recreate, re-sync, recreate again
+    writeFileSync(join(r.dir, "src", "Tally.ts"), tally("BP_Tally", "ActorComponent"), "utf8");
+    assert.equal((await r.run(["build"])).code, 0);
+    assert.equal(r.backend.parentOf(TA), "/Script/Engine.ActorComponent");
+    x = await r.run(["build", "--resync"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC6001/);
+    assert.equal(r.backend.parentOf(TA), "/Script/Engine.ActorComponent", "the build recreated it again");
+    assert.equal(readManifest(r.dir, TA)!.parent, "/Script/Engine.ActorComponent");
+  });
+});
+
+// ---- Publish: deletions, renames, tag list, re-sync after a failed publish (A11) ----
+
+test("(A11-1) publish after a rename lists the old files as deleted and removes them; the dry run only lists", async () => {
+  await withRig({ ...OPS, publishDeletes: true }, async (r) => {
+    tallyOnly(r.dir, tally("BP_Tally"));
+    assert.equal((await r.run(["build"])).code, 0);
+    writeFileSync(join(r.dir, "src", "Tally.ts"), tally("BP_Tally2"), "utf8");
+    let x = await r.run(["publish", "--dry-run"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /deleted Content\/BP_Tally\.uasset/);
+    assert.match(x.out, /changed Content\/BP_Tally2\.uasset/);
+    x = await r.run(["publish", "--dry-run", "--json"]);
+    assert.match(x.out, /"deleted":\s*\[\s*"Content\/BP_Tally\.uasset"/);
+    assert.equal(r.backend.publishCalls.length, 0);
+    assert.equal(readManifest(r.dir, "/TestMod/BP_Tally2")!.renamedFrom, TA);
+
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(r.backend.publishCalls.length, 1);
+    const call = r.backend.publishCalls[0]!;
+    assert.equal(call.deleteRemoved, true);
+    assert.deepEqual([...call.assets].sort(), [TA, "/TestMod/BP_Tally2"]);
+    assert.match(x.out, /deleted Content\/BP_Tally\.uasset/);
+    assert.equal(r.backend.removedFiles.size, 0);
+    assert.equal(readManifest(r.dir, "/TestMod/BP_Tally2")!.renamedFrom, undefined);
+    assert.doesNotMatch(x.out, /ABFC7014/);
+
+    x = await r.run(["publish"]);
+    assert.match(x.out, /nothing to publish/);
+  });
+});
+
+test("(A11-2) publish after deleting a class removes its asset and class-manager row, then the tombstone goes", async () => {
+  await withRig({ ...OPS, classManagerRows: true, publishDeletes: true }, async (r) => {
+    tallyOnly(r.dir, tally("BP_Tally", "Actor", true));
+    assert.equal((await r.run(["build"])).code, 0);
+    rmSync(join(r.dir, "src", "Tally.ts"));
+    writeFileSync(join(r.dir, "src", "Empty.ts"), "export {};\n", "utf8");
+    let x = await r.run(["publish", "--dry-run"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /deleted Content\/BP_Tally\.uasset/);
+    assert.match(x.out, /deleted Content\/DataTables\/DT_ClassManager\/EntityDirector_Test\.uasset/);
+    assert.equal(readManifest(r.dir, TA)!.deleted, true, "a dry run keeps the tombstone");
+
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    const call = r.backend.publishCalls[0]!;
+    assert.equal(call.deleteRemoved, true);
+    assert.deepEqual([...call.assets].sort(), [TA, DIRECTOR_ROW]);
+    assert.equal(readManifest(r.dir, TA), null);
+    assert.equal(readSourceMap(r.dir, TA), null);
+    x = await r.run(["publish"]);
+    assert.match(x.out, /nothing to publish/);
+    assert.equal(r.backend.publishCalls.length, 1);
+  });
+});
+
+test("(A11-3) a backend without publishDeletes: ABFC7014 names the files, the rest is published, the deletion stays pending", async () => {
+  await withRig({ ...OPS, classManagerRows: true }, async (r) => {
+    tallyOnly(r.dir, tally("BP_Tally", "Actor", true));
+    assert.equal((await r.run(["build"])).code, 0);
+    rmSync(join(r.dir, "src", "Tally.ts"));
+    writeFileSync(join(r.dir, "src", "Empty.ts"), "export {};\n", "utf8");
+    let x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC7014: .*Content\/BP_Tally\.uasset/);
+    assert.equal(r.backend.publishCalls.length, 0, "nothing else to publish");
+    assert.equal(readManifest(r.dir, TA)!.deleted, true);
+
+    // a new class publishes the rest, without deleteRemoved; the deletion stays pending
+    writeFileSync(join(r.dir, "src", "Tally3.ts"), tally("BP_Tally3"), "utf8");
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /ABFC7014/);
+    assert.equal(r.backend.publishCalls.length, 1);
+    assert.equal(r.backend.publishCalls[0]!.deleteRemoved, undefined);
+    assert.deepEqual(r.backend.publishCalls[0]!.assets, ["/TestMod/BP_Tally3"]);
+    assert.equal(readManifest(r.dir, TA)!.deleted, true, "still pending");
+
+    // the files were deleted by hand: nothing is left to delete, the tombstone goes
+    r.backend.removedFiles.clear();
+    x = await r.run(["publish"]);
+    assert.doesNotMatch(x.out, /ABFC7014/);
+    assert.equal(readManifest(r.dir, TA), null);
+  });
+});
+
+test("(A11-4) a new director tag: the tag ini is listed, published by file, and the backend registers the tag in the open editor (no ABFC7015)", async () => {
+  await withRig({ handMadeEvent: false, classManagerRows: true, classManagerRowTag: true, gameplayTags: true, liveTags: true }, async (r) => {
+    addDirector(r.dir, "EntityDirector_Test", DIRECTOR_TAG);
+    let x = await r.run(["publish", "--dry-run"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /changed config Config\/Tags\/TestModTags\.ini/);
+    x = await r.run(["publish", "--dry-run", "--json"]);
+    assert.match(x.out, /"config":\s*\[\s*"Config\/Tags\/TestModTags\.ini"/);
+    assert.equal(r.backend.publishCalls.length, 0);
+
+    r.backend.publishResult = {
+      ...r.backend.publishResult,
+      route: "live-reload",
+      tagsRegistered: [DIRECTOR_TAG],
+      tagsStrategy: "refresh",
+    };
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    const call = r.backend.publishCalls[0]!;
+    assert.ok(call.assets.includes("Config/Tags/TestModTags.ini"), call.assets.join(","));
+    assert.ok(call.assets.includes("/TestMod/Relay/BP_Relay"));
+    assert.match(x.out, /gameplay tags registered in the open Mod Editor: ClassManager\.EntityDirector\.Test/);
+    assert.doesNotMatch(x.out, /ABFC7015/);
+
+    x = await r.run(["publish"]);
+    assert.match(x.out, /nothing to publish/);
+  });
+});
+
+test("(A11-4b) a tag the open editor could not register: ABFC7015 names it and the reason", async () => {
+  await withRig({ handMadeEvent: false, classManagerRows: true, classManagerRowTag: true, gameplayTags: true, liveTags: true }, async (r) => {
+    addDirector(r.dir, "EntityDirector_Test", DIRECTOR_TAG);
+    r.backend.publishResult = {
+      ...r.backend.publishResult,
+      route: "live-reload",
+      tagsUnregistered: [DIRECTOR_TAG],
+      tagsError: "refresh: no settings",
+    };
+    const x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC7015: .*does not know these gameplay tags yet: ClassManager\.EntityDirector\.Test \(refresh: no settings\)/);
+    assert.doesNotMatch(x.out, /gameplay tags registered in the open Mod Editor/);
+  });
+});
+
+test("(A11-4c) a backend without liveTags: the tag list published live gives ABFC7015 (old backend wording)", async () => {
+  await withRig({ handMadeEvent: false, classManagerRows: true, classManagerRowTag: true, gameplayTags: true }, async (r) => {
+    addDirector(r.dir, "EntityDirector_Test", DIRECTOR_TAG);
+    r.backend.publishResult = { ...r.backend.publishResult, route: "live-reload" };
+    const x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC7015: .*cannot register new tags in the open editor/);
+  });
+});
+
+test("(A11-4d) publish --json carries the tag registration result", async () => {
+  await withRig({ handMadeEvent: false, classManagerRows: true, classManagerRowTag: true, gameplayTags: true, liveTags: true }, async (r) => {
+    addDirector(r.dir, "EntityDirector_Test", DIRECTOR_TAG);
+    r.backend.publishResult = { ...r.backend.publishResult, route: "live-reload", tagsRegistered: [DIRECTOR_TAG], tagsStrategy: "settings" };
+    const x = await r.run(["publish", "--json"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /"tagsRegistered":\s*\[\s*"ClassManager\.EntityDirector\.Test"\s*\]/);
+    assert.match(x.out, /"tagsUnregistered":\s*\[\s*\]/);
+    assert.match(x.out, /"tagsStrategy":\s*"settings"/);
+    assert.match(x.out, /"tagsError":\s*null/);
+  });
+});
+
+test("(A11-5) a changed @director row deletes the old row on the stage and the next publish removes its file", async () => {
+  await withRig({ ...OPS, handMadeEvent: false, classManagerRows: true, publishDeletes: true }, async (r) => {
+    addDirector(r.dir, "EntityDirector_Test");
+    assert.equal((await r.run(["build"])).code, 0);
+    addDirector(r.dir, "EntityDirector_Other");
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC5013/);
+    assert.match(x.out, /deleted \/TestMod\/DataTables\/DT_ClassManager\/EntityDirector_Test/);
+    assert.deepEqual(r.backend.assetOpsCalls, [[{ op: "delete", asset: DIRECTOR_ROW }]]);
+    assert.deepEqual(readManifest(r.dir, RELAY_ASSET)!.retiredRows, [DIRECTOR_ROW]);
+
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /deleted Content\/DataTables\/DT_ClassManager\/EntityDirector_Test\.uasset/);
+    assert.ok(r.backend.publishCalls[0]!.assets.includes(DIRECTOR_ROW));
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.retiredRows, undefined);
+  });
+});
+
+test("(R3) a changed @director, then --resync before the publish: the old row is back on the stage and the next build deletes it again", async () => {
+  await withRig({ ...OPS, handMadeEvent: false, classManagerRows: true, publishDeletes: true }, async (r) => {
+    addDirector(r.dir, "EntityDirector_Test");
+    assert.equal((await r.run(["build"])).code, 0);
+    r.backend.markPublished();
+    addDirector(r.dir, "EntityDirector_Other");
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.deepEqual(readManifest(r.dir, RELAY_ASSET)!.retiredRows, [DIRECTOR_ROW]);
+    const callsBefore = r.backend.assetOpsCalls.length;
+    x = await r.run(["build", "--resync"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /deleted \/TestMod\/DataTables\/DT_ClassManager\/EntityDirector_Test \(again/);
+    assert.deepEqual(r.backend.assetOpsCalls.slice(callsBefore), [[{ op: "delete", asset: DIRECTOR_ROW }]]);
+    assert.deepEqual(readManifest(r.dir, RELAY_ASSET)!.retiredRows, [DIRECTOR_ROW]);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.directorRow, "/TestMod/DataTables/DT_ClassManager/EntityDirector_Other");
+
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /deleted Content\/DataTables\/DT_ClassManager\/EntityDirector_Test\.uasset/);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.retiredRows, undefined);
+  });
+});
+
+test("(A11-6) without assetOps a changed @director row stays ABFC5013 and nothing is deleted", async () => {
+  await withRig({ handMadeEvent: false, classManagerRows: true }, async (r) => {
+    addDirector(r.dir, "EntityDirector_Test");
+    assert.equal((await r.run(["build"])).code, 0);
+    addDirector(r.dir, "EntityDirector_Other");
+    const x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC5013/);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.retiredRows, undefined);
+  });
+});
+
+test("(A11-7) a failed publish, then a re-sync, then a build: the manifest is pruned, no ABFC5002 loop, the next publish works (P3)", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    const base = r.backend.publishResult;
+    r.backend.publishResult = { ...base, ok: false, published: [], refused: "conflicts", message: "Refused: conflicts", conflicts: ["Content/Relay/BP_Relay.uasset"] };
+    let x = await r.run(["publish"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, /ABFC7005/);
+
+    x = await r.run(["build", "--resync"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC5002/);
+    const held = r.backend.nodeNames(RELAY_ASSET);
+    assert.ok(readManifest(r.dir, RELAY_ASSET)!.units[0]!.nodes.every((n) => held.includes(n)));
+
+    r.backend.publishResult = base;
+    x = await r.run(["publish", "--resync"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC5002/);
+    assert.equal(r.backend.publishCalls.length, 2);
   });
 });

@@ -1,7 +1,7 @@
 import { driftDiagnostics, ownedSets, readManifest, readSourceMap, unitState } from "@abfc/compiler";
 import type { Span, T3dNode } from "@abfc/ir";
 import type { CliContext } from "../context.js";
-import { BackendSession, Recorder, missingInStage, readAsset, shortHash } from "./common.js";
+import { BackendSession, Recorder, missingInStage, pruneManifestsToStage, readAsset, shortHash } from "./common.js";
 import { ensureStage } from "./stage.js";
 
 /** `abfc status`: state of every owned unit and of the staged copy. */
@@ -11,7 +11,8 @@ export async function status(ctx: CliContext): Promise<number> {
   const session = new BackendSession(ctx, rec);
   try {
     const { backend } = await session.open("status.backendStart");
-    const stage = await ensureStage(backend, env, config, { resync: args.flags.resync });
+    const { status: stage, resynced } = await ensureStage(backend, env, config, { resync: args.flags.resync, onConflict: "report", warn: (d) => output.diag(d) });
+    if (resynced) await pruneManifestsToStage(ctx, backend, config.mod.name);
     const rows: Array<{ asset: string; unit: string; state: string; irHash: string | null; assetHash: string | null }> = [];
 
     for (const asset of Object.keys(ownedSets(projectDir))) {
@@ -27,7 +28,7 @@ export async function status(ctx: CliContext): Promise<number> {
         rows.push({ asset, unit: u.id, state, irHash: u.irHash === "" ? null : u.irHash, assetHash: u.assetHash });
         output.info(`${asset} ${u.id} ${state} ${shortHash(u.irHash)} ${shortHash(u.assetHash)}`);
       }
-      for (const d of driftDiagnostics(asset, manifest.units, nodes, stage, spans)) output.diag(d);
+      for (const d of driftDiagnostics(asset, manifest.units, nodes, stage, spans, { severity: "warning" })) output.diag(d);
     }
     if (rows.length === 0) output.info("no owned units yet (run abfc build, or abfc adopt)");
     output.info(

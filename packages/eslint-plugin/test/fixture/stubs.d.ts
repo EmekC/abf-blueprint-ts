@@ -18,6 +18,8 @@ declare class StubActor {
   Notify(): void;
   /** @bpRpc server */
   Ask(): void;
+  /** @bpRpc server */
+  ServerDo(): void;
   Plain(): void;
   HasAuthority(): boolean;
   IsServer(): boolean;

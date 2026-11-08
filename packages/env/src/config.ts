@@ -1,10 +1,23 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
+import { DEFAULT_CLASS_MANAGER_TABLE, DEFAULT_SOURCE_ROOT, joinModPath, modRelativeProblem } from "@abfc/ir";
+import { getEnv } from "./discover.js";
 import { envError } from "./errors.js";
 import { USER_CONFIG_LABEL } from "./settings.js";
 
+/** The config schema this abfc reads and writes (docs/design.md 18.4). */
+export const CONFIG_SCHEMA_VERSION = 2;
+
 export interface ProjectConfig {
+  /** 1 when the file has no `schemaVersion`. */
+  schemaVersion: number;
   mod: { name: string; dir?: string };
+  /** Project-relative folder that holds the class files; asset paths derive from it. */
+  sourceRoot: string;
+  classManager: {
+    /** Mod-relative package folder of the class-manager rows. */
+    table: string;
+  };
   stubs: {
     classes: string[];
     scriptClasses: string[];
@@ -97,6 +110,24 @@ function parseConfig(file: string, raw: unknown, partial: boolean): Partial<Proj
   const root = asObj(file, "$", raw);
   const out: Partial<ProjectConfig> = {};
 
+  let schemaVersion = 1;
+  if (root.schemaVersion !== undefined) {
+    const v = root.schemaVersion;
+    if (typeof v !== "number" || !Number.isInteger(v) || v < 1) fail(file, "schemaVersion", "expected a positive integer");
+    schemaVersion = v as number;
+    if (schemaVersion > CONFIG_SCHEMA_VERSION) {
+      throw envError(
+        1022,
+        `${file} was written by a newer abfc (schema ${schemaVersion}); this abfc reads schema ${CONFIG_SCHEMA_VERSION} or older.`,
+        [{ source: file, detail: `schemaVersion = ${schemaVersion}` }],
+        "update abfc.",
+      );
+    }
+    out.schemaVersion = schemaVersion;
+  } else if (!partial) {
+    out.schemaVersion = 1;
+  }
+
   if (root.mod !== undefined || !partial) {
     const m = asObj(file, "mod", root.mod);
     const name = m.name;
@@ -109,16 +140,42 @@ function parseConfig(file: string, raw: unknown, partial: boolean): Partial<Proj
     out.mod = mod;
   }
 
+  if (root.sourceRoot !== undefined || !partial) {
+    const sr = optStr(file, root, "sourceRoot", "") ?? DEFAULT_SOURCE_ROOT;
+    if (win32.isAbsolute(sr) || sr.startsWith("/")) fail(file, "sourceRoot", "expected a project-relative folder, not an absolute path");
+    if (sr.split(/[\\/]/).includes("..")) fail(file, "sourceRoot", 'a ".." segment is not allowed');
+    out.sourceRoot = sr;
+  }
+
+  if (root.classManager !== undefined || !partial) {
+    const cm = root.classManager === undefined ? {} : asObj(file, "classManager", root.classManager);
+    const table = optStr(file, cm, "table", "classManager.") ?? DEFAULT_CLASS_MANAGER_TABLE;
+    const problem = modRelativeProblem(table);
+    if (problem !== null) fail(file, "classManager.table", problem);
+    out.classManager = { table };
+  }
+
   if (root.stubs !== undefined) {
     const s = asObj(file, "stubs", root.stubs);
     const modAssets = s.modAssets;
     if (modAssets !== undefined && modAssets !== "all" && (!Array.isArray(modAssets) || modAssets.some((x) => typeof x !== "string"))) {
       fail(file, "stubs.modAssets", 'expected "all" or an array of strings');
     }
+    let modAssetList = modAssets as "all" | string[] | undefined;
+    if (Array.isArray(modAssetList) && schemaVersion >= 2) {
+      const modName = out.mod?.name;
+      modAssetList = modAssetList.map((entry, i) => {
+        if (entry.startsWith("/")) fail(file, `stubs.modAssets[${i}]`, 'write mod-relative paths such as "Relays/BP_X"');
+        const problem = modRelativeProblem(entry);
+        if (problem !== null) fail(file, `stubs.modAssets[${i}]`, problem);
+        // The user config carries no mod name; its relative entries stay as written.
+        return modName === undefined ? entry : joinModPath(modName, entry);
+      });
+    }
     const stubs: ProjectConfig["stubs"] = {
       classes: strArray(file, s, "classes", "stubs.") ?? [],
       scriptClasses: strArray(file, s, "scriptClasses", "stubs.") ?? [],
-      modAssets: (modAssets as "all" | string[] | undefined) ?? "all",
+      modAssets: modAssetList ?? "all",
       widgetMembers: widgetMembers(file, s.widgetMembers),
     };
     const scriptModules = strArray(file, s, "scriptModules", "stubs.");
@@ -174,13 +231,25 @@ export function loadProjectConfig(projectDir: string, files: ConfigFiles = nodeF
   return parseConfig(PROJECT_CONFIG_FILE, parseJson(PROJECT_CONFIG_FILE, files.readFile(file)), false) as ProjectConfig;
 }
 
-/** Reads `%APPDATA%\abfc\config.json`; null when `APPDATA` is unset or the file does not exist. */
+/**
+ * The user config file: a non-empty `ABFC_USER_CONFIG` wins, else `%APPDATA%\abfc\config.json`, else null.
+ * The file need not exist.
+ */
+export function userConfigFile(env: NodeJS.ProcessEnv): string | null {
+  const override = getEnv(env, "ABFC_USER_CONFIG");
+  if (override !== undefined && override !== "") return override;
+  const appData = getEnv(env, "APPDATA");
+  if (appData === undefined || appData === "") return null;
+  return join(appData, "abfc", "config.json");
+}
+
+/** Reads the user config ({@link userConfigFile}); null when there is none or the file does not exist. */
 export function loadUserConfig(env: NodeJS.ProcessEnv, files: ConfigFiles = nodeFiles): Partial<ProjectConfig> | null {
-  const appData = env.APPDATA;
-  if (!appData) return null;
-  const file = join(appData, "abfc", "config.json");
+  const file = userConfigFile(env);
+  if (file === null) return null;
   if (!files.exists(file)) return null;
-  return parseConfig(USER_CONFIG_LABEL, parseJson(USER_CONFIG_LABEL, files.readFile(file)), true);
+  const label = getEnv(env, "ABFC_USER_CONFIG") ? file : USER_CONFIG_LABEL;
+  return parseConfig(label, parseJson(label, files.readFile(file)), true);
 }
 
 /** Machine-specific keys that should live in the user config, not the (committed) project config. */

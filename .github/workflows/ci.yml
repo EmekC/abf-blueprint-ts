@@ -1,0 +1,143 @@
+# CI for pull requests and main. It only builds, tests and scans; it publishes nothing and has read-only permissions.
+# Maintainer notes are in docs/releasing.md. Actions are pinned to @v4 tags; re-pinning to commit SHAs is a maintainer task.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (node ${{ matrix.node }})
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["24", "26.7.0"]
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Pack npm tarballs (dry run)
+        run: node scripts/release/pack-npm.mjs --dry-run
+
+  artifacts:
+    name: artifacts (exe, vsix, installer, npm, scan)
+    needs: test
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "26.7.0"
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Read pins and version
+        id: pins
+        run: |
+          $c = node -p "require('./release/pins.json').backend.commit"
+          "commit=$c" >> $env:GITHUB_OUTPUT
+          $v = node -p "require('./packages/cli/package.json').version"
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Check out the pinned backend
+        uses: actions/checkout@v4
+        with:
+          repository: EmekC/abf-mod-editor-mcp
+          ref: ${{ steps.pins.outputs.commit }}
+          path: build/backend-src
+          persist-credentials: false
+
+      - name: Download pinned tools
+        run: node scripts/release/fetch-pins.mjs --download
+
+      - name: Inno Setup compiler
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            node scripts/release/fetch-pins.mjs --download --only innosetup
+            if ($LASTEXITCODE -ne 0) { throw 'Inno Setup is not on the runner and release/pins.json has no innosetup pin' }
+            $v = node -p "require('./release/pins.json').innosetup.version"
+            & "build\cache\innosetup-$v.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /PORTABLE=1 "/DIR=$PWD\build\tools\innosetup" | Out-Null
+            $iscc = "$PWD\build\tools\innosetup\ISCC.exe"
+            if (-not (Test-Path $iscc)) { throw 'Inno Setup portable install failed' }
+          }
+          "ABFC_ISCC=$iscc" >> $env:GITHUB_ENV
+          try { & $iscc '/?' 2>&1 | Select-Object -First 2 } catch { Write-Host 'ISCC banner unavailable' }
+          "runner image: $env:ImageOS $env:ImageVersion"
+          $global:LASTEXITCODE = 0
+
+      - name: Build abfc.exe, runtime and zip
+        run: node scripts/release/build-exe.mjs --version ${{ steps.pins.outputs.version }} --backend-repo build/backend-src
+
+      - name: Smoke-test the bundled backend
+        run: node scripts/release/smoke-backend.mjs
+
+      - name: Build the VS Code extension
+        run: npm run vsix
+
+      - name: Build the installer
+        run: node scripts/release/build-installer.mjs --version ${{ steps.pins.outputs.version }} --require-iscc
+
+      - name: Pack npm tarballs
+        run: node scripts/release/pack-npm.mjs
+
+      - name: Inspect artifacts
+        run: node scripts/release/inspect.mjs --version ${{ steps.pins.outputs.version }}
+
+      - name: Scan artifacts
+        run: node scripts/release/scan-artifacts.mjs --version ${{ steps.pins.outputs.version }} --require exe,runtime,zip,installer-input,installer,vsix,npm
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-artifacts
+          path: |
+            build/release/zip
+            build/release/installer
+            build/vsix
+            build/release/npm
+          if-no-files-found: error
+          retention-days: 3

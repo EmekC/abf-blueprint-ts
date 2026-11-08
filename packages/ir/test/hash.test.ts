@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { canonicalJson, sha256, unitHash } from "../src/index.js";
+import { canonicalJson, classDefaultsHash, sha256, unitHash } from "../src/index.js";
 import type { IrUnit, Span } from "../src/index.js";
 
 const span: Span = { file: "a.ts", line: 1, col: 1, endLine: 1, endCol: 2 };
@@ -51,4 +51,15 @@ test("unitHash changes when a wire, a default or the signature changes", () => {
   const s = unit();
   s.signature.inputs = [{ name: "X", type: "int64" }];
   assert.notEqual(unitHash(s), base);
+});
+
+test("classDefaultsHash: hashes without a director are unchanged (pinned) and a director changes the hash", () => {
+  assert.equal(classDefaultsHash({ A: "1", B: "x" }), "sha256:e47faee815971d424754331ec2a432e3699dcaaa194e4e02871ad04c87386405");
+  assert.equal(classDefaultsHash({ A: "1" }, "/TestMod/DataTables/DT_ClassManager/Row"), "sha256:469afba57a3c37e958d32723629a0eee72e6f0bbbce3b586158934f6a919f1ad");
+  assert.equal(classDefaultsHash({}), "sha256:ad206068c29722297302d4fadb11c198d45356f4a95c319d937e57a9290aa547");
+  assert.notEqual(classDefaultsHash({ A: "1" }, undefined, "/TestMod/DataTables/DT_ClassManager/Row"), classDefaultsHash({ A: "1" }));
+  // a director tag changes the hash; no tag (undefined) is the old hash
+  const row = "/TestMod/DataTables/DT_ClassManager/Row";
+  assert.equal(classDefaultsHash({ A: "1" }, undefined, row, undefined), classDefaultsHash({ A: "1" }, undefined, row));
+  assert.notEqual(classDefaultsHash({ A: "1" }, undefined, row, "ClassManager.EntityDirector.Row"), classDefaultsHash({ A: "1" }, undefined, row));
 });

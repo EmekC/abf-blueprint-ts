@@ -3,6 +3,8 @@ import { spawnSync } from "node:child_process";
 import { win32 } from "node:path";
 import type { Diagnostic, Profile } from "@abfc/ir";
 import { envError, envWarning } from "./errors.js";
+import { isExe, runtimeLayout } from "./install.js";
+import type { RuntimeLayout } from "./install.js";
 import { SETTING_INFO, resolveSetting, resolveSettingValidated } from "./settings.js";
 import type { Resolved, SettingName, SettingSpec } from "./settings.js";
 
@@ -15,6 +17,10 @@ export interface Host {
   run(cmd: string, args: string[]): { status: number | null; stdout: string; stderr: string };
   platform: string;
   nodeVersion: string;
+  /** True inside abfc.exe: the bundled Python and backend are the only auto-discovered ones. */
+  isExe?: boolean;
+  /** The extracted runtime folder of abfc.exe (extracts on first use); null when unavailable. */
+  bundledRuntime?: () => RuntimeLayout | null;
 }
 
 export function realHost(): Host {
@@ -43,6 +49,8 @@ export function realHost(): Host {
     },
     platform: process.platform,
     nodeVersion: process.version,
+    isExe: isExe(),
+    bundledRuntime: () => runtimeLayout(),
   };
 }
 
@@ -286,6 +294,20 @@ function pythonProblem(host: Host, exe: string): string | null {
 export function findPython(host: Host, flag?: string, project?: string, user?: string): PythonResult {
   const spec = specFor("python", { flag, project, user }, () => {
     const tried: Resolved<string>["tried"] = [];
+    if (host.isExe === true) {
+      const l = host.bundledRuntime?.() ?? null;
+      if (l === null) {
+        tried.push({ source: "bundled runtime", detail: "not available" });
+        return { value: null, tried };
+      }
+      const bad = pythonProblem(host, l.pythonExe);
+      if (bad === null) {
+        tried.push({ source: "bundled runtime", detail: l.pythonExe });
+        return { value: l.pythonExe, tried };
+      }
+      tried.push({ source: "bundled runtime", detail: `${l.pythonExe} (${bad})` });
+      return { value: null, tried };
+    }
     const attempts: Array<{ label: string; cmd: string; args: string[] }> = [
       { label: "py -3 launcher", cmd: "py", args: ["-3", "-c", "import sys;print(sys.executable)"] },
       { label: "python on PATH", cmd: "python", args: ["-c", "import sys;print(sys.executable)"] },
@@ -323,10 +345,14 @@ export function findPython(host: Host, flag?: string, project?: string, user?: s
 
 export function findBackendDir(host: Host, flag?: string, project?: string, user?: string): Resolved<string> {
   const ok = (p: string): string | null => (host.exists(win32.join(p, "server.py")) ? null : "no server.py there");
-  const spec = specFor("backendDir", { flag, project, user }, () => ({
-    value: null,
-    tried: [{ source: "auto", detail: "no auto-discovery in Phase 1" }],
-  }));
+  const spec = specFor("backendDir", { flag, project, user }, () => {
+    if (host.isExe === true) {
+      const l = host.bundledRuntime?.() ?? null;
+      if (l === null) return { value: null, tried: [{ source: "bundled runtime", detail: "not available" }] };
+      return { value: l.backendDir, tried: [{ source: "bundled runtime", detail: l.backendDir }] };
+    }
+    return { value: null, tried: [{ source: "auto", detail: "no auto-discovery in Phase 1" }] };
+  });
   const res = resolveSettingValidated(spec, host.env, ok);
   if (res.value === null) {
     throw envError(
@@ -376,6 +402,7 @@ export function checkHeadlessDir(p: string): Diagnostic | null {
 // ---------------------------------------------------------------- Node
 
 export function checkNode(host: Host): Diagnostic | null {
+  if (host.isExe === true) return null;
   const major = Number(/^v?(\d+)/.exec(host.nodeVersion)?.[1] ?? NaN);
   if (major === 24) return null;
   return envWarning(

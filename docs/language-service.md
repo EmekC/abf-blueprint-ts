@@ -1,75 +1,180 @@
 # Language service and watch mode
 
-`@abfc/ts-plugin` is a TypeScript language service plugin. Inside the editor it shows what `abfc check` would say about the
-file you are typing in, a short description of the Blueprint nodes under the cursor, and two quick fixes. `abfc check --watch`
-gives the same checks from a terminal task.
+`abfc lsp` is a language server (LSP 3.17, over stdio). In an editor it shows what `abfc check` would say about the file you
+are typing in, the lint findings of `@abfc/eslint-plugin`, a short description of the Blueprint nodes under the cursor,
+quick fixes, and completion of Blueprint library functions and overridable events. `abfc check --watch` gives the same checks from a terminal task.
 
-Parity is by construction: the plugin and `abfc check` both call the compiler's `checkProject()`. The plugin runs it over the
-whole program (once per program version) and shows the part that belongs to the open file, so cross-file checks match.
-`scripts/plugin-parity.mjs` compares the two on a project (see "Parity check").
+Parity is by construction: the server and `abfc check` both call the compiler's `checkProject()`. The server runs it over
+the whole program (once per program version, over the editor's unsaved text) and shows the part that belongs to each open
+file, so cross-file checks match. `scripts/lsp-parity.mjs` compares the two on a project (see "Parity check").
 
-## Setup
+The server uses the compiler's own TypeScript, so it needs no `typescript.tsdk` setting and no matching workspace
+TypeScript. It never starts Python or the backend, and it never writes into a project.
 
-1. Add the plugin to the project's `tsconfig.json`:
+## Editors
 
-   ```json
-   {
-     "compilerOptions": {
-       "plugins": [{ "name": "@abfc/ts-plugin" }]
-     }
-   }
-   ```
+This page is the editors page of abfc: [VS Code](#vs-code) has an extension, and every other editor can use `abfc lsp`
+directly ([Other editors](#other-editors)). The installer offers to install the extension; the other ways to install it
+are in [install.md](install.md#vs-code-extension). The commands and the diagnostics are the same as in the terminal
+([cli.md](cli.md), [errors.md](errors.md)).
 
-   The package has to be resolvable from the project (`npm install --save-dev @abfc/ts-plugin`).
+## VS Code
 
-2. Use the workspace TypeScript. The plugin runs the compiler's own `typescript` module on the nodes that tsserver
-   creates, which is only safe for the same TypeScript version. When tsserver runs another version (VS Code's bundled one,
-   for example) the plugin logs `[abfc] disabled: ...` once and does nothing. In VS Code: install `typescript@6.0.3` in
-   the project, run **TypeScript: Select TypeScript Version** and pick **Use Workspace Version** (or set
-   `typescript.tsdk` to `node_modules/typescript/lib`). TypeScript 7 (native) has no plugin API and cannot load the plugin.
+The extension is a `.vsix` (it is not on the marketplace). Install the file from the release (see
+[install.md](install.md#vs-code-extension)), or build it from a checkout and install it:
 
-3. Developing abfc itself (a checkout instead of an installed package): point tsserver at the built plugin with
-   `typescript.tsserver.pluginPaths` in the workspace settings, for example
-   `"typescript.tsserver.pluginPaths": ["<checkout>/packages/ts-plugin"]`, then run **TypeScript: Restart TS Server**.
+```
+npm install
+npm run vsix
+code --install-extension build/vsix/abfc-vscode-<version>.vsix
+```
 
-The plugin also needs the project's `abf.config.json` (it looks for it from the tsconfig folder upwards) and the generated
-stubs (`abfc stubs`). Without them it disables itself and logs the reason; TypeScript's own diagnostics are unaffected.
+The extension starts when a workspace contains an `abf.config.json`. It runs `abfc lsp` for TypeScript files; one server
+serves every project of the workspace, and files outside a project are ignored.
+
+How the extension finds abfc (the first hit wins):
+
+1. the setting `abfc.path`: an executable, or a `.js` file that is started with `node`;
+2. `abfc.exe` (`abfc` outside Windows) in a `PATH` folder;
+3. an npm global install: `abfc.cmd` in a `PATH` folder with `node_modules/@abfc/cli/dist/src/bin.js` beside it (started
+   with `node`);
+4. the installer default, `%LOCALAPPDATA%\Programs\abfc\abfc.exe` (Windows);
+5. a source install: `node_modules/@abfc/cli/dist/src/bin.js` in a workspace folder, then the setting `abfc.cliPath` (the
+   `packages/cli/dist/src/bin.js` of a checkout).
+
+If nothing is found, the extension shows one message and does not retry; fix the setting or `PATH` and run
+**abfc: Restart Language Server**.
+
+Settings: `abfc.path`, `abfc.cliPath` (changing either restarts the server) and `abfc.trace.server` (`off`, `messages`,
+`verbose`).
+
+Commands (each runs the CLI as a VS Code task in the project folder, with the `$abfc` problem matcher):
+**abfc: Build**, **abfc: Test**, **abfc: Publish (dry run)**, **abfc: Doctor**, and **abfc: Restart Language Server**.
+
+The extension also validates `abf.config.json` against a JSON schema (completion and hover for its keys). The schema's
+source is `packages/cli/schema/abf.config.schema.json`.
+
+## Other editors
+
+Any LSP client can run `abfc lsp` (`abfc lsp --stdio` is the same; a `--clientProcessId=<n>` argument is accepted and
+ignored). The project is found per document by walking up to `abf.config.json`.
+
+Neovim:
+
+```lua
+vim.lsp.start({
+  name = "abfc",
+  cmd = { "abfc", "lsp" },
+  root_dir = vim.fs.root(0, "abf.config.json"),
+})
+```
+
+Helix, `languages.toml` (keep the TypeScript server next to it; abfc adds to it and does not replace it):
+
+```toml
+[language-server.abfc]
+command = "abfc"
+args = ["lsp"]
+
+[[language]]
+name = "typescript"
+language-servers = ["typescript-language-server", "abfc"]
+```
+
+Zed and JetBrains: add a generic LSP client (a "custom language server" entry in Zed, an LSP4IJ or similar plugin in
+JetBrains) with the command `abfc lsp` for TypeScript files. Outside VS Code there is usually no per-editor extension to
+pass the options below; set them in the client's initialization options.
+
+## Initialization options
+
+Sent in `initialize` as `initializationOptions`:
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `tsDiagnostics` | `false` | Also publish TypeScript's own errors as `ABFC2000` (`[TS2339] ...`). Leave it off when the editor has a TypeScript server, which already shows them. |
+| `tsHover` | `false` | Add the symbol and its type (`name: type`) to the hover. Leave it off when the editor has a TypeScript server. |
+| `lint` | `true` | Run the recommended `@abfc/eslint-plugin` rules in the server. |
+
+The VS Code extension sends `tsDiagnostics: false` and `tsHover: false`.
 
 ## What it shows
 
-- **Subset diagnostics.** Everything `abfc check` reports with a position, as an extra diagnostic with `source: "abfc"`,
-  the code `ABFCnnnn` in the message (`ABFC2010: ...`) and the numeric code. TypeScript's own errors stay tsserver's.
-- **Hover.** Below the normal hover text a line `Blueprint: Cast To BP_Thing · Branch`: the Blueprint nodes the code under the
-  cursor lowers to (at most six; `(+N more)` after that). It appears only when the project lowers without errors.
-- **Quick fixes.**
+- **Diagnostics.** Everything `abfc check` reports for the open file, with `source: "abfc"`, the code `ABFCnnnn`, a link
+  to the error code reference, and the suggested fix text appended to the message. The text is the editor's unsaved
+  content. Updates arrive 300 ms after the last change.
+- **Config-level codes.** The stubs lock codes `ABFC3001`-`ABFC3003`, and a config that does not load, are shown on
+  `abf.config.json` at its first line (they have no position in a TypeScript file). The server reloads the config and the
+  stubs state when `abf.config.json`, a manifest, a stubs lock or `retired.json` changes on disk.
+- **Lint findings.** The recommended rules of `@abfc/eslint-plugin` ([lint-rules.md](lint-rules.md)), run in the
+  server with the server's own TypeScript program. They have source `abfc`, the rule id as code
+  (`abfc/no-loop-in-tick`) and warning severity. No ESLint config is needed or read.
+- **Hover.** The first line of a stub member's description, and a line `Blueprint: Cast To BP_Thing · Branch`: the
+  Blueprint nodes the code under the cursor lowers to (at most six; `(+N more)` after that). The node line appears only
+  when the project lowers without errors.
+- **Quick fixes** (kind `quickfix`):
   - `Use idiv(a, b) (Blueprint Divide_IntInt)` on ABFC2010 (integer `/` is not allowed): rewrites the division and adds
     `idiv` to the `@abfc/runtime` import.
   - `Use ?. (lowers to IsValid + Branch)` on TypeScript's "possibly null/undefined" errors (2531, 2532, 18047, 18048,
-    18049) of a property or element access.
+    18049) of a property or element access. It works even with `tsDiagnostics` off, because the server holds those errors.
+  - `Remove the redundant path:` on ABFC2006.
+  - `Write path: relative to the mod` on ABFC2005.
+  - `Import from @mod/` on ABFC2008.
+  - `Replace classManagerRow with @director` on ABFC2076.
+  - `Keep the existing asset path (path: "...")` on ABFC5012 (a moved or renamed source file).
 
-## What is not in parity
+- **Completion.** Two kinds of items, both added to what the editor's TypeScript server offers (the lists merge; abfc never
+  replaces them), and both completing the identifier under the cursor. The trigger character is `@`; the list is also
+  offered on explicit completion (Ctrl+Space) and while typing a word.
+  - *Library functions.* In a statement or expression, typing the start of a Blueprint library function (`PrintS`, any case)
+    offers `PrintString` and inserts `KismetSystemLibrary.PrintString`. The item carries the import as an additional edit:
+    the container (`KismetSystemLibrary`) is added to an existing import of its stub module, or a new `import` line is
+    added after the last import. An existing import (also under an alias) is reused, and an item is left out when the
+    container name is bound to something else in scope. Deprecated functions are not listed; at most 100 items are
+    returned. The list comes from the stubs of the project's profile (`.abfc/stubs/<profile>`) and is rebuilt when
+    `stubs.lock.json` changes (run `abfc stubs` to refresh it).
+  - *Overridable events.* In a class body at the start of a member (`Rec` matches `ReceiveBeginPlay`, `ReceiveTick`, ...;
+    an empty prefix lists them all), the events of the parent class that can be overridden are offered as snippets:
+    `@override override ReceiveTick(DeltaSeconds: double): void { ... }`, with the cursor inside the body. The
+    `override` import from `@abfc/runtime` and the `import type` lines for the parameter types are added as additional
+    edits. Events the class already declares are not offered; they sort before library items.
+  There is no completion in comments, strings, imports, after a `.` or `?.`, or after an `@` decorator name, and no
+  completion of gameplay tags or director names yet.
 
-- `ABFC3001`-`ABFC3003` (stubs lock and editor fingerprint): they need the installed Mod Editor, which a language service
-  does not look at.
-- `ABFC2000` (a TypeScript error as seen by `abfc check`) is compared as the TypeScript diagnostic itself, not as an abfc
-  diagnostic: the parity script matches the `[TS####]` code and position from the message against the language
-  service's own TypeScript diagnostics (see `scripts/plugin-parity.mjs`).
-- Diagnostics without a position, and TypeScript's global (non-file) diagnostics.
-- ESLint. `abfc check` does not run ESLint; use `npx eslint` or the ESLint editor extension (see `docs/lint-rules.md`).
-- VS Code may not offer the ABFC quick fix in the lightbulb if it asks for supported fixes without naming a file; the
-  TypeScript-code fix (`?.`) is not affected.
+Go to definition and rename are not provided; they stay with the editor's TypeScript server.
+
+## Moving from @abfc/ts-plugin
+
+The tsserver plugin `@abfc/ts-plugin` is retired and its package is gone. It only worked with the workspace TypeScript
+(6.0.3 from `node_modules`) and only in editors that load tsserver plugins.
+
+1. Remove the `{ "name": "@abfc/ts-plugin" }` entry from `compilerOptions.plugins` in `tsconfig.json`
+   (`abfc init` prints warning `ABFC1043` with this change when it finds the entry), and uninstall the package.
+2. Remove a `typescript.tsdk` or `typescript.tsserver.pluginPaths` setting that was only there for the plugin.
+3. Install the VS Code extension or configure your editor as above.
 
 ## Parity check
 
 ```
 npm run build
-node scripts/plugin-parity.mjs --project <dir> [--project <dir> ...]
+node scripts/lsp-parity.mjs --project <dir> [--project <dir> ...]
 ```
 
-For each project the script runs `abfc check --json` and an in-process language service with the plugin, and compares per
-file the abfc diagnostics and the TypeScript diagnostics by (code, file, line, column). It prints the counts and every
-mismatch and exits 1 on any mismatch. A project without `abf.config.json` (the compiler test fixtures) is compared through a
-temporary copy. The project itself is only read.
+For each project the script computes the reference in-process (the compiler's `checkProject()` over the project, with the
+same environment helper the server uses), starts `abfc lsp --stdio` with `tsDiagnostics` on, opens every project file
+over the protocol and compares the diagnostics by (code, file, line, column): the abfc diagnostics and the TypeScript
+diagnostics (matched by the `[TS####]` code in the message). Lint findings are counted and printed, not compared. It
+prints the counts and every mismatch, and exits 1 on any mismatch. A project without `abf.config.json` (the compiler test
+fixtures) is compared through a temporary copy. The project itself is only read.
+
+## What is not in parity
+
+- Diagnostics without a position, and TypeScript's global (non-file) diagnostics: `abfc check` prints them, but a
+  language server can only show them on a file.
+- The stubs lock codes `ABFC3001`-`ABFC3003` go on `abf.config.json` in the editor, and `abfc check` stops on them
+  instead of continuing; the parity script compares file diagnostics only.
+- `tsHover` shows the symbol and its type, not the full quick info of tsserver.
+- `abfc check` does not run ESLint; the server does (the lint findings above). Use `npx eslint` in CI (see
+  [lint-rules.md](lint-rules.md)).
 
 ## Watch mode
 

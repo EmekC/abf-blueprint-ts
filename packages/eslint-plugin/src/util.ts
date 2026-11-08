@@ -37,10 +37,10 @@ function isOverrideDecorator(d: TSESTree.Decorator): boolean {
 }
 
 /**
- * The method `node` runs in every frame: the nearest enclosing MethodDefinition, not crossing a function or arrow
- * boundary, that is decorated `@override` and whose name is in `tickMethods`.
+ * The method `node` runs in: the nearest enclosing MethodDefinition, not crossing a function or arrow boundary, that
+ * is decorated `@override` and whose name is in `names`.
  */
-export function tickMethodOf(node: Node, tickMethods: readonly string[]): TSESTree.MethodDefinition | null {
+export function overrideMethodOf(node: Node, names: readonly string[]): TSESTree.MethodDefinition | null {
   let cur: Node | undefined = node.parent;
   while (cur) {
     if (cur.type === "ArrowFunctionExpression" || cur.type === "FunctionDeclaration") return null;
@@ -48,8 +48,30 @@ export function tickMethodOf(node: Node, tickMethods: readonly string[]): TSESTr
       const m = cur.parent;
       if (m?.type !== "MethodDefinition" || m.value !== cur) return null;
       const name = keyName(m.key, m.computed);
-      if (name === null || !tickMethods.includes(name)) return null;
+      if (name === null || !names.includes(name)) return null;
       return m.decorators.some(isOverrideDecorator) ? m : null;
+    }
+    cur = cur.parent;
+  }
+  return null;
+}
+
+/** The method `node` runs in every frame (see {@link overrideMethodOf}). */
+export function tickMethodOf(node: Node, tickMethods: readonly string[]): TSESTree.MethodDefinition | null {
+  return overrideMethodOf(node, tickMethods);
+}
+
+/**
+ * The method whose body directly contains `node`: the nearest enclosing MethodDefinition. Null when an arrow
+ * function, a function declaration or a function expression that is not a method body is crossed first.
+ */
+export function enclosingMethod(node: Node): TSESTree.MethodDefinition | null {
+  let cur: Node | undefined = node.parent;
+  while (cur) {
+    if (cur.type === "ArrowFunctionExpression" || cur.type === "FunctionDeclaration") return null;
+    if (cur.type === "FunctionExpression") {
+      const m = cur.parent;
+      return m?.type === "MethodDefinition" && m.value === cur ? m : null;
     }
     cur = cur.parent;
   }
@@ -151,11 +173,12 @@ export interface NetTags {
 
 const NO_TAGS: NetTags = { replicated: false, rpc: null, reliable: false };
 
-/** The `@bpReplicated` / `@bpRpc` / `@bpReliable` tags of the member `node` refers to (no tags when unresolved). */
-export function netTagsOf(services: ParserServicesWithTypeInformation, node: Node): NetTags {
-  const symbol = services.getSymbolAtLocation(node);
-  if (!symbol) return NO_TAGS;
-  const tags = symbol.getJsDocTags(services.program.getTypeChecker());
+type Checker = ReturnType<ParserServicesWithTypeInformation["program"]["getTypeChecker"]>;
+type TsSymbol = NonNullable<ReturnType<Checker["getSymbolAtLocation"]>>;
+
+/** The `@bpReplicated` / `@bpRpc` / `@bpReliable` tags of a member symbol. */
+export function netTagsOfSymbol(checker: Checker, symbol: TsSymbol): NetTags {
+  const tags = symbol.getJsDocTags(checker);
   if (tags.length === 0) return NO_TAGS;
   let replicated = false;
   let rpc: string | null = null;
@@ -169,6 +192,46 @@ export function netTagsOf(services: ParserServicesWithTypeInformation, node: Nod
     }
   }
   return { replicated, rpc, reliable };
+}
+
+/** The `@bpReplicated` / `@bpRpc` / `@bpReliable` tags of the member `node` refers to (no tags when unresolved). */
+export function netTagsOf(services: ParserServicesWithTypeInformation, node: Node): NetTags {
+  const symbol = services.getSymbolAtLocation(node);
+  if (!symbol) return NO_TAGS;
+  return netTagsOfSymbol(services.program.getTypeChecker(), symbol);
+}
+
+/**
+ * Whether `m` is a server RPC: its own symbol carries `@bpRpc server`, or the member of the nearest base type it
+ * overrides does.
+ */
+export function isServerRpcMethod(services: ParserServicesWithTypeInformation, m: TSESTree.MethodDefinition): boolean {
+  if (netTagsOf(services, m.key).rpc === "server") return true;
+  const name = keyName(m.key, m.computed);
+  if (name === null) return false;
+  const classNode = m.parent.parent;
+  if (classNode.type !== "ClassDeclaration" && classNode.type !== "ClassExpression") return false;
+  const tsNode = services.esTreeNodeToTSNodeMap.get(classNode);
+  if (!tsNode.name) return false;
+  const checker = services.program.getTypeChecker();
+  const symbol = checker.getSymbolAtLocation(tsNode.name);
+  if (!symbol) return false;
+  const declared = checker.getDeclaredTypeOfSymbol(symbol);
+  if (!declared.isClassOrInterface()) return false;
+  const visited = new Set<unknown>([declared]);
+  let level = checker.getBaseTypes(declared);
+  for (let depth = 0; depth < 10 && level.length > 0; depth++) {
+    const next: typeof level = [];
+    for (const base of level) {
+      if (visited.has(base)) continue;
+      visited.add(base);
+      const prop = base.getProperty(name);
+      if (prop) return netTagsOfSymbol(checker, prop).rpc === "server";
+      if (base.isClassOrInterface()) next.push(...checker.getBaseTypes(base));
+    }
+    level = next;
+  }
+  return false;
 }
 
 /** The type-aware parser services, or null when the file is linted without type information. */

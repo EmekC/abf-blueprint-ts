@@ -91,6 +91,20 @@ export function fakeEnvironmentFiles(o: FakeEnvOptions = {}): FakeEnvironment {
   const modDir = win32.join(modsDir, "TestMod");
   const backendDir = "C:\\Backend\\mcp";
   const projectDir = "C:\\Work\\proj";
+  const projectConfig: Record<string, unknown> = {
+    schemaVersion: 2,
+    mod: { name: "TestMod" },
+    backend: { kind: "bp_apply", minProtocol: 1 },
+    ...(o.projectConfig ?? {}),
+  };
+  // Schema 2 writes mod-relative modAssets; tests may keep passing "/TestMod/X".
+  const stubsCfg = projectConfig.stubs as { modAssets?: unknown } | undefined;
+  if (stubsCfg !== undefined && Array.isArray(stubsCfg.modAssets)) {
+    projectConfig.stubs = {
+      ...stubsCfg,
+      modAssets: (stubsCfg.modAssets as string[]).map((a) => (a.startsWith("/TestMod/") ? a.slice("/TestMod/".length) : a)),
+    };
+  }
   const files: Record<string, string> = {
     "C:\\ProgramData\\Epic\\EpicGamesLauncher\\Data\\Manifests\\A1.item": JSON.stringify({
       DisplayName: profile.editorDisplayName,
@@ -100,11 +114,7 @@ export function fakeEnvironmentFiles(o: FakeEnvOptions = {}): FakeEnvironment {
     [win32.join(editorRoot, profile.exeRelPath)]: "exe",
     [win32.join(modDir, "TestMod.uplugin")]: "{}",
     [win32.join(backendDir, "server.py")]: "# server",
-    [win32.join(projectDir, "abf.config.json")]: JSON.stringify({
-      mod: { name: "TestMod" },
-      backend: { kind: "bp_apply", minProtocol: 1 },
-      ...(o.projectConfig ?? {}),
-    }),
+    [win32.join(projectDir, "abf.config.json")]: JSON.stringify(projectConfig),
     ...(o.extraFiles ?? {}),
   };
   const env: NodeJS.ProcessEnv = {
@@ -156,7 +166,15 @@ export const ALL_TOOLS = [
 
 /** `backend_info` in the shape of the wildcard-pins branch. */
 export function fixInfo(
-  over: { protocol?: number; serverVersion?: string; headlessDir?: string; documentsDir?: string; pinTypes?: boolean } = {},
+  over: {
+    protocol?: number;
+    serverVersion?: string;
+    headlessDir?: string;
+    documentsDir?: string;
+    pinTypes?: boolean;
+    /** Extra raw `capabilities` keys (e.g. the 2.6.0 ones). */
+    capabilities?: Record<string, unknown>;
+  } = {},
 ): Record<string, unknown> {
   return {
     protocol: over.protocol ?? 1,
@@ -164,8 +182,8 @@ export function fixInfo(
     editorRoot: null,
     headlessDir: over.headlessDir ?? "C:\\abfc-headless",
     documentsDir: over.documentsDir ?? "C:\\Users\\Jane\\Documents",
-    capabilities: { pinTypes: over.pinTypes ?? true, containerTypes: { array: true, map: true, set: false } },
-    bpApply: { features: ["cast_object_pin", "map_types", "pin_types", "self_event_calls"], nodeKinds: ["call", "cast"] },
+    capabilities: { pinTypes: over.pinTypes ?? true, containerTypes: { array: true, map: true, set: false }, liveTags: true, ...over.capabilities },
+    bpApply: { features: ["cast_object_pin", "function_graphs", "map_types", "pin_types", "self_event_calls", "variable_defaults"], nodeKinds: ["call", "cast", "std_macro"] },
   };
 }
 
@@ -206,4 +224,43 @@ export function captureDeps(fake: FakeEnvironment, backend: (env: Environment) =
     stderr: (l) => lines.push(l),
   };
   return { deps, lines, text: () => lines.join("\n"), started };
+}
+
+export interface MutableCaptured extends Captured {
+  /** The files of the fake machine; `deps.fs.writeFile` updates them. */
+  files: Record<string, string>;
+  /** Absolute path of every file written through `deps.fs`, in order. */
+  writes: string[];
+}
+
+/**
+ * Like {@link captureDeps}, but the host follows the writes of `deps.fs` (what `abfc init` writes can be read back by the
+ * commands it runs afterwards). `deps.interactive` is false until a test sets it.
+ */
+export function mutableCapture(fake: FakeEnvironment, backend: (env: Environment) => Promise<Backend>): MutableCaptured {
+  const cap = captureDeps(fake, backend);
+  const files = fake.files;
+  const writes: string[] = [];
+  let current = fakeHost(files, fake.run, fake.env);
+  cap.deps.host = {
+    env: fake.env,
+    exists: (p) => current.exists(p),
+    readFile: (p) => current.readFile(p),
+    readDir: (p) => current.readDir(p),
+    stat: (p) => current.stat(p),
+    run: (cmd, args) => current.run(cmd, args),
+    platform: "win32",
+    nodeVersion: "v24.0.0",
+  };
+  cap.deps.fs = {
+    writeFile: (p, text) => {
+      const existing = Object.keys(files).find((k) => key(k) === key(p));
+      files[existing ?? p] = text;
+      writes.push(p);
+      current = fakeHost(files, fake.run, fake.env);
+    },
+    mkdir: () => {},
+  };
+  cap.deps.interactive = false;
+  return Object.assign(cap, { files, writes });
 }

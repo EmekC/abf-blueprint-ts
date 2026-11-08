@@ -36,6 +36,7 @@ export default createRule<Options, MessageIds>({
       ForInStatement: check,
       WhileStatement: check,
       DoWhileStatement: check,
+      "CallExpression[callee.type='MemberExpression'][callee.property.name='forEach']": check,
     };
   },
 });

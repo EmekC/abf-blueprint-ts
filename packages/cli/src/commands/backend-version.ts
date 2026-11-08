@@ -1,4 +1,4 @@
-import { compareServerVersion, MIN_BACKEND_VERSION } from "@abfc/backend";
+import { compareServerVersion, MIN_BACKEND_VERSION, RECOMMENDED_BACKEND_VERSION } from "@abfc/backend";
 import { envWarning } from "@abfc/env";
 import type { BackendInfo, Diagnostic } from "@abfc/ir";
 
@@ -38,4 +38,36 @@ export function backendInfoDiagnostics(info: BackendInfo, minProtocol: number, b
     );
   }
   return out;
+}
+
+/** The 2.6.0 capabilities abfc can use, by the name `abfc doctor` prints, that this backend lacks. */
+export function missingRecommendedCapabilities(info: BackendInfo): string[] {
+  const c = info.capabilities;
+  const missing: string[] = [];
+  if (c.assetOps.length === 0) missing.push("assetOps");
+  if (!c.publishDeletes) missing.push("publishDeletes");
+  if (!c.gameplayTags) missing.push("gameplayTags");
+  if (!c.reflectDefaults) missing.push("reflectDefaults");
+  return missing;
+}
+
+/**
+ * `abfc doctor` only: warning ABFC4018 when the server is older than {@link RECOMMENDED_BACKEND_VERSION} or lacks one of the
+ * capabilities `assetOps`, `publishDeletes`, `gameplayTags`, `reflectDefaults`. Nothing for a backend without `backend_info`
+ * (ABFC4012 covers it).
+ */
+export function recommendedBackendDiagnostics(info: BackendInfo, backendDir: string): Diagnostic[] {
+  if (info.protocol === null) return [];
+  const missing = missingRecommendedCapabilities(info);
+  const older = compareServerVersion(info.serverVersion, RECOMMENDED_BACKEND_VERSION) === -1;
+  if (missing.length === 0 && !older) return [];
+  const what = missing.length > 0 ? ` and lacks the capabilities ${missing.join(", ")}` : "";
+  return [
+    envWarning(
+      4018,
+      `abf-mod-editor-mcp at ${backendDir} is server ${info.serverVersion}${what}; abfc recommends ${RECOMMENDED_BACKEND_VERSION} or newer. Renames, moves and deletions of assets, deletions on publish, gameplay tags and parameter defaults then fall back to warnings or are skipped (see docs/backend.md).`,
+      [],
+      `update abf-mod-editor-mcp to ${RECOMMENDED_BACKEND_VERSION} (tag v${RECOMMENDED_BACKEND_VERSION}) or newer, or use abfc.exe, which bundles a current backend.`,
+    ),
+  ];
 }

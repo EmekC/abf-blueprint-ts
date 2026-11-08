@@ -9,7 +9,8 @@
     { "path": "packages/backend" },
     { "path": "packages/stubgen" },
     { "path": "packages/cli" },
-    { "path": "packages/ts-plugin" },
-    { "path": "packages/eslint-plugin" }
+    { "path": "packages/eslint-plugin" },
+    { "path": "packages/lsp" },
+    { "path": "packages/vscode" }
   ]
 }

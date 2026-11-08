@@ -1,8 +1,24 @@
 {
   "name": "@abfc/backend",
-  "version": "0.1.0",
+  "version": "1.0.0",
+  "description": "Backend adapter of abfc: talks to the Mod Editor's Python bridge to apply, compile and publish Blueprints.",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/EmekC/abf-blueprint-ts.git",
+    "directory": "packages/backend"
+  },
+  "homepage": "https://github.com/EmekC/abf-blueprint-ts#readme",
+  "bugs": {
+    "url": "https://github.com/EmekC/abf-blueprint-ts/issues"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "exports": {
     ".": {
       "types": "./dist/src/index.d.ts",
@@ -10,13 +26,14 @@
     }
   },
   "files": [
-    "dist/src"
+    "dist/src/**/*.js",
+    "dist/src/**/*.d.ts"
   ],
   "dependencies": {
-    "@abfc/ir": "0.1.0",
-    "@abfc/env": "0.1.0"
+    "@abfc/ir": "1.0.0",
+    "@abfc/env": "1.0.0"
   },
   "devDependencies": {
-    "@abfc/compiler": "0.1.0"
+    "@abfc/compiler": "1.0.0"
   }
 }

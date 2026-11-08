@@ -90,5 +90,7 @@ export function describeIrNode(n: IrNode): string {
       return `Call ${s.name}`;
     case "bind_dispatcher":
       return `Bind Event to ${s.name}`;
+    case "std_macro":
+      return s.name;
   }
 }

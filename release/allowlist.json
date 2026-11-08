@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "backend": [
+    "server.py",
+    "abfc_tools.py",
+    "bpscan.py",
+    "headless.py",
+    "headless_tools.py",
+    "hiddendesk.py",
+    "paths.py",
+    "staging.py",
+    "wininput.py",
+    "fscopy.py",
+    "tagsini.py",
+    "editor/**",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "runtime": [
+    "backend/**",
+    "python/**",
+    "profiles/*.json",
+    "data/descriptions.json",
+    "types/runtime/*.d.ts",
+    "types/testkit/*.d.ts",
+    "types/ir/*.d.ts",
+    "tslib/lib*.d.ts",
+    "schema/abf.config.schema.json",
+    "THIRD-PARTY-NOTICES.txt"
+  ],
+  "zip": ["abfc.exe", "abfc-vscode-*.vsix", "LICENSE.txt", "THIRD-PARTY-NOTICES.txt", "README.txt"],
+  "installer": ["abfc.exe", "abfc-vscode-*.vsix", "LICENSE.txt", "THIRD-PARTY-NOTICES.txt", "README.txt"],
+  "npm": {
+    "@abfc/backend": [
+      "package.json",
+      "README.md",
+      "LICENSE",
+      "dist/src/**.js",
+      "dist/src/**.d.ts"
+    ],
+    "@abfc/cli": [
+      "package.json",
+      "README.md",
+      "LICENSE",
+      "dist/src/**.js",
+      "dist/src/**.d.ts",
+      "schema/abf.config.schema.json"
+    ],
+    "@abfc/compiler": [
+      "package.json",
+      "README.md",
+      "LICENSE",
+      "dist/src/**.js",
+      "dist/src/**.d.ts"
+    ],
+    "@abfc/env": [
+      "package.json",
+      "README.md",
+      "LICENSE",
+      "dist/src/**.js",
+      "dist/src/**.d.ts",
+      "profiles/*.json"
+    ],
+    "@abfc/eslint-plugin": [
+      "package.json",
+      "README.md",
+      "LICENSE",
+      "dist/src/**.js",
+      "dist/src/**.d.ts"
+    ],
+    "@abfc/ir": [
+      "package.json",
+      "README.md",
+      "LICENSE",
+      "dist/src/**.js",
+      "dist/src/**.d.ts"
+    ],
+    "@abfc/lsp": [
+      "package.json",
+      "README.md",
+      "LICENSE",
+      "dist/src/**.js",
+      "dist/src/**.d.ts"
+    ],
+    "@abfc/runtime": [
+      "package.json",
+      "README.md",
+      "LICENSE",
+      "dist/src/**.js",
+      "dist/src/**.d.ts"
+    ],
+    "@abfc/stubgen": [
+      "package.json",
+      "README.md",
+      "LICENSE",
+      "dist/src/**.js",
+      "dist/src/**.d.ts",
+      "data/descriptions.json"
+    ],
+    "@abfc/testkit": [
+      "package.json",
+      "README.md",
+      "LICENSE",
+      "dist/src/**.js",
+      "dist/src/**.d.ts"
+    ]
+  },
+  "vsix": [
+    "extension.vsixmanifest",
+    "[Content_Types].xml",
+    "extension/package.json",
+    "extension/readme.md",
+    "extension/LICENSE.txt",
+    "extension/dist/extension.js",
+    "extension/dist/schema/abf.config.schema.json"
+  ]
+}

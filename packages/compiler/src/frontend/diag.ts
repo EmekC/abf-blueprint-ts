@@ -37,18 +37,19 @@ export class DiagSink {
     this.root = root;
   }
 
-  report(severity: "error" | "warning", code: string, message: string, node?: ts.Node): void {
+  report(severity: "error" | "warning", code: string, message: string, node?: ts.Node, data?: Record<string, string>): void {
     const d: Diagnostic = { severity, code, message };
     if (node !== undefined) d.span = spanOf(node, this.root);
+    if (data !== undefined) d.data = data;
     this.diagnostics.push(d);
   }
 
-  error(code: string, message: string, node?: ts.Node): void {
-    this.report("error", code, message, node);
+  error(code: string, message: string, node?: ts.Node, data?: Record<string, string>): void {
+    this.report("error", code, message, node, data);
   }
 
-  warning(code: string, message: string, node?: ts.Node): void {
-    this.report("warning", code, message, node);
+  warning(code: string, message: string, node?: ts.Node, data?: Record<string, string>): void {
+    this.report("warning", code, message, node, data);
   }
 
   /** Records an error and abandons the current statement. */

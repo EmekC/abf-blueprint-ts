@@ -2,21 +2,41 @@
 
 abfc does not touch Blueprint assets itself. It talks to a headless Mod Editor backend, the MCP server in https://github.com/EmekC/abf-mod-editor-mcp. That repository is the only supported backend, and it owns its version numbers. abfc spawns the server (`python -I -X utf8 <backend dir>\server.py`), speaks MCP JSON-RPC over stdio and calls its tools (`bp_apply`, `staging_sync`, `bp_compile_report`, `bp_game_test`, `mod_audit`, `bp_publish`, `reflect`, `backend_info`). See [design.md](design.md) section 7 for the transport and the mapping from the IR to `bp_apply`.
 
+## The bundled backend
+
+`abfc.exe` (the installer and the zip, see [install.md](install.md)) carries a copy of this backend and its own Python. There is nothing to install or configure: the first command that needs them unpacks them into the runtime folder, and `abfc doctor` prints the backend version it uses. A release of abfc is built with one pinned backend version, so the exe and the backend always match. The rest of this page is about the settings and capabilities that apply to every install, and about the source install, where you provide the backend yourself.
+
 ## Requirements
 
 | What | Value |
 | --- | --- |
-| Minimum server version | 2.4.0 (tag `v2.4.0`) |
+| Recommended server version | 2.6.0 (tag `v2.6.0`): asset operations, publish deletions, director tags, parameter defaults, variable defaults. `abfc.exe` bundles it |
+| Minimum server version | 2.4.0 (tag `v2.4.0`) for a source install; class-manager rows (`@director`) need 2.5.0 (tag `v2.5.0`) |
 | Protocol | 1 or higher (`backend_info.protocol`) |
 | Python | 3.9 or newer on the PC (the editor uses its own Python internally) |
 | Mod Editor | installed from the Epic Games Launcher |
 
-An older server still works where it can: abfc gates every feature on a capability and prints a warning, not an error, below 2.4.0. A protocol below 1 is an error.
+An older server still works where it can: abfc gates every feature on a capability and prints a warning, not an error, below 2.4.0. With a server older than 2.5.0 the build warns with [ABFC2077](errors.md#abfc2077) and writes no class-manager row for `@director`. A protocol below 1 is an error.
 
-## Install
+Server 2.4.0 and 2.5.0 therefore still work, with these differences from 2.6.0:
+
+- no `assetOps`: a moved or renamed class file stops the build with [ABFC5012](errors.md#abfc5012), a changed `extends` with [ABFC2048](errors.md#abfc2048), and a class that left TypeScript only loses its units ([ABFC5010](errors.md#abfc5010));
+- no `publishDeletes`: files that should disappear from the mod are listed by [ABFC7014](errors.md#abfc7014) for you to delete in the Mod Editor;
+- no `gameplayTags`: the director tag is ignored ([ABFC2082](errors.md#abfc2082));
+- no `reflectDefaults`: engine parameters stay required in the stubs (only the curated zero defaults of the stub generator apply);
+- no `variable_defaults`: changing the initializer of an existing field leaves the default as it is ([ABFC2084](errors.md#abfc2084));
+- no `std_macro` node kind in `bpApply.nodeKinds` (or no `pinTypes`): array `for..of` and simple counted `for` loops are built as counter loops instead of For Each Loop / For Loop macro nodes ([ABFC2088](errors.md#abfc2088));
+- no `function_graphs`: an undecorated method (a Blueprint function) is refused with [ABFC2044](errors.md#abfc2044);
+- no `staging_status` `stale` list: an asset saved in the Mod Editor that the stage never touched is not noticed as a change; use `abfc build --resync`.
+
+`abfc doctor` prints [ABFC4018](errors.md#abfc4018) with the list of what an older server lacks.
+
+## Source install
+
+Only a source install needs this (see [install.md](install.md#source-install)); `abfc.exe` does not.
 
 1. Clone the repository: `git clone https://github.com/EmekC/abf-mod-editor-mcp <backend dir>`.
-2. Check out the release: `git -C <backend dir> checkout v2.4.0` (or a newer tag).
+2. Check out the release: `git -C <backend dir> checkout v2.6.0` (the tag the abfc release is built with; `v2.4.0` is the minimum, and then renames, deletions and `@director` rows are not available, see Requirements).
 3. Make sure Python 3.9 or newer is on `PATH` (not the Microsoft Store alias), or tell abfc where it is (see below).
 
 To update, fetch and check out a newer tag. abfc never modifies the checkout.
@@ -48,12 +68,13 @@ Use `ABF_REFLECT_META=0` if the hidden editor crashes during the function-templa
 `abfc doctor` starts the backend, calls `backend_info` and prints what it found, for example:
 
 ```
-backend: server 2.4.0 (minimum 2.4.0), protocol 1
+backend: server 2.6.0 (minimum 2.4.0), protocol 1
   engine: 5.4.4
   wildcard pin types: native
   containers: backend array: true, map: true, set: true; abfc array: true, map: true, set: true, struct: true
   reflect: yes, compile node refs: yes, game test: yes, audit: yes
-  warm session: yes, stage audit: yes
+  warm session: yes, stage audit: yes, class-manager rows: yes
+  backend capabilities: asset ops: rename/delete/reparent/recreate, publish deletions: yes, gameplay tags: yes, reflect defaults: yes, class-manager row tag: yes, variable defaults: yes (recommended server 2.6.0)
   extensions: ...
 ```
 
@@ -80,20 +101,35 @@ Warnings and errors from the backend check use the codes below. `abfc doctor` ex
 | `capabilities.gameTest` | `abfc test`, `abfc publish --full` |
 | `capabilities.audit` | `abfc publish --full` |
 | `capabilities.publish` | `abfc publish` |
+| `capabilities.classManagerRows` | backend 2.5.0 or newer: `bp_apply` accepts the `class_manager_row` key, so `@director("RowName")` writes the class-manager row asset; without it the build warns and writes no row |
+| `capabilities.assetOps` | backend 2.6.0, list of `rename`, `delete`, `reparent`, `recreate` (tool `bp_asset_ops`, at most 20 operations per call, all-or-nothing per call): moved and renamed classes, changed `extends`, deleted classes. Without it: ABFC5012, ABFC2048, ABFC5010 |
+| `capabilities.publishDeletes` | backend 2.6.0: `bp_publish` with `delete_removed` removes files that are gone from the stage (with backup and a conflict check); `abfc publish` lists them as `deleted`. Without it: ABFC7014 |
+| `capabilities.gameplayTags` | backend 2.6.0: `reflect` can list the gameplay tags of the game and the mod (completion of `@director` tags), and the backend adds a missing tag to the stage's `Config/Tags/<mod>Tags.ini` before the editor starts. Without it: ABFC2082, ABFC3012 |
+| `capabilities.liveTags` | backend 2.6.0: `bp_publish` with an open Mod Editor registers the gameplay tags of the real mod's `Config/Tags/<Mod>Tags.ini` that the editor does not know before it reloads the published rows (result keys `tags_registered`, `tags_unregistered`, `tags_strategy`, `tags_error`). Without it: ABFC7015 when the tag list is published while the editor is open |
+| `capabilities.reflectDefaults` | backend 2.6.0: `reflect` returns `meta.defaults` for function parameters, read in Unreal's own order (the metadata key equal to the parameter name, then `CPP_Default_<Param>`); `abfc stubs` makes the trailing defaulted inputs optional. Without it: parameters stay required |
+| `capabilities.classManagerRowTag` (`bpApply.features` entry `class_manager_row_tag`) | backend 2.6.0: `class_manager_row` accepts `gameplay_tag`, and the row's tag is verified after the write |
+| `capabilities.variableDefaults` (`bpApply.features` entry `variable_defaults`) | changing the default of an existing variable in place; first appears in backend 2.6.0. Without it: ABFC2084 |
+| `staging_status` `stale` | backend 2.6.0: lists stage files that the stage never touched but whose real file was saved or deleted in the Mod Editor since the sync; abfc treats them like conflicts and re-syncs the stage (ABFC4017) |
 | `capabilities.functionLocals` | always `false` today; abfc hoists temporaries into owned member variables instead |
-| `capabilities.userPureFunctions` | always `false` today; getters are impure functions |
-| `bpApply.features` | per-feature gates, for example `event_meta` (event tooltips, ABFC2071) and `self_event_calls` (ABFC4013) |
+| `capabilities.userPureFunctions` | always `false` today; every function is impure (exec pins) |
+| `bpApply.features` | per-feature gates, for example `event_meta` (event tooltips, ABFC2071), `self_event_calls` (ABFC4013), `variable_defaults` (changing the default of an existing variable in place, ABFC2084) and `function_graphs` (own function graphs with access flags, replaced by name, ABFC2044) |
+| `capabilities.functionGraphs` (`bpApply.features` entry `function_graphs`) | backend 2.6.0: `functions` entries in a `bp_apply` spec create function graphs (signature, `access`); a name in both `remove_functions` and `functions` is replaced. Without it: ABFC2044 |
+| `class_manager_row` (`bp_apply` key, backend 2.5.0) | the row name from `@director`; the backend creates the row asset in the class-manager table of the mod if it is missing, with only the row name and the class reference set (no game-specific values), and updates the class reference otherwise |
 
 ## Diagnostics
 
 | Code | Severity | Meaning | Fix |
 | --- | --- | --- | --- |
-| ABFC4001 | error | the backend reports a protocol below the one abfc needs | update the checkout to the tag named above |
-| ABFC4012 | warning | the backend has no `backend_info` tool (an old checkout); abfc uses the two-phase wildcard route, about 10-20 s more per build | update to 2.4.0 or newer |
-| ABFC4014 | warning | the server version is older than the minimum (2.4.0); it may miss capabilities abfc uses. Versions that do not parse (for example in test doubles) never warn | check out tag `v2.4.0` or newer |
-| ABFC2044 | error | a `Map`, `Set` or struct needs a backend capability that is missing | update the backend, or remove the type |
-| ABFC2071 | warning | the backend has no `event_meta`, so an `@event` doc comment is not written as its Blueprint tooltip | update the backend |
-| ABFC2072 | warning | the doc comment of an `@event` is longer than 2000 characters; the Blueprint tooltip, category or keywords are cut to 2000 (ending in `...`) | shorten the comment |
+| [ABFC4001](errors.md#abfc4001) | error | the backend reports a protocol below the one abfc needs | update the checkout to the tag named above |
+| [ABFC4012](errors.md#abfc4012) | warning | the backend has no `backend_info` tool (an old checkout); abfc uses the two-phase wildcard route, about 10-20 s more per build | update to 2.4.0 or newer |
+| [ABFC4014](errors.md#abfc4014) | warning | the server version is older than the minimum (2.4.0); it may miss capabilities abfc uses. Versions that do not parse (for example in test doubles) never warn | check out tag `v2.4.0` or newer |
+| [ABFC2044](errors.md#abfc2044) | error | a `Map`, `Set` or struct needs a backend capability that is missing | update the backend, or remove the type |
+| [ABFC2071](errors.md#abfc2071) | warning | the backend has no `event_meta`, so an `@event` doc comment is not written as its Blueprint tooltip | update the backend |
+| [ABFC2072](errors.md#abfc2072) | warning | the doc comment of an `@event` is longer than 2000 characters; the Blueprint tooltip, category or keywords are cut to 2000 (ending in `...`) | shorten the comment |
+| [ABFC2077](errors.md#abfc2077) | warning | the backend cannot write class-manager rows (older than 2.5.0), so the `@director` row is only checked | update to 2.5.0 or newer, or create the row in the Mod Editor |
+| [ABFC4015](errors.md#abfc4015) | error | an event that supplies a delegate is neither in this build nor recorded as built | declare the event again or remove its use |
+
+Every code, including the ones not listed here, is explained in [errors.md](errors.md).
 
 ## Known fallbacks
 

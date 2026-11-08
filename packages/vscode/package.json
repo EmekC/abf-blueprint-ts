@@ -1,0 +1,132 @@
+{
+  "name": "abfc-vscode",
+  "displayName": "abfc",
+  "description": "abfc language server for Abiotic Factor TypeScript mods",
+  "version": "1.0.0",
+  "publisher": "abfc",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/EmekC/abf-blueprint-ts"
+  },
+  "type": "commonjs",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "workspaceContains:**/abf.config.json"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "restrictedConfigurations": [
+        "abfc.path",
+        "abfc.cliPath"
+      ],
+      "description": "In an untrusted workspace abfc.path, abfc.cliPath and the workspace node_modules are not used; abfc is only looked up on PATH, in the npm global folder and in the installer folder."
+    }
+  },
+  "contributes": {
+    "jsonValidation": [
+      {
+        "fileMatch": "abf.config.json",
+        "url": "./dist/schema/abf.config.schema.json"
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "abfc",
+        "owner": "abfc",
+        "fileLocation": [
+          "relative",
+          "${workspaceFolder}"
+        ],
+        "pattern": {
+          "regexp": "^(.*\\.ts):(\\d+):(\\d+): (error|warning) (ABFC\\d+): (.*)$",
+          "file": 1,
+          "line": 2,
+          "column": 3,
+          "severity": 4,
+          "code": 5,
+          "message": 6
+        }
+      }
+    ],
+    "taskDefinitions": [
+      {
+        "type": "abfc",
+        "required": [
+          "command"
+        ],
+        "properties": {
+          "command": {
+            "type": "string"
+          }
+        }
+      }
+    ],
+    "commands": [
+      {
+        "command": "abfc.build",
+        "title": "abfc: Build"
+      },
+      {
+        "command": "abfc.test",
+        "title": "abfc: Test"
+      },
+      {
+        "command": "abfc.publishDryRun",
+        "title": "abfc: Publish (dry run)"
+      },
+      {
+        "command": "abfc.doctor",
+        "title": "abfc: Doctor"
+      },
+      {
+        "command": "abfc.restartServer",
+        "title": "abfc: Restart Language Server"
+      }
+    ],
+    "configuration": {
+      "title": "abfc",
+      "properties": {
+        "abfc.path": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "description": "Path to abfc.exe, or to a .js entry started with node"
+        },
+        "abfc.cliPath": {
+          "type": "string",
+          "default": "",
+          "scope": "machine-overridable",
+          "description": "Source install:path to packages/cli/dist/src/bin.js"
+        },
+        "abfc.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the abfc language server"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "bundle": "node scripts/bundle.mjs",
+    "package": "node scripts/package.mjs"
+  },
+  "dependencies": {
+    "vscode-languageclient": "9.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "1.90.0",
+    "@vscode/vsce": "4.1.0",
+    "esbuild": "0.28.2"
+  }
+}

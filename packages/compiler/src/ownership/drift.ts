@@ -1,5 +1,5 @@
 // Drift detection (design 8.3): is an owned unit in the stage still what abfc applied?
-import { unitStateHash } from "@abfc/ir";
+import { t3dNodeKey, unitStateHash } from "@abfc/ir";
 import type { Diagnostic, Span, T3dNode } from "@abfc/ir";
 import type { ManifestUnit } from "./manifest.js";
 
@@ -32,10 +32,12 @@ export function fingerprintUnit(snapshot: Map<string, T3dNode>, names: string[])
     if (!n) continue;
     for (const p of n.pins) {
       for (const l of p.links) {
-        const other = `${l.node}.${pinNameOf(snapshot, l.node, l.pinId)}`;
+        // a pin link never leaves its graph: the target is the node of that name in the linking node's graph
+        const target = t3dNodeKey(n.graph, l.node);
+        const other = `${target}.${pinNameOf(snapshot, target, l.pinId)}`;
         const mine = `${name}.${p.name}`;
         if (p.dir === "out") links.push(`${mine} > ${other}`);
-        else if (!owned.has(l.node)) links.push(`${other} > ${mine}`);
+        else if (!owned.has(target)) links.push(`${other} > ${mine}`);
       }
     }
   }
@@ -90,19 +92,34 @@ export function driftDiagnostics(
   snapshot: Map<string, T3dNode>,
   stage: StageInfo,
   spans: Map<string, Span>,
+  opts: { severity?: "error" | "warning" } = {},
 ): Diagnostic[] {
+  // `abfc status` preview: a manifest unit never applied whose event name exists as a hand-made event (the next build replaces it).
+  const handMadeEvents = new Set<string>();
+  for (const n of snapshot.values()) {
+    const m = n.cls.endsWith("K2Node_CustomEvent") ? n.head.map((h) => /^CustomFunctionName="([^"]+)"/.exec(h)?.[1]).find((x) => x !== undefined) : undefined;
+    if (m !== undefined) handMadeEvents.add(m);
+  }
   const out: Diagnostic[] = [];
   for (const unit of units) {
     const label = unitLabel(asset, unit.id);
-    const base = { severity: "error" as const, asset, ...(spans.has(unit.id) ? { span: spans.get(unit.id)! } : {}) };
+    const base = { severity: opts.severity ?? ("error" as const), asset, ...(spans.has(unit.id) ? { span: spans.get(unit.id)! } : {}) };
     const state = unitState(unit, snapshot, stage);
+    if (state === "pendingApply" && opts.severity === "warning" && unit.adopt === null && unit.id.startsWith("event:") && handMadeEvents.has(unit.id.slice("event:".length))) {
+      out.push({
+        ...base,
+        code: "ABFC5003",
+        message: `${label} is declared in TypeScript but already exists as a hand-made event. The next build replaces it (TypeScript wins).`,
+        fix: "nothing to do: abfc build replaces the hand-made event; to keep it, move its logic into the .ts file first.",
+      });
+    }
     if (state === "missing") {
       const gone = unit.nodes.filter((n) => !snapshot.has(n));
       out.push({
         ...base,
         code: "ABFC5002",
-        message: `${label}: ${plural(gone.length, "owned node")} missing in the asset (${gone.slice(0, 5).join(", ")}${gone.length > 5 ? ", ..." : ""}). abfc will not overwrite it.`,
-        fix: "undo the deletion in the editor, or restore the stage with abfc build --resync after reverting the unit in the real mod.",
+        message: `${label}: ${plural(gone.length, "owned node")} missing in the asset (${gone.slice(0, 5).join(", ")}${gone.length > 5 ? ", ..." : ""}). abfc build --drift replaces it now (TypeScript wins); otherwise the next build that changes this class does.`,
+        fix: "run abfc build --drift to apply the unit again now (a plain build skips an asset whose TypeScript did not change); to keep the editor version, move it into the .ts file first.",
       });
     } else if (state === "edited") {
       const fp = fingerprintUnit(snapshot, unit.nodes);
@@ -118,8 +135,8 @@ export function driftDiagnostics(
       out.push({
         ...base,
         code: "ABFC5001",
-        message: `${label} was edited in the editor since the last build${counts}. abfc will not overwrite it.`,
-        fix: `undo the edit in the editor, or move it into the .ts file and run: abfc adopt ${asset} ${unit.id} --yes --discard-editor-changes (the next build then replaces the edited nodes)`,
+        message: `${label} was edited in the editor since the last build${counts}. abfc build --drift replaces it now (TypeScript wins); otherwise the next build that changes this class does.`,
+        fix: "run abfc build --drift to replace the edited nodes now (a plain build skips an asset whose TypeScript did not change); to keep the edit, move it into the .ts file first.",
       });
     } else if (state === "staleStage" && builtGraphMatches(unit, snapshot)) {
       continue; // re-synced from a published mod that holds the abfc-built graph
@@ -129,15 +146,15 @@ export function driftDiagnostics(
         out.push({
           ...base,
           code: "ABFC5002",
-          message: `${label}: the stage was re-synced and ${plural(gone.length, "owned node")} ${gone.length === 1 ? "is" : "are"} missing in the asset (${gone.slice(0, 5).join(", ")}${gone.length > 5 ? ", ..." : ""}). abfc will not overwrite it.`,
-          fix: "restore the unit in the real mod, or run abfc build --resync after reverting it.",
+          message: `${label}: the stage was re-synced and ${plural(gone.length, "owned node")} ${gone.length === 1 ? "is" : "are"} missing in the asset (${gone.slice(0, 5).join(", ")}${gone.length > 5 ? ", ..." : ""}). The next build replaces it (TypeScript wins).`,
+          fix: "nothing to do: abfc build applies the unit again.",
         });
       } else if (unit.assetHash !== null && unit.nodes.length > 0) {
         out.push({
           ...base,
           code: "ABFC5001",
-          message: `${label} differs from what abfc applied (the stage was re-synced from the real mod). abfc will not overwrite it.`,
-          fix: `move the change into the .ts file and run: abfc adopt ${asset} ${unit.id} --yes --discard-editor-changes`,
+          message: `${label} differs from what abfc applied (the stage was re-synced from the real mod). The next build replaces it (TypeScript wins).`,
+          fix: "nothing to do: abfc build replaces it; to keep the change, move it into the .ts file first.",
         });
       }
     } else if ((state === "pendingAdoption" || state === "staleStage") && unit.adopt !== null) {
@@ -146,7 +163,7 @@ export function driftDiagnostics(
           ...base,
           code: "ABFC5004",
           message: `${label}: the hand-made unit adopted earlier changed in the real mod (the staged copy no longer matches the recorded adoption hash).`,
-          fix: "review the change in the editor, then run abfc adopt again for this unit.",
+          fix: "nothing to do: abfc build replaces the hand-made unit with the TypeScript one.",
         });
       }
     }

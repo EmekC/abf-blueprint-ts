@@ -32,7 +32,8 @@ export function structFieldsHash(fields: ReadonlyArray<{ name: string; type: str
   return "sha256:" + sha256(canonicalJson(fields.map((f) => ({ name: f.name, type: f.type }))));
 }
 
-/** Hash of the class defaults of an asset (plan item `defaults`): the validated property map plus the class manager row. */
-export function classDefaultsHash(values: Record<string, string>, classManagerRow?: string): string {
-  return "sha256:" + sha256(canonicalJson({ values, classManagerRow }));
+/** Hash of the class defaults of an asset (plan item `defaults`): the validated property map plus the class manager row, the director row asset and its gameplay tag. */
+export function classDefaultsHash(values: Record<string, string>, classManagerRow?: string, directorAsset?: string, directorTag?: string): string {
+  // an absent tag adds no key, so the hash of a class without one is the same as before tags existed
+  return "sha256:" + sha256(canonicalJson({ values, classManagerRow, directorAsset, ...(directorTag !== undefined ? { directorTag } : {}) }));
 }

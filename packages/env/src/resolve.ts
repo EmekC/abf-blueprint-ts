@@ -56,8 +56,11 @@ export function resolveEnvironment(
   const { flags } = opts;
 
   assertNotInModFolder(host, opts.projectDir);
-  const config = loadProjectConfig(opts.projectDir, host);
+  let config = loadProjectConfig(opts.projectDir, host);
   const userConfig = loadUserConfig(host.env, host);
+  if (config.schemaVersion < 2) {
+    diagnostics.push(envWarning(1031, "abf.config.json uses schema 1.", [], 'run "abfc init" in the project to upgrade it (a backup is kept).'));
+  }
 
   const nodeDiag = checkNode(host);
   if (nodeDiag) diagnostics.push(nodeDiag);
@@ -108,6 +111,33 @@ export function resolveEnvironment(
     modDir = findModDir(host, modsDir.value, config.mod.name, flags.modDir, config.mod.dir, userConfig?.mod?.dir);
   } catch (e) {
     modDir = failed<string>(e, diagnostics);
+  }
+
+  // Windows finds the mod folder in any letter case, but the backend's stage folder, the Unreal mount paths and
+  // abfc's manifests use the name as text: use the spelling of the mod's plugin file.
+  if (modDir.value !== null) {
+    let entries: string[] = [];
+    try {
+      entries = host.readDir(modDir.value);
+    } catch {
+      entries = [];
+    }
+    const wanted = `${config.mod.name}.uplugin`.toLowerCase();
+    const plugin = entries.find((n) => n.toLowerCase() === wanted);
+    if (plugin !== undefined) {
+      const onDisk = plugin.slice(0, -".uplugin".length);
+      if (onDisk !== config.mod.name) {
+        diagnostics.push(
+          envWarning(
+            1045,
+            `mod.name "${config.mod.name}" differs in case from the mod's plugin "${onDisk}"; using "${onDisk}".`,
+            [],
+            `write "mod": {"name": "${onDisk}"} in abf.config.json.`,
+          ),
+        );
+        config = { ...config, mod: { ...config.mod, name: onDisk } };
+      }
+    }
   }
 
   let python: Resolved<string> & { version: string | null };

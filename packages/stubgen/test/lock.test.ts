@@ -43,7 +43,7 @@ test("lock round trip through a folder", () => {
     const l = lock();
     writeLock(stubs, l);
     assert.deepEqual(readLock(stubs), l);
-    assert.equal(l.generator, "0.3.0");
+    assert.equal(l.generator, "0.5.0");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -52,6 +52,17 @@ test("lock round trip through a folder", () => {
 test("checkLock: missing lock is ABFC3003", () => {
   const d = checkLock(null, env(), config, "build");
   assert.deepEqual(d.map((x) => [x.code, x.severity]), [["ABFC3003", "error"]]);
+});
+
+test("checkLock: stubs from another generator version are a warning (ABFC3001) that names abfc stubs, in check and build mode", () => {
+  for (const mode of ["check", "build"] as const) {
+    const d = checkLock(lock({ generator: "0.0.1" }), env(), config, mode);
+    assert.equal(d.length, 1);
+    assert.equal(d[0]!.code, "ABFC3001");
+    assert.equal(d[0]!.severity, "warning");
+    assert.match(d[0]!.message, /abfc stubs 0.0.1/);
+    assert.match(d[0]!.message, /Run "abfc stubs"/);
+  }
 });
 
 test("checkLock: matching lock is clean", () => {
@@ -107,8 +118,29 @@ test("writeTsconfigPaths writes forward-slash absolute paths and the stub patter
     assert.deepEqual(paths["/Script/*"], ["./stubs/p1/Script/*.js"]);
     assert.deepEqual(paths["/Game/*"], ["./stubs/p1/Game/*.js"]);
     assert.deepEqual(paths["/TestMod/*"], ["./stubs/p1/Mod/TestMod/*.js"]);
+    assert.deepEqual(paths["@mod/*"], ["./stubs/p1/Mod/TestMod/*.js"]);
     assert.deepEqual(paths["@abfc/runtime"], ["C:/fake/runtime/dist/src/index.d.ts"]);
     assert.deepEqual(paths["@abfc/testkit"], ["C:/fake/testkit/dist/src/index.d.ts"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("writeTsconfigPaths maps @abfc/ir only when irDts is given, otherwise the output is unchanged", () => {
+  const dir = mkdtempSync(join(tmpdir(), "abfc-paths-"));
+  try {
+    const rt = "C:\\fake\\runtime\\index.d.ts";
+    const tk = "C:\\fake\\testkit\\index.d.ts";
+    const without = readFileSync(writeTsconfigPaths(join(dir, "a"), "p1", "TestMod", rt, tk), "utf8");
+    const explicitUndefined = readFileSync(writeTsconfigPaths(join(dir, "b"), "p1", "TestMod", rt, tk, undefined), "utf8");
+    assert.equal(explicitUndefined, without);
+    assert.equal(JSON.parse(without).compilerOptions.paths["@abfc/ir"], undefined);
+    assert.ok(!without.includes("@abfc/ir"));
+    const withIr = JSON.parse(readFileSync(writeTsconfigPaths(join(dir, "c"), "p1", "TestMod", rt, tk, "C:\\fake\\ir\\index.d.ts"), "utf8")) as {
+      compilerOptions: { paths: Record<string, string[]> };
+    };
+    assert.deepEqual(withIr.compilerOptions.paths["@abfc/ir"], ["C:/fake/ir/index.d.ts"]);
+    assert.deepEqual(Object.keys(withIr.compilerOptions.paths).slice(-2), ["@abfc/testkit", "@abfc/ir"]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -36,6 +36,14 @@ export class BP_Wrong extends Actor {
     for (let n = 0; n < 3; n += 2) {} // ABFC2099 @n += 2
     const t = this.Pots.length > 0 ? 1 : 2; // ABFC2099
     let x = 1; // ABFC2099
+    this.Pots.forEach(function (p) {}); // ABFC2090 @function
+    this.Pots.forEach((p) => p); // ABFC2090
+    this.Pots.forEach((p, i, all) => {}); // ABFC2090 @all
+    this.Pots.forEach((p) => {}, this); // ABFC2090
+    this.Pots.forEach(async (p) => {}); // ABFC2090
+    this.Pots.forEach((p) => { if (this.Pots.length > 0) return 1; }); // ABFC2090 @return 1;
+    this.Pots.forEach((p) => { for (let j = 0; j < 2; j++) { if (this.Pots.length > j) return; } }); // ABFC2090 @return;
+    outer: for (const p of this.Pots) { continue outer; } // ABFC2099
   }
 }
 

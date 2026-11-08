@@ -5,40 +5,58 @@ import type { Diagnostic, Span } from "@abfc/ir";
 /** bp_apply type grammar, e.g. "int", "object:/Script/Engine.Actor", "array:name". */
 export type BpType = string;
 
-/** An own member variable (`Name!: T;` in the TS class); abfc declares it in the asset. */
-export interface HirField { name: string; type: BpType; span: Span }
+/** Name of the output pin that carries the return value of a Blueprint function (and the result pin of a call of one). */
+export const FUNCTION_RETURN_PIN = "ReturnValue";
+
+/** `actor`: derives from Actor; `component`: from ActorComponent; `widget`: from UserWidget; `object`: anything else. */
+export type ParentFamily = "actor" | "component" | "widget" | "object";
+
+/** An own member variable (`Name!: T;` or `Name: T = <literal>` in the TS class); abfc declares it in the asset. `default` is Unreal default-value text. */
+export interface HirField { name: string; type: BpType; default?: string; span: Span }
 
 export interface HirClass {
   name: string;
   /** Package path, e.g. "/Mod/Dir/BP_X". */
   path: string;
+  /** True when the path was derived from the file location (no `path:` option). */
+  pathDerived: boolean;
   /** `<path>.<AssetName>_C`. */
   classPath: string;
   /** Class path of the parent (`@bpPath` of the `extends` class). */
   parent: string;
+  /** What the parent class derives from; a changed `extends` inside one family is a reparent, across families a recreate (docs/design.md 18.2). */
+  family: ParentFamily;
   span: Span;
   events: HirEvent[];
   /** Own member variables (`Name!: T;`), in declaration order. */
   fields: HirField[];
   /** Hand-made functions/events of the asset that the TS class sees through `<X>_Manual` (tag `@bpHandMade`). */
   manualUnits: string[];
+  /** The class symbol also has an `interface X extends X_Manual` declaration (design 13): the hand-made members are part of the class and are kept. */
+  hybrid: boolean;
   /** Class defaults from the `@blueprint` options (pin names -> T3D text); filled by the class-defaults pass. */
   defaults: Record<string, string>;
   /** Row asset path of the `classManagerRow` option (verified, not written). */
   classManagerRow?: string;
+  /** `@director("Row")`: the class-manager row (asset `/<mod>/<classManager.table>/<Row>`) that references this class. */
+  director?: { row: string; asset: string; /** The gameplay tag the row holds (`@director("Row", tag)`). */ tag?: string };
   /** `widget`: the asset is a Widget Blueprint (`@blueprint({ kind: "widget" })`). */
   kind?: "widget";
 }
 
 export interface HirEvent {
   name: string;
-  /** `event`: custom event (`@event`); `override`: override of an event/function of a parent class (`@override`). */
-  kind: "event" | "override";
+  /** `event`: custom event (`@event`); `override`: override of an event/function of a parent class (`@override`); `function`: undecorated method = Blueprint function graph. */
+  kind: "event" | "override" | "function";
   /** Class path of the engine class that declares the overridden event (from the stub's `@bpPath`); only for `override`. */
   overrideOf?: string;
   /** Text of the method's JSDoc comment. */
   doc?: string;
   params: Array<{ name: string; type: BpType }>;
+  /** Functions: the Blueprint type of the return value; absent = void. */
+  returnType?: BpType;
+  /** Functions: the access specifier. */
+  access?: "public" | "protected" | "private";
   body: HirStmt[];
   span: Span;
 }
@@ -50,8 +68,9 @@ export type HirStmt =
   | { k: "setSelf"; name: string; type: BpType; value: HirExpr; span: Span }
   | { k: "const"; local: LocalId; name: string; init: HirExpr; uses: number; span: Span }
   | { k: "if"; cond: HirExpr; then: HirStmt[]; else: HirStmt[]; span: Span }
-  | { k: "return"; span: Span }
-  | { k: "forOf"; local: LocalId; name: string; array: HirExpr; elem: BpType; body: HirStmt[]; span: Span }
+  | { k: "return"; value?: HirExpr; span: Span }
+  /** `index`: `arr.forEach((x, i) => ...)`: local of the index parameter (the loop index, int). */
+  | { k: "forOf"; local: LocalId; name: string; array: HirExpr; elem: BpType; index?: LocalId; body: HirStmt[]; span: Span }
   /** `this.X = c ? a : b`: Branch plus one set per side. */
   | { k: "setSelfCond"; name: string; type: BpType; cond: HirExpr; a: HirExpr; b: HirExpr; span: Span }
   /** `for (let i = A; cond; i++ | i--)` with an int counter; the counter is only visible in `cond` and `body`. */
@@ -59,7 +78,10 @@ export type HirStmt =
   /** Mutation of an own array variable: `push(x)`, `splice(i, 1)` (removeAt), `length = 0` (clear). `array.type` is the array type, e.g. "array:name". */
   | { k: "arrayOp"; op: "push" | "removeAt" | "clear"; array: { self: string; type: BpType }; value?: HirExpr; index?: HirExpr; span: Span }
   /** Mutation of an own map/set variable: Map `set`/`delete`/`clear`, Set `add`/`delete`/`clear`. `target.type` is e.g. "map:name:int" or "set:name". */
-  | { k: "containerOp"; container: "map" | "set"; op: "add" | "remove" | "clear"; target: { self: string; type: BpType }; key?: HirExpr; value?: HirExpr; span: Span };
+  | { k: "containerOp"; container: "map" | "set"; op: "add" | "remove" | "clear"; target: { self: string; type: BpType }; key?: HirExpr; value?: HirExpr; span: Span }
+  /** `break`/`continue` of the innermost enclosing loop (a `return;` directly in a forEach callback is a `continue`). */
+  | { k: "break"; span: Span }
+  | { k: "continue"; span: Span };
 
 export type HirExpr = (
   | { k: "self" }
@@ -111,7 +133,7 @@ export type HirExpr = (
   | { k: "arrayFind"; array: HirExpr; value: HirExpr; elem: BpType }
   /** Pure query of an own map/set: `has` (Map_Contains/Set_Contains, bool), `get` (Map_Find `Value`, the value type), `size` (Map_Length/Set_Length, int). `key` is the key or element. */
   | { k: "containerQuery"; container: "map" | "set"; op: "has" | "get" | "size"; target: HirExpr; targetType: BpType; key?: HirExpr }
-  /** Template literal where a `text` is expected: FormatText. `format` already has `{`, `}` and backticks escaped. */
+  /** Template literal: FormatText. `type` "text" = the Format Text result; "string" = followed by Conv_TextToString (a string is expected, or no type is expected, e.g. a const). `format` already has `{`, `}` and backticks escaped. */
   | { k: "formatText"; format: string; args: Array<{ name: string; value: HirExpr }> }
   /** Object literal of a stub struct (`@bpKind struct`): MakeStruct. `struct` is the struct path. */
   | { k: "makeStruct"; struct: string; fields: Array<{ name: string; value: HirExpr }> }
@@ -125,6 +147,8 @@ export interface HirStruct {
   name: string;
   /** Package path, e.g. "/Mod/Dir/S_X". */
   path: string;
+  /** True when the path was derived from the file location (no `path:` option). */
+  pathDerived: boolean;
   /** `<path>.<AssetName>`. */
   objectPath: string;
   fields: HirStructField[];

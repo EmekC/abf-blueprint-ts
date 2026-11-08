@@ -1,18 +1,34 @@
 // Pieces shared by check, build, test, status, adopt and publish: timings, lock check, frontend, backend session.
 import { win32 } from "node:path";
+import { nodeKey } from "@abfc/backend";
 import type { Backend } from "@abfc/backend";
-import { buildHir, loadProgram, lowerChecked } from "@abfc/compiler";
-import type { HirProgram, LoadedProgram } from "@abfc/compiler";
+import { buildHir, listManifests, loadProgram, lowerChecked, readManifest, readSourceMap, sameClassPath, writeManifest, writeSourceMap } from "@abfc/compiler";
+import type { CompilerProjectConfig, HirProgram, LoadedProgram, Manifest, SourceMapFile } from "@abfc/compiler";
 import { AbfcError } from "@abfc/env";
+import type { ProjectConfig } from "@abfc/env";
 import { parseExport } from "@abfc/ir";
-import type { BackendInfo, Diagnostic, IrModule, T3dExport } from "@abfc/ir";
+import type { BackendInfo, Diagnostic, IrAsset, IrModule, T3dExport } from "@abfc/ir";
 import { checkLock, readLock } from "@abfc/stubgen";
 import type { CliContext } from "../context.js";
 import { backendInfoDiagnostics } from "./backend-version.js";
 import { formatTimings, recordRun } from "../runs.js";
 import type { RunEntry } from "../runs.js";
 
+/**
+ * A codegen epoch, not the release version: it is stored in units.json, and a change marks every unit for forceReplan
+ * (every unit is re-applied, which means a republish). Change it only when code generation changes; never on a release bump.
+ */
 export const COMPILER_ID = "abfc 0.1.0";
+
+/** What the compiler frontend needs from the project config (derived asset paths, migration hints). */
+export function compilerConfigOf(config: ProjectConfig): CompilerProjectConfig {
+  return {
+    mod: config.mod.name,
+    sourceRoot: config.sourceRoot,
+    migrationHints: config.schemaVersion >= 2,
+    classManagerTable: config.classManager.table,
+  };
+}
 
 /** Seconds since `t0` (a `performance.now()` value). */
 export const since = (t0: number): number => (performance.now() - t0) / 1000;
@@ -70,7 +86,7 @@ export interface Frontend {
 /** TypeScript program -> HIR -> IR, printing every diagnostic. */
 export function compileFrontend(ctx: CliContext): Frontend {
   const loaded = loadProgram(ctx.projectDir);
-  const hir = buildHir(loaded, { mod: ctx.config.mod.name }, ctx.env.profile);
+  const hir = buildHir(loaded, compilerConfigOf(ctx.config), ctx.env.profile);
   const diags = [...loaded.diagnostics, ...hir.diagnostics];
   emitAll(ctx, diags);
   if (hasError(diags)) return { loaded, hir, ir: null };
@@ -158,3 +174,110 @@ export async function readAsset(ctx: CliContext, backend: Backend, asset: string
 }
 
 export const shortHash = (h: string | null): string => (h === null || h === "" ? "-" : h.replace(/^sha256:/, "").slice(0, 8));
+
+/** real node name -> `<unit id>/<IR node id>` for the units recorded in a manifest (the node names a source map keeps). */
+export function previousNames(manifest: Manifest | null): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const u of manifest?.units ?? []) {
+    for (const [irId, real] of Object.entries(u.nodeIds)) out[`${u.id}/${irId}`] = real;
+  }
+  return out;
+}
+
+/** Source map of one asset: spans from the IR, real names from `names` (`<unit id>/<IR node id>` -> real). */
+export function sourceMapOf(asset: IrAsset, names: Record<string, string>): SourceMapFile {
+  const units: SourceMapFile["units"] = {};
+  for (const u of asset.units) {
+    const nodes: SourceMapFile["units"][string]["nodes"] = {};
+    for (const n of u.nodes) nodes[n.id] = { span: n.origin, real: names[nodeKey(u, n.id)] ?? null };
+    units[u.id] = { span: u.origin, nodes };
+  }
+  return { asset: asset.path, units };
+}
+
+/**
+ * After the stage was re-synced from the mod (`--resync`, the automatic re-sync after a failed compile, a stage created from
+ * scratch): the stage holds only what the mod holds, so the unpublished work of every asset of the mod is gone. The manifests
+ * (and source maps) are brought back in line: units whose nodes the stage does not hold are dropped (they were never published,
+ * so the next build applies them again instead of reporting their nodes as missing, ABFC5002, with a fix that pointed back to
+ * `--resync`). Adopted units keep their entry (a build replays the adoption); tombstones, `renamedFrom` and every other manifest
+ * field stay. `o.base` is the state of the manifests from before the build wrote anything (the failed-compile path); without it
+ * the manifests on disk are the base. `o.appliedAssets` always get their base manifest back (a failed build wrote a half-applied
+ * one). Units this build removed come back with the stage and are tracked again; a published unit this build re-applied keeps
+ * the node names the mod still holds. Best effort per asset: an unreadable stage or a write failure leaves that manifest as it is.
+ */
+export async function pruneManifestsToStage(
+  ctx: CliContext,
+  backend: Backend,
+  mod: string,
+  o: {
+    base?: ReadonlyMap<string, Manifest | null>;
+    appliedAssets?: readonly string[];
+    ir?: IrModule;
+    owned?: readonly IrAsset[];
+  } = {},
+): Promise<void> {
+  const { projectDir } = ctx;
+  const appliedAssets = o.appliedAssets ?? [];
+  const applied = new Set(appliedAssets);
+  const assets = new Set(appliedAssets);
+  for (const m of listManifests(projectDir)) if (m.asset.startsWith(`/${mod}/`)) assets.add(m.asset);
+  for (const asset of assets) {
+    try {
+      const current = readManifest(projectDir, asset);
+      const base = o.base?.get(asset) ?? current;
+      if (base === null || base.structFieldsHash !== undefined) continue;
+      let units = base.units;
+      let stageParent: string | null = null; // the parent the stage holds now (a reparent or recreate of an unpublished stage is gone with the re-sync)
+      if (units.length === 0 && base.parent !== undefined) {
+        try {
+          stageParent = (await readAsset(ctx, backend, asset)).parsed.parentClass;
+        } catch {
+          // unreadable: the recorded parent stays
+        }
+      }
+      if (units.length > 0) {
+        let held: Set<string>;
+        try {
+          const parsed = (await readAsset(ctx, backend, asset)).parsed;
+          held = new Set(parsed.nodes.keys());
+          stageParent = parsed.parentClass;
+        } catch {
+          // A stage-only rename is gone after a re-sync: the published nodes are still in the asset under its old path.
+          try {
+            if (base.renamedFrom === undefined) throw new Error("no earlier path");
+            const parsed = (await readAsset(ctx, backend, base.renamedFrom)).parsed;
+            held = new Set(parsed.nodes.keys());
+            stageParent = parsed.parentClass;
+          } catch {
+            // unreadable stage: do not treat it as empty (that would drop published units), keep this manifest as it is
+            continue;
+          }
+        }
+        units = base.units.filter((u) => u.adopt !== null || u.nodes.every((n) => held.has(n)));
+      }
+      const parentChanged = base.parent !== undefined && stageParent !== null && !sameClassPath(base.parent, stageParent);
+      if (!applied.has(asset) && units.length === base.units.length && !parentChanged) continue;
+      // The family recorded with the old parent no longer says anything about the parent the stage holds: dropped (the next build asks the backend).
+      const { parentFamily: _family, ...rest } = base;
+      const restored: Manifest = parentChanged ? { ...rest, units, parent: stageParent! } : { ...base, units };
+      writeManifest(projectDir, restored);
+      const irAsset = o.owned?.find((a) => a.path === asset) ?? o.ir?.assets.find((a) => a.path === asset);
+      if (irAsset !== undefined) {
+        writeSourceMap(projectDir, sourceMapOf(irAsset, previousNames(restored)));
+        continue;
+      }
+      // No IR here (status, stubs, adopt): the dropped units keep their spans in the source map but lose their node names.
+      const sm = readSourceMap(projectDir, asset);
+      if (sm === null) continue;
+      const kept = new Set(units.map((u) => u.id));
+      for (const [id, u] of Object.entries(sm.units)) {
+        if (kept.has(id)) continue;
+        for (const n of Object.values(u.nodes)) n.real = null;
+      }
+      writeSourceMap(projectDir, sm);
+    } catch {
+      // the manifest stays as it is; the next build reports what it finds
+    }
+  }
+}

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  PatchError, extractGraphBlock, parseAttrs, parseExport, patchWildcardPins, pinName, unitStateHash, userPins,
+  PatchError, extractGraphBlock, parseAttrs, parseExport, patchWildcardPins, pinName, t3dNodeKey, t3dNodeName, unitStateHash, userPins,
 } from "../src/index.js";
 
 const WIDGET = "/Fake/Mod/WBP_Thing.WBP_Thing_C";
@@ -72,6 +72,16 @@ function fakeExport(o: Opts = {}): string {
   return lines.join("\r\n");
 }
 
+test("a quoted variable default is unescaped (FText with quotes and a backslash)", () => {
+  const text = [
+    `Begin Object Class=/Script/UnrealEd.Foo Name="Foo_0" ExportPath=/Script/UnrealEd.Foo'/Temp/X.X:Foo_0'`,
+    `   NewVariables(0)=(VarName="Label",VarGuid=B9A5CF56484DE0E7DDD1D99A685F371C,VarType=(PinCategory="text"),FriendlyName="Label",PropertyFlags=65541,DefaultValue="NSLOCTEXT(\\"ns\\", \\"k\\", \\"a\\\\b\\")")`,
+    `End Object`,
+  ].join("\n");
+  const v = parseExport(text).variables.find((x) => x.name === "Label");
+  assert.equal(v?.default, `NSLOCTEXT("ns", "k", "a\\b")`);
+});
+
 test("parseAttrs respects quotes and parentheses", () => {
   const a = parseAttrs('A=1,B="x,y",C=(p=1,q="2)"),D=');
   assert.deepEqual(a, { A: "1", B: '"x,y"', C: '(p=1,q="2)")', D: "" });
@@ -100,7 +110,7 @@ test("parseExport reads nodes, graphs, pins and links", () => {
   assert.equal(e.nodes.size, 3);
 });
 
-test("parseExport keeps plain node keys for the event graph whatever the graph order is", () => {
+test("parseExport keys event graph nodes plainly and every other graph's nodes as <graph>/<name>, whatever the graph order", () => {
   const graph = (name: string, node: string): string[] => [
     `   Begin Object Class=/Script/Engine.EdGraph Name="${name}" ExportPath="/Script/Engine.EdGraph'${BP}:${name}'"`,
     `      Begin Object Class=/Script/Fake.Widget Name="${node}" ExportPath="/Script/Fake.Widget'${BP}:${name}.${node}'"`,
@@ -110,14 +120,45 @@ test("parseExport keeps plain node keys for the event graph whatever the graph o
   const head = `Begin Object Class=/Script/Engine.Blueprint Name="BP_Host" ExportPath="/Script/Engine.Blueprint'${BP}'"`;
   const make = (order: string[]): string =>
     [head, ...order.flatMap((g) => graph(g, "Fake_Call_0")), "End Object"].join("\n");
-  for (const order of [["EventGraph", "Stub"], ["Stub", "EventGraph"], ["StubA", "EventGraph", "StubB"]]) {
+  for (const order of [["EventGraph", "Stub"], ["Stub", "EventGraph"], ["StubA", "EventGraph", "StubB"], ["StubA", "StubB"]]) {
     const e = parseExport(make(order));
-    assert.equal(e.nodes.get("Fake_Call_0")?.graph, "EventGraph", order.join(","));
+    assert.equal(e.nodes.get("Fake_Call_0")?.graph, order.includes("EventGraph") ? "EventGraph" : undefined, order.join(","));
     for (const g of order.filter((x) => x !== "EventGraph")) assert.equal(e.nodes.get(`${g}/Fake_Call_0`)?.graph, g);
     assert.equal(e.nodes.size, order.length);
   }
-  // without an event graph the first graph in the file keeps the plain key
-  assert.equal(parseExport(make(["StubA", "StubB"])).nodes.get("Fake_Call_0")?.graph, "StubA");
+});
+
+test("unitStateHash resolves links inside the linking node's graph, whatever the graph order", () => {
+  const graph = (name: string, entryPin: string, entryId: string): string[] => [
+    `   Begin Object Class=/Script/Engine.EdGraph Name="${name}" ExportPath="/Script/Engine.EdGraph'${BP}:${name}'"`,
+    ...(name === "EventGraph" ? [] : [
+      `      Begin Object Class=/Script/BlueprintGraph.K2Node_FunctionEntry Name="K2Node_FunctionEntry_0" ExportPath="/Script/BlueprintGraph.K2Node_FunctionEntry'${BP}:${name}.K2Node_FunctionEntry_0'"`,
+      "         " + pin(entryId, entryPin, { out: true }),
+      "      End Object",
+    ]),
+    `      Begin Object Class=/Script/BlueprintGraph.K2Node_CallFunction Name="K2Node_CallFunction_9001" ExportPath="/Script/BlueprintGraph.K2Node_CallFunction'${BP}:${name}.K2Node_CallFunction_9001'"`,
+    "         " + pin("EEEE0000000000000000000000000001", "execute"),
+    "         " + pin("EEEE0000000000000000000000000002", "Value", name === "EventGraph" ? {} : { links: `K2Node_FunctionEntry_0 ${entryId}` }),
+    "      End Object",
+    "   End Object",
+  ];
+  const head = `Begin Object Class=/Script/Engine.Blueprint Name="BP_Host" ExportPath="/Script/Engine.Blueprint'${BP}'"`;
+  const make = (order: string[]): ReturnType<typeof parseExport>["nodes"] =>
+    parseExport([head, ...order.flatMap((g) => graph(g, g === "FnA" ? "a" : "b", g === "FnA" ? "AAAA0000000000000000000000000001" : "BBBB0000000000000000000000000001")), "End Object"].join("\n")).nodes;
+  const one = make(["EventGraph", "FnA", "FnB"]);
+  const two = make(["EventGraph", "FnB", "FnA"]);
+  const a1 = unitStateHash(one, ["FnA/K2Node_CallFunction_9001"]);
+  assert.equal(a1, unitStateHash(two, ["FnA/K2Node_CallFunction_9001"]));
+  assert.equal(unitStateHash(one, ["FnB/K2Node_CallFunction_9001"]), unitStateHash(two, ["FnB/K2Node_CallFunction_9001"]));
+  assert.notEqual(a1, unitStateHash(one, ["K2Node_CallFunction_9001"]));
+  assert.notEqual(a1, unitStateHash(one, ["FnB/K2Node_CallFunction_9001"]));
+  // the link resolves to the pin name of the entry of the linking node's own graph
+  assert.equal(pinName(one.get("FnA/K2Node_FunctionEntry_0")!, "AAAA0000000000000000000000000001"), "a");
+  assert.equal(t3dNodeKey("EventGraph", "X"), "X");
+  assert.equal(t3dNodeKey(null, "X"), "X");
+  assert.equal(t3dNodeKey("FnA", "X"), "FnA/X");
+  assert.equal(t3dNodeName("FnA/X"), "X");
+  assert.equal(t3dNodeName("X"), "X");
 });
 
 test("parseExport reads variables and entry pins", () => {
@@ -188,6 +229,11 @@ test("unitStateHash changes with a default or a link, and flags missing nodes", 
   const e = parseExport(fakeExport());
   assert.notEqual(unitStateHash(e.nodes, ["Fake_Event_0", "Fake_Cast_0", "Gone"]), base);
   assert.notEqual(unitStateHash(e.nodes, ["Gone"]), unitStateHash(e.nodes, ["Fake_Event_0"]));
+});
+
+test("unitStateHash of event graph nodes is unchanged by graph-scoped keys", () => {
+  // golden: a manifest written before graph-scoped keys must stay valid, so the hash of plain-keyed nodes must not move
+  assert.equal(unitStateHash(parseExport(fakeExport()).nodes, ["Fake_Event_0", "Fake_Cast_0"]), "sha256:94281a4e4c747ce3dc7061ea8c5fc1a6957f0599f3f74ad9d26df2a6bc441f5a");
 });
 
 test("map and set variables, pins and user pins parse to grammar types with their value type", () => {

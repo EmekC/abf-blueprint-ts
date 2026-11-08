@@ -1,15 +1,19 @@
 // The check path shared by `abfc check` and the language service: HIR -> IR -> tests, as one list of diagnostics.
 import { validateIrModule } from "@abfc/ir";
 import type { Diagnostic, IrModule, Profile } from "@abfc/ir";
+import type { CompilerProjectConfig } from "./frontend/assetpaths.js";
 import { buildHir } from "./frontend/build.js";
 import type { LoadedProgram } from "./frontend/program.js";
 import { compileTests } from "./frontend/tests.js";
 import type { HirProgram } from "./hir.js";
 import { lower } from "./lower/index.js";
+import type { LowerOptions } from "./lower/index.js";
+import { listManifests } from "./ownership/manifest.js";
+import { movedClassDiagnostics } from "./ownership/moved.js";
 
 /** HIR -> IR, then IR validation. A validation problem is an ABFC2099 error and `ir` is null. */
-export function lowerChecked(hir: HirProgram, profile: Profile): { ir: IrModule | null; diagnostics: Diagnostic[] } {
-  const ir = lower(hir, profile);
+export function lowerChecked(hir: HirProgram, profile: Profile, opts?: LowerOptions): { ir: IrModule | null; diagnostics: Diagnostic[] } {
+  const ir = lower(hir, profile, opts);
   const problems = validateIrModule(ir);
   const diagnostics: Diagnostic[] = [];
   for (const p of problems) {
@@ -35,15 +39,23 @@ export interface ProjectCheck {
 }
 
 /** Whole-project check: all class files -> HIR -> (when clean) IR -> test cases. */
-export function checkProject(loaded: LoadedProgram, config: { mod: string }, profile: Profile): ProjectCheck {
+export function checkProject(loaded: LoadedProgram, config: CompilerProjectConfig, profile: Profile): ProjectCheck {
   const hir = buildHir(loaded, config, profile);
   const diagnostics: Diagnostic[] = [...hir.diagnostics];
-  const failed = [...loaded.diagnostics, ...hir.diagnostics].some((d) => d.severity === "error");
+  // A moved or renamed class file (ABFC5012) is judged from the recorded manifests; an unreadable manifest folder is not an error here.
+  if (!hir.diagnostics.some((d) => d.severity === "error")) {
+    try {
+      diagnostics.push(...movedClassDiagnostics(hir, listManifests(loaded.projectDir), config.mod));
+    } catch {
+      // unreadable manifests: left to the build
+    }
+  }
+  const failed = [...loaded.diagnostics, ...diagnostics].some((d) => d.severity === "error");
   if (failed) return { hir, ir: null, diagnostics, tests: 0 };
   const lowered = lowerChecked(hir, profile);
   diagnostics.push(...lowered.diagnostics);
   if (lowered.ir === null) return { hir, ir: null, diagnostics, tests: 0 };
-  const compiled = compileTests(loaded, profile);
+  const compiled = compileTests(loaded, profile, undefined, config);
   diagnostics.push(...compiled.diagnostics);
   return { hir, ir: lowered.ir, diagnostics, tests: compiled.cases.length };
 }

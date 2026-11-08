@@ -1,0 +1,251 @@
+# Release workflow. A tag push (v*.*.*) builds, scans and creates a DRAFT GitHub release; the npm-dry-run job then only
+# runs `npm publish --dry-run` (no environment, no token). Packages are published to npm for real only by the npm-publish
+# job, which runs only on a manual run of this workflow (workflow_dispatch) with publish_npm: true, behind the `npm`
+# environment and with provenance.
+# Nothing here publishes a GitHub release: a person publishes the draft. Maintainer notes are in docs/releasing.md.
+# Actions are pinned to @v4 tags; re-pinning to commit SHAs is a maintainer task.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build, for example v1.0.0
+        type: string
+        required: true
+      draft_release:
+        description: Create a draft GitHub release for the tag
+        type: boolean
+        default: false
+      publish_npm:
+        description: Publish the npm packages for real (otherwise a dry run only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build, scan and stage
+    runs-on: windows-latest
+    timeout-minutes: 90
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Check out the tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "26.7.0"
+          cache: npm
+
+      - name: Check the tag against the package versions
+        id: version
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          $tag = $env:TAG
+          if ($tag -notmatch '^v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') { throw "tag '$tag' is not of the form vX.Y.Z or vX.Y.Z-prerelease" }
+          $v = $tag.Substring(1)
+          "version=$v" >> $env:GITHUB_OUTPUT
+          node scripts/release/set-version.mjs --check $v
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Read pins
+        id: pins
+        run: |
+          $c = node -p "require('./release/pins.json').backend.commit"
+          "commit=$c" >> $env:GITHUB_OUTPUT
+
+      - name: Check out the pinned backend
+        uses: actions/checkout@v4
+        with:
+          repository: EmekC/abf-mod-editor-mcp
+          ref: ${{ steps.pins.outputs.commit }}
+          path: build/backend-src
+          persist-credentials: false
+
+      - name: Download pinned tools
+        run: node scripts/release/fetch-pins.mjs --download
+
+      - name: Inno Setup compiler
+        run: |
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            node scripts/release/fetch-pins.mjs --download --only innosetup
+            if ($LASTEXITCODE -ne 0) { throw 'Inno Setup is not on the runner and release/pins.json has no innosetup pin' }
+            $v = node -p "require('./release/pins.json').innosetup.version"
+            & "build\cache\innosetup-$v.exe" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CURRENTUSER /PORTABLE=1 "/DIR=$PWD\build\tools\innosetup" | Out-Null
+            $iscc = "$PWD\build\tools\innosetup\ISCC.exe"
+            if (-not (Test-Path $iscc)) { throw 'Inno Setup portable install failed' }
+          }
+          "ABFC_ISCC=$iscc" >> $env:GITHUB_ENV
+          try { & $iscc '/?' 2>&1 | Select-Object -First 2 } catch { Write-Host 'ISCC banner unavailable' }
+          "runner image: $env:ImageOS $env:ImageVersion"
+          $global:LASTEXITCODE = 0
+
+      - name: Build abfc.exe, runtime and zip
+        run: node scripts/release/build-exe.mjs --version ${{ steps.version.outputs.version }} --backend-repo build/backend-src
+
+      - name: Smoke-test the bundled backend
+        run: node scripts/release/smoke-backend.mjs
+
+      - name: Build the VS Code extension
+        run: npm run vsix
+
+      - name: Build the installer
+        run: node scripts/release/build-installer.mjs --version ${{ steps.version.outputs.version }} --require-iscc
+
+      - name: Pack npm tarballs
+        run: node scripts/release/pack-npm.mjs
+
+      - name: Inspect artifacts
+        run: node scripts/release/inspect.mjs --version ${{ steps.version.outputs.version }}
+
+      - name: Scan artifacts
+        run: node scripts/release/scan-artifacts.mjs --version ${{ steps.version.outputs.version }} --require exe,runtime,zip,installer-input,installer,vsix,npm
+
+      - name: Stage the GitHub release files
+        run: node scripts/release/stage-github.mjs --version ${{ steps.version.outputs.version }} --require-installer
+
+      - name: Upload the release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-files
+          path: build/release/github/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload the npm tarballs
+        uses: actions/upload-artifact@v4
+        with:
+          name: npm-tarballs
+          path: build/release/npm/
+          if-no-files-found: error
+          retention-days: 14
+
+  github-release:
+    name: draft GitHub release
+    needs: build
+    if: github.event_name == 'push' || inputs.draft_release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download the release files
+        uses: actions/download-artifact@v4
+        with:
+          name: release-files
+          path: release-files
+
+      - name: Create the draft release
+        working-directory: release-files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+          VERSION: ${{ needs.build.outputs.version }}
+        run: |
+          set -euo pipefail
+          files=()
+          for f in *; do
+            if [ "$f" != "release-notes.md" ]; then files+=("$f"); fi
+          done
+          flags=(--draft --verify-tag)
+          case "$VERSION" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "$TAG" "${flags[@]}" --title "abfc $VERSION" --notes-file release-notes.md "${files[@]}"
+
+  npm-dry-run:
+    name: npm dry run
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Download the npm tarballs
+        uses: actions/download-artifact@v4
+        with:
+          name: npm-tarballs
+          path: npm-tarballs
+
+      - name: Dry-run publish in dependency order
+        working-directory: npm-tarballs
+        run: |
+          set -euo pipefail
+          count=$(node -p "require('./packages.json').length")
+          for i in $(seq 0 $((count - 1))); do
+            file=$(node -p "require('./packages.json')[$i].filename")
+            version=$(node -p "require('./packages.json')[$i].version")
+            extra=()
+            case "$version" in *-*) extra+=(--tag next) ;; esac
+            npm publish "./$file" --access public --dry-run "${extra[@]}"
+          done
+
+  npm-publish:
+    name: publish to npm
+    needs: build
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Download the npm tarballs
+        uses: actions/download-artifact@v4
+        with:
+          name: npm-tarballs
+          path: npm-tarballs
+
+      - name: Publish in dependency order
+        working-directory: npm-tarballs
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          count=$(node -p "require('./packages.json').length")
+          for i in $(seq 0 $((count - 1))); do
+            file=$(node -p "require('./packages.json')[$i].filename")
+            version=$(node -p "require('./packages.json')[$i].version")
+            extra=()
+            case "$version" in *-*) extra+=(--tag next) ;; esac
+            npm publish "./$file" --access public --provenance "${extra[@]}"
+          done

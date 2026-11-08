@@ -2,6 +2,7 @@ node_modules/
 .abfc/cache/
 *.log
 dist/
+build/
 *.tsbuildinfo
 .plans/
 .claude/

@@ -4,12 +4,14 @@ import type { IrModule } from "./types.js";
 const NODE_ID = /^[A-Za-z][A-Za-z0-9_]*$/;
 const RESERVED_IDS = new Set(["entry", "result", "in", "out"]);
 const RESERVED_ENDPOINTS = new Set(["entry", "result"]);
+const DIRECTOR_ASSET = /^\/[A-Za-z0-9_]+(\/[A-Za-z0-9_]+)+$/;
 
 /** Structural checks of an IR module. Returns human-readable problems (empty = valid). */
 export function validateIrModule(m: IrModule): string[] {
   const problems: string[] = [];
   for (const asset of m.assets) {
     if (!asset.path.startsWith(`/${m.mod}/`)) problems.push(`asset ${asset.path}: path must start with /${m.mod}/`);
+    if (asset.director !== undefined && !DIRECTOR_ASSET.test(asset.director.asset)) problems.push(`asset ${asset.path}: director row asset "${asset.director.asset}" is not a plain asset path`);
     const unitIds = new Map(asset.units.map((u) => [u.id, new Set(u.nodes.map((n) => n.id))]));
     for (const unit of asset.units) {
       const where = `${asset.path} ${unit.id}`;

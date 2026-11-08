@@ -1,11 +1,14 @@
 import { win32 } from "node:path";
 import { AbfcError, checkHeadlessDir, envWarning, machineKeysInProject } from "@abfc/env";
 import type { Resolved } from "@abfc/env";
-import { MIN_BACKEND_VERSION } from "@abfc/backend";
+import { MIN_BACKEND_VERSION, RECOMMENDED_BACKEND_VERSION } from "@abfc/backend";
 import type { Backend } from "@abfc/backend";
 import type { BackendInfo, Diagnostic } from "@abfc/ir";
-import type { CliContext } from "../context.js";
-import { backendInfoDiagnostics } from "./backend-version.js";
+import type { ParsedArgs } from "../args.js";
+import { installOf } from "../context.js";
+import type { CliContext, CliDeps } from "../context.js";
+import { Output } from "../output.js";
+import { backendInfoDiagnostics, recommendedBackendDiagnostics } from "./backend-version.js";
 
 function show(label: string, r: Resolved<string>, extra = ""): string {
   const value = r.value === null ? "(not found)" : r.value;
@@ -34,6 +37,23 @@ export async function doctor(ctx: CliContext): Promise<number> {
   output.info(`  mod              ${config.mod.name}`);
   output.info(`  profile          ${env.profile.id} (editor build tag ${env.profile.buildTag})`);
   output.info(`  node             ${deps.host.nodeVersion}`);
+  const install = installOf(deps);
+  const info0 = install.info();
+  output.info(
+    info0.kind === "exe" ? `  abfc             exe ${info0.abfcVersion ?? "?"}, runtime ${info0.runtimeDir ?? "?"}` : "  abfc             source install",
+  );
+  const installJson = { kind: info0.kind, abfcVersion: info0.abfcVersion, runtimeDir: info0.runtimeDir };
+  let runtimeCheck: { files: number; repaired: boolean } | null = null;
+  if (ctx.args.flags.deep) {
+    const r = install.verify(true);
+    if (r === null) {
+      output.info("  runtime check    none (source install)");
+    } else {
+      runtimeCheck = { files: r.files, repaired: r.repaired };
+      output.info(`  runtime check    ${r.files} files verified by sha256${r.repaired ? " (repaired)" : ""}`);
+    }
+  }
+  const extra = ctx.args.flags.deep ? { install: installJson, runtimeCheck } : { install: installJson };
   output.info("settings (winner and source: flag > env > abf.config.json > user config > auto):");
   output.info(show("editor root", env.editorRoot, env.appVersion ? `  (build ${env.appVersion})` : ""));
   output.info(show("documents", env.documents));
@@ -61,6 +81,27 @@ export async function doctor(ctx: CliContext): Promise<number> {
 
   for (const d of env.diagnostics) if (d.code !== "ABFC1030") output.diag(d);
 
+  // The exe ships its own backend and Python; an older source-install setting can still win over them (design 9.1).
+  if (info0.kind === "exe" && info0.runtimeDir !== null) {
+    const rt = norm(info0.runtimeDir);
+    const outside: string[] = [];
+    for (const [label, r] of [["python", env.python], ["backend folder", env.backendDir]] as const) {
+      if (r.value === null || r.source === "auto") continue;
+      const v = norm(r.value);
+      if (v !== rt && !v.startsWith(rt + "\\")) outside.push(`${label} ${r.value} [${r.source}]`);
+    }
+    if (outside.length > 0) {
+      output.diag(
+        envWarning(
+          1053,
+          `abfc.exe uses a ${outside.join(" and a ")} outside its own runtime folder ${info0.runtimeDir}.`,
+          [],
+          "remove the old backend / python setting (ABFC_BACKEND_DIR, ABFC_PYTHON, \"backendDir\" / \"python\" in the user config or abf.config.json) to use the bundled ones, or keep it on purpose.",
+        ),
+      );
+    }
+  }
+
   if (env.editorRoot.value !== null && env.appVersion === null) {
     output.diag(
       envWarning(
@@ -84,7 +125,7 @@ export async function doctor(ctx: CliContext): Promise<number> {
   else if (headlessBlocked) skip = "the headless folder is not usable (see ABFC1012)";
   if (skip !== null) {
     output.info(`backend: not checked (${skip})`);
-    output.json({ settings: settingsJson(ctx), backend: null });
+    output.json({ settings: settingsJson(ctx), backend: null, ...extra });
     return output.exitCode();
   }
 
@@ -109,13 +150,29 @@ export async function doctor(ctx: CliContext): Promise<number> {
     checkInfo(ctx, info);
     printInfo(ctx, info);
   }
-  output.json({ settings: settingsJson(ctx), backend: info });
+  output.json({ settings: settingsJson(ctx), backend: info, ...extra });
   return output.exitCode();
+}
+
+/** `abfc doctor --clean-runtimes`: deletes the extracted runtime folders of other versions (and only those). Needs no project. Returns the exit code. */
+export function cleanRuntimesCommand(args: ParsedArgs, deps: CliDeps): number {
+  const output = new Output({ command: "doctor", json: args.flags.json, projectDir: args.flags.project, stdout: deps.stdout, stderr: deps.stderr });
+  const r = installOf(deps).clean();
+  for (const p of r.removed) output.info(`removed ${p}`);
+  for (const p of r.failed) {
+    output.diag(envWarning(1051, `in use, not removed: ${p}`, [], "close other abfc processes (language server, builds) and run the command again."));
+  }
+  for (const p of r.skipped) output.info(`left alone (not an abfc runtime folder): ${p}`);
+  if (r.kept !== null) output.info(`kept ${r.kept}`);
+  if (r.removed.length === 0 && r.failed.length === 0) output.info("nothing to remove");
+  output.json({ removed: r.removed, failed: r.failed, skipped: r.skipped, kept: r.kept });
+  return output.finish();
 }
 
 function checkInfo(ctx: CliContext, info: BackendInfo): void {
   const { output, config, env } = ctx;
   for (const d of backendInfoDiagnostics(info, config.backend.minProtocol, env.backendDir.value ?? "?")) output.diag(d);
+  for (const d of recommendedBackendDiagnostics(info, env.backendDir.value ?? "?")) output.diag(d);
   if (info.headlessDir !== null) {
     const d = checkHeadlessDir(info.headlessDir);
     if (d !== null) output.diag(d);
@@ -162,7 +219,12 @@ function printInfo(ctx: CliContext, info: BackendInfo): void {
   output.info(
     `  reflect: ${yn(c.reflect)}, compile node refs: ${yn(c.compileErrorNodeRefs)}, game test: ${yn(c.gameTest)}, audit: ${yn(c.audit)}`,
   );
-  output.info(`  warm session: ${yn(c.warmSession)}, stage audit: ${yn(c.stageAudit)}`);
+  output.info(`  warm session: ${yn(c.warmSession)}, stage audit: ${yn(c.stageAudit)}, class-manager rows: ${yn(c.classManagerRows)}`);
+  output.info(
+    `  backend capabilities: asset ops: ${c.assetOps.length > 0 ? c.assetOps.join("/") : "no"}, publish deletions: ${yn(c.publishDeletes)}, ` +
+      `gameplay tags: ${yn(c.gameplayTags)}, reflect defaults: ${yn(c.reflectDefaults)}, class-manager row tag: ${yn(c.classManagerRowTag)}, variable defaults: ${yn(c.variableDefaults)}, function graphs: ${yn(c.functionGraphs)} ` +
+      `(recommended server ${RECOMMENDED_BACKEND_VERSION})`,
+  );
   output.info(`  extensions: ${info.extensions.length > 0 ? info.extensions.join(", ") : "(none)"}`);
   if (info.headlessDir !== null) output.info(`  backend headless folder: ${info.headlessDir}`);
   if (info.headlessDirHasSpace) output.info("  backend headless folder contains a space");

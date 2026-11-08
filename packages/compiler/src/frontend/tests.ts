@@ -1,10 +1,12 @@
 // Test-file compiler: `*.test.ts` statements -> `TestCase` steps (design 11). Nothing here runs the tests.
 import ts from "typescript";
 import type { Diagnostic, Profile, TestCase, TestStepRecord } from "@abfc/ir";
-import { blueprintPathOf, classPathOf, importOf } from "./build.js";
+import { classPathOf, importOf } from "./build.js";
+import { bindPathContext, modImportHints } from "./assetpaths.js";
+import type { CompilerProjectConfig } from "./assetpaths.js";
 import { DiagSink, Fail, relFile, spanOf } from "./diag.js";
 import type { LoadedProgram } from "./program.js";
-import { classInfo, resolveAlias } from "./tags.js";
+import { classInfo, resolveAlias, tsBlueprintOfDecl } from "./tags.js";
 
 type Lit = string | number | boolean | null;
 
@@ -88,7 +90,7 @@ class TestCompiler {
     const sym = resolveAlias(this.checker, s);
     for (const d of sym.declarations ?? []) {
       if (ts.isClassDeclaration(d)) {
-        const p = blueprintPathOf(this.checker, d);
+        const p = tsBlueprintOfDecl(d)?.path;
         if (p !== undefined) return classPathOf(p);
       }
     }
@@ -264,12 +266,14 @@ class TestCompiler {
  * Compiles every top-level `test("name", (t) => { ... })` of the project's `*.test.ts` files into bp_game_test steps.
  * `filter` keeps cases whose name or file contains it.
  */
-export function compileTests(loaded: LoadedProgram, _profile: Profile, filter?: string): { cases: TestCase[]; diagnostics: Diagnostic[] } {
+export function compileTests(loaded: LoadedProgram, _profile: Profile, filter?: string, config?: CompilerProjectConfig): { cases: TestCase[]; diagnostics: Diagnostic[] } {
+  if (config !== undefined) bindPathContext(loaded, config);
   const cases: TestCase[] = [];
   const diagnostics: Diagnostic[] = [];
   const root = loaded.projectDir;
   for (const sf of loaded.files.tests) {
     const file = relFile(root, sf.fileName);
+    diagnostics.push(...modImportHints(sf));
     for (const st of sf.statements) {
       if (ts.isImportDeclaration(st) || ts.isEmptyStatement(st)) continue;
       const call = ts.isExpressionStatement(st) && ts.isCallExpression(st.expression) ? st.expression : undefined;

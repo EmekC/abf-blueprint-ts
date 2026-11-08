@@ -10,6 +10,23 @@
   "modsFolderName": "Abiotic Factor Mods",
   "minProtocol": 1,
   "defaultHeadlessSubdir": "abf-mod-editor-mcp\\headless",
+  "initScriptClasses": [
+    "/Script/Engine.Actor",
+    "/Script/Engine.ActorComponent",
+    "/Script/Engine.Pawn",
+    "/Script/Engine.Controller",
+    "/Script/Engine.PlayerController",
+    "/Script/Engine.KismetSystemLibrary",
+    "/Script/Engine.KismetMathLibrary",
+    "/Script/Engine.KismetTextLibrary",
+    "/Script/Engine.KismetArrayLibrary",
+    "/Script/Engine.GameplayStatics",
+    "/Script/UMG.Widget",
+    "/Script/UMG.UserWidget",
+    "/Script/UMG.WidgetBlueprintLibrary",
+    "/Script/UMG.PanelWidget",
+    "/Script/UMG.PanelSlot"
+  ],
   "pins": {
     "execute": "execute",
     "then": "then",
@@ -46,6 +63,7 @@
     "arrayLength": { "class": "/Script/Engine.KismetArrayLibrary", "name": "Array_Length" },
     "lessInt": { "class": "/Script/Engine.KismetMathLibrary", "name": "Less_IntInt" },
     "addInt": { "class": "/Script/Engine.KismetMathLibrary", "name": "Add_IntInt" },
+    "textToString": { "class": "/Script/Engine.KismetTextLibrary", "name": "Conv_TextToString" },
     "equal": {
       "object": { "class": "/Script/Engine.KismetMathLibrary", "name": "EqualEqual_ObjectObject" },
       "name": { "class": "/Script/Engine.KismetMathLibrary", "name": "EqualEqual_NameName" },

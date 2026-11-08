@@ -172,3 +172,54 @@ test("an unknown command and a bad option exit 2", async () => {
   assert.equal(await main(["doctor", "--nope"], cap.deps), 2);
   assert.match(cap.text(), /unknown or not yet available command "frobnicate"/);
 });
+
+const CAPS_260 = { assetOps: ["rename", "delete", "reparent", "recreate"], publishDeletes: true, gameplayTags: true, reflectDefaults: true };
+const TOOLS_260 = [...ALL_TOOLS, "bp_asset_ops", "bp_publish"];
+
+test("backend 2.5.0 without the 2.6.0 capabilities: warning ABFC4018 lists them, exit 0", async () => {
+  const fake = fakeEnvironmentFiles({ headlessDir: "C:\abfc-headless" });
+  const cap = captureDeps(fake, async () =>
+    scriptedBackend(ALL_TOOLS, { backend_info: fixInfo({ serverVersion: "2.5.0" }), abfc_extensions: EXT }),
+  );
+  const code = await main(["doctor"], cap.deps);
+  const out = cap.text();
+  assert.equal(code, 0, out);
+  assert.match(out, /warning ABFC4018: .*server 2\.5\.0 and lacks the capabilities assetOps, publishDeletes, gameplayTags, reflectDefaults; abfc recommends 2\.6\.0/);
+  assert.match(out, /backend capabilities: asset ops: no, publish deletions: no, gameplay tags: no, reflect defaults: no/);
+  assert.doesNotMatch(out, /ABFC4014/);
+});
+
+test("one missing 2.6.0 capability is named alone", async () => {
+  const fake = fakeEnvironmentFiles({ headlessDir: "C:\abfc-headless" });
+  const caps = { ...CAPS_260, gameplayTags: false };
+  const cap = captureDeps(fake, async () =>
+    scriptedBackend(TOOLS_260, { backend_info: fixInfo({ serverVersion: "2.6.0", capabilities: caps }), abfc_extensions: EXT }),
+  );
+  const code = await main(["doctor"], cap.deps);
+  const out = cap.text();
+  assert.equal(code, 0, out);
+  assert.match(out, /warning ABFC4018: .*lacks the capabilities gameplayTags;/);
+});
+
+test("backend 2.6.0 with every capability: no ABFC4018, the capabilities line is printed", async () => {
+  const fake = fakeEnvironmentFiles({ headlessDir: "C:\abfc-headless" });
+  const cap = captureDeps(fake, async () =>
+    scriptedBackend(TOOLS_260, { backend_info: fixInfo({ serverVersion: "2.6.0", capabilities: CAPS_260 }), abfc_extensions: EXT }),
+  );
+  const code = await main(["doctor"], cap.deps);
+  const out = cap.text();
+  assert.equal(code, 0, out);
+  assert.doesNotMatch(out, /ABFC4018/);
+  assert.match(out, /backend capabilities: asset ops: rename\/delete\/reparent\/recreate, publish deletions: yes, gameplay tags: yes, reflect defaults: yes/);
+});
+
+test("an older server that reports every capability still gets ABFC4018 without a capability list", async () => {
+  const fake = fakeEnvironmentFiles({ headlessDir: "C:\abfc-headless" });
+  const cap = captureDeps(fake, async () =>
+    scriptedBackend(TOOLS_260, { backend_info: fixInfo({ serverVersion: "2.5.9", capabilities: CAPS_260 }), abfc_extensions: EXT }),
+  );
+  const code = await main(["doctor"], cap.deps);
+  const out = cap.text();
+  assert.equal(code, 0, out);
+  assert.match(out, /warning ABFC4018: .*server 2\.5\.9; abfc recommends 2\.6\.0/);
+});
