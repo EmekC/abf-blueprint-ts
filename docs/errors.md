@@ -947,7 +947,7 @@ Severity: warning · Exit: -
 
 Meaning: a stub class does not have its full parent chain: the backend gave no Blueprint parents, or an ancestor could not be reflected and is a members-less placeholder.
 
-Typical cause: an older backend whose `reflect` does not report `supers`, or a class that fails to load (see [ABFC4002](errors.md#abfc4002)).
+Typical cause: an older backend whose `reflect` does not report `supers` (the message asks you to update it), or a current backend that could not confirm the chain of a class because a parent failed to load or is not a confirmed ancestor (the message says "could not confirm"; see [ABFC4002](errors.md#abfc4002) in the reflect log).
 
 Fix: update the backend, run `abfc stubs`, and check with `node scripts/stub-chain-audit.mjs --stubs .abfc/stubs/<profile>`.
 

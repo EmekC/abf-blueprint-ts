@@ -408,6 +408,35 @@ test("abfc stubs: an old backend shape (no supers) warns ABFC3013 for Blueprint 
     assert.match(bp, /export declare class BP_Fake_C extends Thing \{/);
     const index = JSON.parse(readFileSync(join(dir, "_index.json"), "utf8")) as { noSupers: string[] };
     assert.deepEqual(index.noSupers, [FAKE_BP]);
+    assert.doesNotMatch(out, /could not confirm/);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+test("abfc stubs: a backend that reports supers but misses a class says the chain could not be confirmed", async () => {
+  const tmp = mkdtempSync(join(tmpdir(), "abfc-cli-stubs-"));
+  try {
+    const fake = setup(tmp, []);
+    const calls: ReflectRequest[] = [];
+    const respond = (_r: ReflectRequest, n: number): ReflectData =>
+      n === 1
+        ? {
+            engineVersion: "5.4.4-fake",
+            classes: { ...firstData.classes, [FAKE_BP]: chainClass([THING, OBJ], { meta: "/Script/Engine.BlueprintGeneratedClass" }) },
+            structs: {},
+            supers: {},
+            errors: [],
+          }
+        : secondData;
+    const cap = captureDeps(fake, () => fakeBackend(true, calls, [], undefined, respond));
+    cap.deps.cwd = tmp;
+    const code = await main(["stubs"], cap.deps);
+    const out = cap.text();
+    assert.equal(code, 0, out);
+    assert.match(out, /warning ABFC3013: the backend could not confirm the Blueprint parent chain of 1 class/);
+    assert.doesNotMatch(out, /update abf-mod-editor-mcp to a version whose reflect reports/);
+    assert.doesNotMatch(out, /did not report the Blueprint parent classes/);
   } finally {
     rmSync(tmp, { recursive: true, force: true });
   }

@@ -206,7 +206,14 @@ async function reflectAndRead(ctx: CliContext, backend: Backend): Promise<number
     opaque: [],
   });
   const firstFew = (list: string[]): string => `${list.slice(0, 5).join(", ")}${list.length > 5 ? ", ..." : ""}`;
-  if (index.noSupers.length > 0) {
+  if (index.noSupers.length > 0 && supersSupported) {
+    output.diag({
+      severity: "warning",
+      code: "ABFC3013",
+      message: `the backend could not confirm the Blueprint parent chain of ${index.noSupers.length} class(es) (${firstFew(index.noSupers)}); they extend the nearest native class, so members declared on Blueprint parents are missing.`,
+      fix: 'check the reflect warnings (ABFC4002) above for the parent that failed to load, then run "abfc stubs" again.',
+    });
+  } else if (index.noSupers.length > 0) {
     output.diag({
       severity: "warning",
       code: "ABFC3013",
