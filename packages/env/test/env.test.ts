@@ -363,6 +363,33 @@ test("resolveEnvironment: a user config holding only mod.dir resolves modDir wit
   assert.equal(e.config.mod.name, "fakemod");
 });
 
+test("resolveEnvironment: mod.name in another case than the plugin file warns ABFC1045 and uses the plugin's spelling", () => {
+  const proj = "D:\\work\\proj";
+  const appData = "C:\\Users\\Jane\\AppData\\Roaming";
+  const modDir = "F:\\custom\\TestMod";
+  const files = (name: string): Record<string, string> => ({
+    [`${proj}\\abf.config.json`]: JSON.stringify({ mod: { name } }),
+    [`${appData}\\abfc\\config.json`]: JSON.stringify({ mod: { dir: modDir } }),
+    [`${modDir}\\TestMod.uplugin`]: "{}",
+  });
+  const lower = resolveEnvironment(fakeHost({ env: { ProgramData: "C:\\ProgramData", APPDATA: appData }, files: files("testmod") }), {
+    projectDir: proj,
+    flags: {},
+  });
+  assert.equal(lower.config.mod.name, "TestMod");
+  const d = lower.diagnostics.find((x) => x.code === "ABFC1045");
+  assert.ok(d, lower.diagnostics.map((x) => x.code).join());
+  assert.equal(d!.severity, "warning");
+  assert.match(d!.message, /"testmod" differs in case from the mod's plugin "TestMod"; using "TestMod"/);
+  assert.match(d!.fix ?? "", /"mod": \{"name": "TestMod"\}/);
+  const same = resolveEnvironment(fakeHost({ env: { ProgramData: "C:\\ProgramData", APPDATA: appData }, files: files("TestMod") }), {
+    projectDir: proj,
+    flags: {},
+  });
+  assert.equal(same.config.mod.name, "TestMod");
+  assert.ok(!same.diagnostics.some((x) => x.code === "ABFC1045"));
+});
+
 test("resolveEnvironment: a project inside a mod folder throws ABFC1020 before anything else", () => {
   const host = fakeHost({
     files: { "D:\\Mods\\m\\m.uplugin": "{}", "D:\\Mods\\m\\ts\\abf.config.json": JSON.stringify({ mod: { name: "m" } }) },

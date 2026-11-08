@@ -674,7 +674,7 @@ export class FakeBackend implements Backend {
 
   async stageStatus(mod: string): Promise<StageStatus | null> {
     this.calls.push({ tool: "staging_status" });
-    if (!this.staged) return null;
+    if (!this.staged || mod !== "TestMod") return null; // the only mod of the fake machine
     return {
       mod,
       stagingPath: join(this.root, "stage"),

@@ -713,3 +713,113 @@ test("(S28b) a failed second chunk keeps the first chunk's manifest moves and re
     assert.match(x.out, /up to date/);
   });
 });
+
+// ---- S27: edits of abf.config.json between builds ----
+
+const setConfig = (dir: string, patch: Record<string, unknown>): void => {
+  writeFileSync(
+    join(dir, "abf.config.json"),
+    JSON.stringify({ mod: { name: "TestMod" }, backend: { kind: "bp_apply", minProtocol: 1 }, ...patch }),
+    "utf8",
+  );
+};
+
+test("(S27a) an unknown mod name is ABFC1004 before anything is written to a stage", async () => {
+  await withRig(OPS, async (r) => {
+    tallyOnly(r.dir, tally("BP_Zed"));
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    const callsBefore = r.backend.calls.length;
+    const assetsBefore = r.backend.stageAssets();
+    setConfig(r.dir, { mod: { name: "NoSuchMod" } });
+    x = await r.run(["build"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, /ABFC1004: mod folder of NoSuchMod not found/);
+    const tools = r.backend.calls.slice(callsBefore).map((c) => c.tool);
+    for (const t of ["staging_sync", "bp_apply", "bp_asset_ops", "bp_publish"]) assert.ok(!tools.includes(t), `${t} was called: ${tools.join()}`);
+    assert.deepEqual(r.backend.stageAssets(), assetsBefore);
+    assert.equal(r.backend.assetOpsCalls.length, 0);
+    setConfig(r.dir, {});
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /up to date/);
+  });
+});
+
+test("(S27b) mod.name in another case builds the same assets", async () => {
+  await withRig(OPS, async (r) => {
+    tallyOnly(r.dir, tally("BP_Zed"));
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC1045/);
+    const assets = r.backend.stageAssets();
+    const manifest = readManifest(r.dir, "/TestMod/BP_Zed");
+    assert.notEqual(manifest, null);
+    setConfig(r.dir, { mod: { name: "testmod" } });
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC1045: mod\.name "testmod" differs in case from the mod's plugin "TestMod"; using "TestMod"/);
+    assert.match(x.out, /up to date/);
+    assert.equal(r.backend.assetOpsCalls.length, 0);
+    assert.deepEqual(r.backend.stageAssets(), assets, "no asset was created or moved");
+    assert.ok(r.backend.stageAssets().every((a) => a.startsWith("/TestMod/")), "the backend only saw TestMod");
+    assert.deepEqual(readManifest(r.dir, "/TestMod/BP_Zed"), manifest);
+    assert.equal(readManifest(r.dir, "/testmod/BP_Tally"), null);
+  });
+});
+
+test("(S27c) a new sourceRoot with the same folders changes no asset path", async () => {
+  await withRig(OPS, async (r) => {
+    tallyOnly(r.dir, tally("BP_Zed"));
+    mkdirSync(join(r.dir, "src", "Sub"), { recursive: true });
+    writeFileSync(join(r.dir, "src", "Sub", "BP_Inner.ts"), tally("BP_Inner"), "utf8");
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    const assets = r.backend.stageAssets();
+    const before = readManifest(r.dir, "/TestMod/Sub/BP_Inner");
+    assert.equal(before?.source?.file, "src/Sub/BP_Inner.ts");
+    renameSync(join(r.dir, "src"), join(r.dir, "source"));
+    writeFileSync(
+      join(r.dir, "tsconfig.json"),
+      readFileSync(join(r.dir, "tsconfig.json"), "utf8").replace('"include": ["src"]', '"include": ["source"]'),
+      "utf8",
+    );
+    setConfig(r.dir, { sourceRoot: "source" });
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /up to date/);
+    assert.equal(r.backend.assetOpsCalls.length, 0);
+    assert.deepEqual(r.backend.stageAssets(), assets);
+    const after = readManifest(r.dir, "/TestMod/Sub/BP_Inner");
+    assert.equal(after?.source?.file, "source/Sub/BP_Inner.ts", "the manifest follows the new folder");
+    const spans = Object.values(readSourceMap(r.dir, "/TestMod/Sub/BP_Inner")?.units ?? {}).map((u) => u.span.file.split("\\").join("/"));
+    assert.ok(spans.length > 0 && spans.every((f) => f.endsWith("source/Sub/BP_Inner.ts")), spans.join());
+    x = await r.run(["build"]);
+    assert.match(x.out, /up to date/);
+  });
+});
+
+test("(S27d) a deeper sourceRoot renames every class", async () => {
+  await withRig(OPS, async (r) => {
+    tallyOnly(r.dir, tally("BP_Zed"));
+    rmSync(join(r.dir, "src", "Tally.ts"));
+    mkdirSync(join(r.dir, "src", "Deep"), { recursive: true });
+    for (const n of ["BP_Alpha", "BP_Beta", "BP_Gamma"]) writeFileSync(join(r.dir, "src", "Deep", `${n}.ts`), tally(n), "utf8");
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.ok(r.backend.stageAssets().includes("/TestMod/Deep/BP_Alpha"));
+    setConfig(r.dir, { sourceRoot: "src/Deep" });
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.deepEqual(r.backend.assetOpsCalls.map((c) => c.length), [3]);
+    assert.equal(x.out.split("\n").filter((l) => /renamed \/TestMod\/Deep\//.test(l)).length, 3, x.out);
+    for (const n of ["BP_Alpha", "BP_Beta", "BP_Gamma"]) {
+      assert.ok(r.backend.stageAssets().includes(`/TestMod/${n}`), n);
+      assert.ok(!r.backend.stageAssets().includes(`/TestMod/Deep/${n}`), n);
+    }
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /up to date/);
+    assert.equal(r.backend.assetOpsCalls.length, 1);
+  });
+});

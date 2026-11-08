@@ -213,6 +213,16 @@ Typical cause: the Mod Editor has not been used to create a mod yet, or the mods
 
 Fix: create a mod in the Mod Editor first, or change the mods folder (the init prompt offers `c`, or use `--mods-dir`).
 
+### ABFC1045
+
+Severity: warning · Exit: -
+
+Meaning: `mod.name` in `abf.config.json` differs in letter case from the mod's plugin file (for example `"testmod"` while the file is `TestMod.uplugin`). abfc uses the spelling of the plugin file for the rest of the run.
+
+Typical cause: the name was typed by hand. Windows finds the mod folder in any case, so the build would otherwise work until a second spelling of the name reached the backend's stage folder, the Unreal mount paths or the manifests.
+
+Fix: write the name as the plugin file spells it, `"mod": {"name": "<name>"}` in `abf.config.json`.
+
 ### ABFC1050
 
 Severity: error · Exit: 2
