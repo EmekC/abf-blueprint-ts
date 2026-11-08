@@ -6,7 +6,7 @@ All notable changes to abfc are recorded here. The format follows [Keep a Change
 
 abfc uses semantic versioning for its command-line surface: the commands, their flags, the exit codes, the error codes, the `abf.config.json` schema and the decorators. A new config schema or a removed option is a major change. All `@abfc/*` packages share one version.
 
-## [1.0.0] - unreleased
+## [1.0.0] - 2026-11-08
 
 ### Added
 
