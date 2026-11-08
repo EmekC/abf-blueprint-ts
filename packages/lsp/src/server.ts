@@ -4,6 +4,7 @@ import { TextDocument } from "vscode-languageserver-textdocument";
 import { CodeActionKind, DidChangeWatchedFilesNotification, ProposedFeatures, TextDocumentSyncKind, TextDocuments, createConnection } from "vscode-languageserver/node.js";
 import { AbfcError, findProjectDir } from "@abfc/env";
 import { codeActionsFor } from "./actions.js";
+import { completionItemsAt } from "./completion.js";
 import { compilerConfigOf } from "./environment.js";
 import { hoverAt } from "./hover.js";
 import { ProjectState } from "./project.js";
@@ -17,6 +18,8 @@ export const WATCHED_GLOBS = [
   "**/.abfc/stubs/**/stubs.lock.json",
   "**/.abfc/stubs/**/retired.json",
   "**/.abfc/stubs/**/*.d.ts",
+  "**/.abfc/stubs/**/gameplay-tags.json",
+  "**/.abfc/tags.d.ts",
   "**/.abfc/tsconfig.paths.json",
   "**/tsconfig*.json",
   "**/*.ts",
@@ -169,6 +172,7 @@ export function startServer(o: ServerOptions): Promise<number> {
       capabilities: {
         textDocumentSync: { openClose: true, change: TextDocumentSyncKind.Incremental },
         hoverProvider: true,
+        completionProvider: { resolveProvider: false, triggerCharacters: ["@"] },
         codeActionProvider: { codeActionKinds: [CodeActionKind.QuickFix] },
       },
       serverInfo: { name: "abfc", version: "0.1.0" },
@@ -211,6 +215,20 @@ export function startServer(o: ServerOptions): Promise<number> {
     } catch (e) {
       logError("hover", e);
       return null;
+    }
+  });
+
+  connection.onCompletion((params) => {
+    try {
+      const project = docProject.get(params.textDocument.uri);
+      const path = uriToPath(params.textDocument.uri);
+      if (project === undefined || project === null || path === null) return [];
+      flush(project);
+      const snap = project.snapshot();
+      return snap === null ? [] : completionItemsAt(project, snap, path, params.position);
+    } catch (e) {
+      logError("completion", e);
+      return [];
     }
   });
 
