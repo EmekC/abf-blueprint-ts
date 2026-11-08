@@ -11,6 +11,7 @@ abfc uses semantic versioning for its command-line surface: the commands, their 
 ### Added
 
 - Array `for..of` and simple counted `for` loops compile to Unreal's For Each Loop / For Loop macro nodes (backend node kind `std_macro`; older backends keep counter loops and warn ABFC2088). A rebuild removes the old `abfc_<unit>_i<n>` counter variables that such loops no longer use.
+- `break` and `continue` in loops (For Each Loop / For Loop With Break macro nodes when the loop has a `break`), and `arr.forEach((x, i) => { ... })` over Blueprint arrays (ABFC2090 for unsupported callback forms). ESLint `no-loop-in-tick` also flags `forEach`.
 - Own fields may have a literal initializer (`Speed: float = 2.5`); it becomes the Blueprint variable's default and changing it updates the default in place (backend feature `variable_defaults`, else warning ABFC2084).
 - Derived asset paths: a class gets its Blueprint asset path from its file and class name, with the `path:` keep-path quick fix (ABFC5012) for a moved file.
 - `@mod/` imports for classes of the mod being built.

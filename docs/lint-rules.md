@@ -80,7 +80,7 @@ ReceiveBeginPlay(): void {
 
 ## no-loop-in-tick
 
-Flags `for`, `for...of`, `for...in`, `while` and `do...while` inside a tick method. A loop that is cheap today grows
+Flags `for`, `for...of`, `for...in`, `while`, `do...while` and `.forEach(...)` calls inside a tick method. A loop that is cheap today grows
 with the number of actors; running it every frame turns that into a frame-rate problem.
 
 Options: `tickMethods: string[]`.
