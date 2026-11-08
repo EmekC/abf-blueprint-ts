@@ -22,7 +22,7 @@ function innermostDivision(sf: ts.SourceFile, start: number, end: number): ts.Bi
 }
 
 /** The name the `@abfc/runtime` export `exportName` is callable under (its local alias when imported as `x as y`) and the edit that makes it available, if any. */
-function runtimeBinding(sf: ts.SourceFile, exportName: string): { name: string; edit?: TextEdit } {
+export function runtimeBinding(sf: ts.SourceFile, exportName: string): { name: string; edit?: TextEdit } {
   let appendAfter: ts.ImportSpecifier | undefined;
   let emptyBraces: ts.NamedImports | undefined;
   for (const st of sf.statements) {

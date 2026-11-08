@@ -42,3 +42,5 @@ export { udsGuid, udsMemberName } from "./frontend/structnames.js";
 export { describeIrNode, irNodesAt } from "./explain.js";
 export { addDirectorTagFix, directorFix, idivFix, keepPathFix, modImportFix, optionalChainFix, relativePathFix, removePathFix, useOverrideFix } from "./frontend/fixes.js";
 export type { TextEdit } from "./frontend/fixes.js";
+export { buildLibraryIndex, completionsAt } from "./frontend/completions.js";
+export type { AbfcCompletion, LibraryEntry } from "./frontend/completions.js";
