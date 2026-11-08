@@ -67,6 +67,7 @@ function strList(v: unknown): string[] {
 /** Maps the raw `bp_publish` JSON (a success, "Nothing to publish", or a refusal with its extras) to a {@link PublishResult}. */
 export function publishResultFrom(json: Record<string, unknown>): PublishResult {
   const published = strList(json.published);
+  const deleted = strList(json.deleted);
   const refused = str(json.refused);
   const message = str(json.message) ?? str(json.error) ?? "";
   const compileErrors = (Array.isArray(json.compile_errors) ? json.compile_errors : []).map((item: unknown) => {
@@ -79,11 +80,12 @@ export function publishResultFrom(json: Record<string, unknown>): PublishResult 
     return `${str(o.path) ?? JSON.stringify(item)}: ${str(o.reason) ?? "changed"}`;
   });
   return {
-    ok: refused === null && (published.length > 0 || message.startsWith("Nothing to publish")),
+    // A publish that only deleted files (a renamed or removed class) copies nothing: `published` is empty but `deleted` is not.
+    ok: refused === null && (published.length > 0 || deleted.length > 0 || message.startsWith("Nothing to publish")),
     published,
     refused,
     message,
-    deleted: strList(json.deleted),
+    deleted,
     backup: str(json.backup),
     route: str(json.route),
     compileErrors,

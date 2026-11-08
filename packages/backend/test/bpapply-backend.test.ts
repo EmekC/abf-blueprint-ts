@@ -391,6 +391,11 @@ test("publishResultFrom maps bp_publish results", () => {
   assert.deepEqual(a.dirtyAfter, []);
 
   assert.equal(publishResultFrom({ published: [], message: "Nothing to publish: no changes" }).ok, true);
+  // a publish that only deleted files (published stays empty) is a success, a refusal with deletions is not
+  const onlyDeleted = publishResultFrom({ published: [], deleted: ["Content/Old.uasset"], message: "Copied 0 file(s)... Deleted 1 file(s)" });
+  assert.equal(onlyDeleted.ok, true);
+  assert.deepEqual(onlyDeleted.deleted, ["Content/Old.uasset"]);
+  assert.equal(publishResultFrom({ published: [], deleted: ["Content/Old.uasset"], refused: "copy failed" }).ok, false);
 
   const c = publishResultFrom({
     published: [],
