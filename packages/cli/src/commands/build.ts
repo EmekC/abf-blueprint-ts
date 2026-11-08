@@ -231,6 +231,9 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   const tRead = performance.now();
   const existing = owned.filter((a) => !missing.has(a.path));
   const toRead = readAll ? new Set(existing.map((a) => a.path)) : assetsNeedingRead({ ...ir, assets: existing }, { manifests, stage, forceReplan, directorRows: caps.classManagerRows });
+  // The asset ops edited the nodes of renamed assets and of their referencers: those are read too, so drifted units are replaced now
+  // (editedByAbfc) instead of reading as editor edits in `abfc status` and blaming the modder at the next real change.
+  for (const p of assetOpsOutcome.edited ?? []) if (existing.some((a) => a.path === p)) toRead.add(p);
   const readAssets = existing.filter((a) => toRead.has(a.path));
   const skipped = existing.filter((a) => !toRead.has(a.path));
   const snapshots = new Map<string, Map<string, T3dNode>>();

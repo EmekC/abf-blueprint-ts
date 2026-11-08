@@ -172,6 +172,24 @@ test("(S05) a rename or reparent that edits the asset's nodes is replaced withou
   });
 });
 
+test("(S25) a rename that edits the nodes of an asset without TypeScript changes leaves no editor-edit drift behind", async () => {
+  await withRig(OPS, async (r) => {
+    addParentStubs(r.dir);
+    tallyOnly(r.dir, tally("BP_Zed"));
+    assert.equal((await r.run(["build"])).code, 0);
+    r.backend.opsEditNodes = true;
+    writeFileSync(join(r.dir, "src", "Tally.ts"), tally("BP_Zed2"), "utf8");
+    const x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /renamed \/TestMod\/BP_Zed -> \/TestMod\/BP_Zed2/);
+    assert.doesNotMatch(x.out, /ABFC5014/);
+    // the renamed asset was read and its drifted units replaced: nothing is left that reads as an editor edit
+    const s = await r.run(["status"]);
+    assert.doesNotMatch(s.out, /ABFC5001/, s.out);
+    assert.doesNotMatch(s.out, / edited /, s.out);
+  });
+});
+
 test("(S06) recreating a moved class keeps the old path to delete on publish", async () => {
   await withRig({ ...OPS, publishDeletes: true }, async (r) => {
     addParentStubs(r.dir);
