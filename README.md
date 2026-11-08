@@ -34,6 +34,7 @@ abfc doctor
 - [docs/config.md](docs/config.md): `abf.config.json`, the user config and the environment variables.
 - [docs/errors.md](docs/errors.md): every error and warning code, with cause and fix.
 - [docs/troubleshooting.md](docs/troubleshooting.md): step-by-step help for common problems.
+- [docs/known-issues.md](docs/known-issues.md): what was fixed before 1.0.0, and the limitations that remain, with workarounds.
 - [docs/backend.md](docs/backend.md): the backend (bundled in `abfc.exe`; abf-mod-editor-mcp 2.4.0 or newer, 2.5.0 for `@director` rows, in a source install): settings, capabilities and diagnostics.
 - [docs/language-service.md](docs/language-service.md): the editors page: `abfc lsp`, the VS Code extension, watch mode.
 - [docs/lint-rules.md](docs/lint-rules.md): the ESLint rules for tick cost, replication and RPC use.

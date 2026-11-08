@@ -1,5 +1,7 @@
 # Troubleshooting
 
+Known limitations and their workarounds (stale entries in the open Mod Editor, a staged file in use, struct changes) are in [known-issues.md](known-issues.md).
+
 Start with `abfc doctor`. It prints every setting with the place it came from (flag, environment variable, project config, user config or auto-discovery), the versions it found, and the problems it can see. Each problem has an `ABFCnnnn` code; the meaning of every code is in [errors.md](errors.md). All paths below use placeholders such as `C:\Users\<you>`; replace them with your own.
 
 Sections: [OneDrive Documents](#onedrive-redirected-documents), [user names with spaces](#user-names-with-spaces-and-the-headless-folder), [non-English Windows](#non-english-windows), [long paths](#long-paths), [SmartScreen](#smartscreen), [antivirus](#antivirus-quarantine-or-locked-files), [runtime folder](#damaged-or-stale-runtime-folder), [bundled backend overridden](#abfc1053-the-exe-uses-a-backend-outside-its-runtime), [first stubs](#the-first-abfc-stubs-needs-the-network), [abfc not found](#abfc-is-not-found-after-installing), [extension](#the-vs-code-extension-cannot-find-abfc), [publish refused](#publish-is-refused), [Epic login](#the-epic-login-window-of-the-stage-audit).
