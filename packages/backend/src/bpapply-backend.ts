@@ -225,7 +225,8 @@ export class BpApplyBackend implements Backend {
       changed: strList(json.changed),
       added: strList(json.added),
       removed: strList(json.removed),
-      conflicts: strList(json.conflicts),
+      // The backend lists a conflict as {path, reason}: the messages (ABFC4017) name the file only.
+      conflicts: (Array.isArray(json.conflicts) ? json.conflicts : []).map((c: unknown) => (typeof c === "string" ? c : isObject(c) && str(c.path) !== null ? str(c.path)! : JSON.stringify(c))),
       stale: strList(json.stale),
     };
   }

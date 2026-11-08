@@ -154,6 +154,13 @@ test("stage and stageStatus", async () => {
   });
 });
 
+test("(S13) stageStatus names a conflicting file by its path, not as JSON", async () => {
+  await withBackend({}, async ({ backend }) => {
+    const st = await backend.stageStatus("conflicted");
+    assert.deepEqual(st?.conflicts, ["Content/C.uasset"]);
+  });
+});
+
 test("stageStatus: 'not staged' is null, any other tool error is ABFC4002", async () => {
   await withBackend({}, async ({ backend }) => {
     assert.equal(await backend.stageStatus("ghost"), null);

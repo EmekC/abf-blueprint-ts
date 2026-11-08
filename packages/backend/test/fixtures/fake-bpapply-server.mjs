@@ -77,7 +77,7 @@ function callTool(name, args) {
         changed: ["Content/A.uasset"],
         added: [],
         removed: ["Content/B.uasset"],
-        conflicts: [],
+        conflicts: args.mod === "conflicted" ? [{ path: "Content/C.uasset", reason: "the real file changed since the last sync; run staging_sync again" }] : [],
         kit_found: true,
       });
     case "bp_apply": {
