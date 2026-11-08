@@ -2377,3 +2377,167 @@ test("(A10-10) a manifest without a recorded parent learns it when its asset is 
     assert.equal(r.backend.assetOpsCalls.length, 0);
   });
 });
+
+// ---- Publish: deletions, renames, tag list, re-sync after a failed publish (A11) ----
+
+test("(A11-1) publish after a rename lists the old files as deleted and removes them; the dry run only lists", async () => {
+  await withRig({ ...OPS, publishDeletes: true }, async (r) => {
+    tallyOnly(r.dir, tally("BP_Tally"));
+    assert.equal((await r.run(["build"])).code, 0);
+    writeFileSync(join(r.dir, "src", "Tally.ts"), tally("BP_Tally2"), "utf8");
+    let x = await r.run(["publish", "--dry-run"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /deleted Content\/BP_Tally\.uasset/);
+    assert.match(x.out, /changed Content\/BP_Tally2\.uasset/);
+    x = await r.run(["publish", "--dry-run", "--json"]);
+    assert.match(x.out, /"deleted":\s*\[\s*"Content\/BP_Tally\.uasset"/);
+    assert.equal(r.backend.publishCalls.length, 0);
+    assert.equal(readManifest(r.dir, "/TestMod/BP_Tally2")!.renamedFrom, TA);
+
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.equal(r.backend.publishCalls.length, 1);
+    const call = r.backend.publishCalls[0]!;
+    assert.equal(call.deleteRemoved, true);
+    assert.deepEqual([...call.assets].sort(), [TA, "/TestMod/BP_Tally2"]);
+    assert.match(x.out, /deleted Content\/BP_Tally\.uasset/);
+    assert.equal(r.backend.removedFiles.size, 0);
+    assert.equal(readManifest(r.dir, "/TestMod/BP_Tally2")!.renamedFrom, undefined);
+    assert.doesNotMatch(x.out, /ABFC7014/);
+
+    x = await r.run(["publish"]);
+    assert.match(x.out, /nothing to publish/);
+  });
+});
+
+test("(A11-2) publish after deleting a class removes its asset and class-manager row, then the tombstone goes", async () => {
+  await withRig({ ...OPS, classManagerRows: true, publishDeletes: true }, async (r) => {
+    tallyOnly(r.dir, tally("BP_Tally", "Actor", true));
+    assert.equal((await r.run(["build"])).code, 0);
+    rmSync(join(r.dir, "src", "Tally.ts"));
+    writeFileSync(join(r.dir, "src", "Empty.ts"), "export {};\n", "utf8");
+    let x = await r.run(["publish", "--dry-run"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /deleted Content\/BP_Tally\.uasset/);
+    assert.match(x.out, /deleted Content\/DataTables\/DT_ClassManager\/EntityDirector_Test\.uasset/);
+    assert.equal(readManifest(r.dir, TA)!.deleted, true, "a dry run keeps the tombstone");
+
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    const call = r.backend.publishCalls[0]!;
+    assert.equal(call.deleteRemoved, true);
+    assert.deepEqual([...call.assets].sort(), [TA, DIRECTOR_ROW]);
+    assert.equal(readManifest(r.dir, TA), null);
+    assert.equal(readSourceMap(r.dir, TA), null);
+    x = await r.run(["publish"]);
+    assert.match(x.out, /nothing to publish/);
+    assert.equal(r.backend.publishCalls.length, 1);
+  });
+});
+
+test("(A11-3) a backend without publishDeletes: ABFC7014 names the files, the rest is published, the deletion stays pending", async () => {
+  await withRig({ ...OPS, classManagerRows: true }, async (r) => {
+    tallyOnly(r.dir, tally("BP_Tally", "Actor", true));
+    assert.equal((await r.run(["build"])).code, 0);
+    rmSync(join(r.dir, "src", "Tally.ts"));
+    writeFileSync(join(r.dir, "src", "Empty.ts"), "export {};\n", "utf8");
+    let x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC7014: .*Content\/BP_Tally\.uasset/);
+    assert.equal(r.backend.publishCalls.length, 0, "nothing else to publish");
+    assert.equal(readManifest(r.dir, TA)!.deleted, true);
+
+    // a new class publishes the rest, without deleteRemoved; the deletion stays pending
+    writeFileSync(join(r.dir, "src", "Tally3.ts"), tally("BP_Tally3"), "utf8");
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /ABFC7014/);
+    assert.equal(r.backend.publishCalls.length, 1);
+    assert.equal(r.backend.publishCalls[0]!.deleteRemoved, undefined);
+    assert.deepEqual(r.backend.publishCalls[0]!.assets, ["/TestMod/BP_Tally3"]);
+    assert.equal(readManifest(r.dir, TA)!.deleted, true, "still pending");
+
+    // the files were deleted by hand: nothing is left to delete, the tombstone goes
+    r.backend.removedFiles.clear();
+    x = await r.run(["publish"]);
+    assert.doesNotMatch(x.out, /ABFC7014/);
+    assert.equal(readManifest(r.dir, TA), null);
+  });
+});
+
+test("(A11-4) a new director tag: the tag ini is listed, published by file, and ABFC7015 warns when the editor reloads live", async () => {
+  await withRig({ handMadeEvent: false, classManagerRows: true, classManagerRowTag: true, gameplayTags: true }, async (r) => {
+    addDirector(r.dir, "EntityDirector_Test", DIRECTOR_TAG);
+    let x = await r.run(["publish", "--dry-run"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /changed config Config\/Tags\/TestModTags\.ini/);
+    x = await r.run(["publish", "--dry-run", "--json"]);
+    assert.match(x.out, /"config":\s*\[\s*"Config\/Tags\/TestModTags\.ini"/);
+    assert.equal(r.backend.publishCalls.length, 0);
+
+    r.backend.publishResult = { ...r.backend.publishResult, route: "live-reload" };
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    const call = r.backend.publishCalls[0]!;
+    assert.ok(call.assets.includes("Config/Tags/TestModTags.ini"), call.assets.join(","));
+    assert.ok(call.assets.includes("/TestMod/Relay/BP_Relay"));
+    assert.match(x.out, /warning ABFC7015/);
+
+    x = await r.run(["publish"]);
+    assert.match(x.out, /nothing to publish/);
+  });
+});
+
+test("(A11-5) a changed @director row deletes the old row on the stage and the next publish removes its file", async () => {
+  await withRig({ ...OPS, handMadeEvent: false, classManagerRows: true, publishDeletes: true }, async (r) => {
+    addDirector(r.dir, "EntityDirector_Test");
+    assert.equal((await r.run(["build"])).code, 0);
+    addDirector(r.dir, "EntityDirector_Other");
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC5013/);
+    assert.match(x.out, /deleted \/TestMod\/DataTables\/DT_ClassManager\/EntityDirector_Test/);
+    assert.deepEqual(r.backend.assetOpsCalls, [[{ op: "delete", asset: DIRECTOR_ROW }]]);
+    assert.deepEqual(readManifest(r.dir, RELAY_ASSET)!.retiredRows, [DIRECTOR_ROW]);
+
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /deleted Content\/DataTables\/DT_ClassManager\/EntityDirector_Test\.uasset/);
+    assert.ok(r.backend.publishCalls[0]!.assets.includes(DIRECTOR_ROW));
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.retiredRows, undefined);
+  });
+});
+
+test("(A11-6) without assetOps a changed @director row stays ABFC5013 and nothing is deleted", async () => {
+  await withRig({ handMadeEvent: false, classManagerRows: true }, async (r) => {
+    addDirector(r.dir, "EntityDirector_Test");
+    assert.equal((await r.run(["build"])).code, 0);
+    addDirector(r.dir, "EntityDirector_Other");
+    const x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC5013/);
+    assert.equal(readManifest(r.dir, RELAY_ASSET)!.retiredRows, undefined);
+  });
+});
+
+test("(A11-7) a failed publish, then a re-sync, then a build: the manifest is pruned, no ABFC5002 loop, the next publish works (P3)", async () => {
+  await withRig({ handMadeEvent: false }, async (r) => {
+    const base = r.backend.publishResult;
+    r.backend.publishResult = { ...base, ok: false, published: [], refused: "conflicts", message: "Refused: conflicts", conflicts: ["Content/Relay/BP_Relay.uasset"] };
+    let x = await r.run(["publish"]);
+    assert.notEqual(x.code, 0, x.out);
+    assert.match(x.out, /ABFC7005/);
+
+    x = await r.run(["build", "--resync"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC5002/);
+    const held = r.backend.nodeNames(RELAY_ASSET);
+    assert.ok(readManifest(r.dir, RELAY_ASSET)!.units[0]!.nodes.every((n) => held.includes(n)));
+
+    r.backend.publishResult = base;
+    x = await r.run(["publish", "--resync"]);
+    assert.equal(x.code, 0, x.out);
+    assert.doesNotMatch(x.out, /ABFC5002/);
+    assert.equal(r.backend.publishCalls.length, 2);
+  });
+});

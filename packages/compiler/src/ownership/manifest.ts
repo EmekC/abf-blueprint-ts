@@ -62,6 +62,8 @@ export interface Manifest {
   deleted?: boolean;
   /** Packages other than the asset itself that a stage-only rename fixup saved (referencers); the next publish copies them. */
   publishAlso?: string[];
+  /** Class-manager rows abfc deleted from the stage because the class's `@director` row changed or went away; the next publish deletes their files (cleared by it). */
+  retiredRows?: string[];
 }
 
 /** `/Mod/Dir/BP_X` -> `Mod__Dir__BP_X` */

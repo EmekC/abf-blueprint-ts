@@ -184,6 +184,16 @@ export async function runAssetOps(
   return outcome;
 }
 
+/**
+ * Deletes class-manager rows on the stage (the row of a `@director` that changed or went away). True when the backend deleted all of
+ * them; false (nothing changed: all-or-nothing) when it cannot or refused, so the caller falls back to the ABFC5013 warning.
+ */
+export async function deleteRetiredRows(ctx: CliContext, backend: Backend, assetOps: readonly string[], rows: readonly string[]): Promise<boolean> {
+  if (rows.length === 0 || !assetOps.includes("delete")) return false;
+  const r = await callAssetOps(backend, ctx.config.mod.name, rows.map((asset): AssetOp => ({ op: "delete", asset })));
+  return r.ok;
+}
+
 export interface ParentOutcome {
   action: "none" | "reparent" | "recreate" | "error";
   /** Diagnostics to print (ABFC2048 or ABFC5016); an error stops the build. */

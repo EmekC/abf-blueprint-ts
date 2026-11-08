@@ -40,7 +40,7 @@ import {
   since,
 } from "./common.js";
 import { refreshTagsFile } from "../tags.js";
-import { runAssetOps, runParentChange } from "./assetops.js";
+import { deleteRetiredRows, runAssetOps, runParentChange } from "./assetops.js";
 import { ensureStage } from "./stage.js";
 
 /** True for an @event whose doc comment is its tooltip: the backend only writes it with the bp_apply feature `event_meta`. */
@@ -344,6 +344,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   const createdStructs: string[] = [];
   const removedUnits: string[] = [];
   let removedOrphanTags = 0;
+  const retireRows: Array<{ asset: string; row: string; lost: boolean }> = [];
   // Gameplay tags the defaults pass added to the stage's tag list (backend 2.6.0); they reach the mod with `abfc publish`.
   const tagsAdded = applied.tagsAdded ?? [];
   for (const t of tagsAdded) output.info(`gameplay tag ${t}: added to the mod's tag list (published with abfc publish)`);
@@ -421,22 +422,9 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     if (defaultsDone && outcome.directorRow !== undefined && (outcome.directorRow.created || outcome.directorRow.changed)) {
       output.info(`class-manager row ${outcome.directorRow.asset}: ${outcome.directorRow.created ? "created" : "updated"}`);
     }
-    if (defaultsDone && outcome.directorRow !== undefined && old?.directorRow !== undefined && old.directorRow.toLowerCase() !== outcome.directorRow.asset.toLowerCase()) {
-      output.diag({
-        severity: "warning",
-        code: "ABFC5013",
-        asset: a.asset,
-        message: `the previous class-manager row ${old.directorRow} stays in the mod; delete it in the Mod Editor`,
-      });
-    }
-    if (lostDirector) {
-      output.diag({
-        severity: "warning",
-        code: "ABFC5013",
-        asset: a.asset,
-        message: `the class has no @director any more; its class-manager row ${old!.directorRow} stays in the mod; delete it in the Mod Editor`,
-      });
-    }
+    // The row of the old `@director` (changed row name, or no `@director` any more): deleted from the stage below when the backend can.
+    const changedRow = defaultsDone && outcome.directorRow !== undefined && old?.directorRow !== undefined && old.directorRow.toLowerCase() !== outcome.directorRow.asset.toLowerCase();
+    if (changedRow || lostDirector) retireRows.push({ asset: a.asset, row: old!.directorRow!, lost: lostDirector });
     const appliedIds = new Set(a.units.map((p) => p.unit.id));
     // Removed from the stage, not published yet: `abfc publish` lists the asset until a publish clears this.
     const retiredUnpublished = [...new Set([...(old?.retiredUnpublished ?? []), ...retired])].sort();
@@ -448,6 +436,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     const carried = {
       ...(old?.renamedFrom !== undefined ? { renamedFrom: old.renamedFrom } : {}),
       ...(old?.publishAlso !== undefined ? { publishAlso: old.publishAlso } : {}),
+      ...(old?.retiredRows !== undefined ? { retiredRows: old.retiredRows } : {}),
     };
     const finalManifest: Manifest = {
       asset: a.asset,
@@ -532,6 +521,30 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     }
     output.json({ applied: [], compileFailed: true, stageResynced, ...opsJson });
     return false;
+  }
+  if (retireRows.length > 0) {
+    // A row another class still uses is never deleted.
+    const stillUsed = (row: string, asset: string): boolean =>
+      finals.some((f) => f.asset !== asset && f.directorRow?.toLowerCase() === row.toLowerCase()) ||
+      [...manifests.values()].some((m) => m !== null && m.asset !== asset && !finals.some((f) => f.asset === m.asset) && m.directorRow?.toLowerCase() === row.toLowerCase());
+    const todo = retireRows.filter((r) => !stillUsed(r.row, r.asset));
+    const deletedRows = await deleteRetiredRows(ctx, backend, caps.assetOps, todo.map((r) => r.row));
+    for (const rr of todo) {
+      const f = finals.find((x) => x.asset === rr.asset);
+      if (deletedRows && f !== undefined) {
+        f.retiredRows = [...new Set([...(f.retiredRows ?? []), rr.row])].sort();
+        output.info(`deleted ${rr.row} (the class-manager row of ${rr.asset}; the file leaves the mod with abfc publish)`);
+      } else {
+        output.diag({
+          severity: "warning",
+          code: "ABFC5013",
+          asset: rr.asset,
+          message: rr.lost
+            ? `the class has no @director any more; its class-manager row ${rr.row} stays in the mod; delete it in the Mod Editor`
+            : `the previous class-manager row ${rr.row} stays in the mod; delete it in the Mod Editor`,
+        });
+      }
+    }
   }
   for (const m of finals) writeManifest(projectDir, m);
   refreshSources(new Set(planned.plan.assets.map((a) => a.asset)));

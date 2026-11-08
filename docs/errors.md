@@ -1365,6 +1365,26 @@ Typical cause: the editor reloaded assets that other loaded assets still referen
 
 Fix: open the listed Blueprints and compile them again, or restart the Mod Editor.
 
+### ABFC7014
+
+Severity: warning · Exit: -
+
+Meaning: the publish has files to delete from the mod (the asset of a deleted class and its class-manager row, the old path of a renamed or moved class, a retired class-manager row), but the backend cannot delete files (capability `publishDeletes`, backend 2.6.0 or newer). Everything else is published; the listed assets stay in the mod, and abfc keeps the deletions pending (the deleted class's tombstone and the renamed asset's `renamedFrom`), so the next publish with a newer backend deletes them.
+
+Typical cause: an older abf-mod-editor-mcp.
+
+Fix: delete the listed assets in the Mod Editor (Content Browser), or update abf-mod-editor-mcp to 2.6.0 or newer and run `abfc publish` again.
+
+### ABFC7015
+
+Severity: warning · Exit: -
+
+Meaning: the publish copied the mod's gameplay tag list (`Config/Tags/<Mod>Tags.ini`, new tags added by a `@director` tag) while the Mod Editor was open. The editor reads gameplay tags when it starts, so it does not know the new tags yet; the file on disk is fine.
+
+Typical cause: a `@director` with a tag that was not in the mod's tag list, published with the editor open.
+
+Fix: restart the Mod Editor before you use the new tags there, and do not save the mod in the editor before that.
+
 ## Lint rules
 
 The rules of the ESLint plugin (`abfc/no-heavy-call-in-tick` and the others) report under their rule name and have no `ABFC` code. They are described in [lint-rules.md](lint-rules.md).

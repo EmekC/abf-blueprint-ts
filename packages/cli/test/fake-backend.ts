@@ -718,6 +718,7 @@ export class FakeBackend implements Backend {
         this.changed.add(`Content/${a.split("/").slice(2).join("/")}.uasset`);
       }
       for (const t of tagsAdded) this.tagIni.add(t);
+      if (tagsAdded.length > 0) this.changed.add("Config/Tags/TestModTags.ini");
       for (const r of rows) {
         if (typeof r.tag === "string") this.rowTags.set(r.asset, r.tag);
         this.rowClasses.set(r.asset, rowStage.get(r.asset)!);
