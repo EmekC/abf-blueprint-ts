@@ -116,6 +116,30 @@ test("a const template literal with no type is a string", () => {
   assert.ok(wired(u, `${conv.id}.ReturnValue`, `${print.id}.InString`));
 });
 
+
+test("const t: text = template literal is plain FormatText typed text", () => {
+  const { hir, ir } = compile("    const t: text = `x ${this.Count}`;\n    this.Line = t;");
+  assert.deepEqual(hir.diagnostics, []);
+  assert.ok(ir);
+  assert.deepEqual(validateIrModule(ir), []);
+  const consts = hir.classes[0]!.events[0]!.body.filter((s) => s.k === "const");
+  assert.equal(consts.length, 1);
+  const init = (consts[0] as { init: HirExpr }).init;
+  assert.equal(init.k, "formatText");
+  assert.equal(init.type, "text");
+  assert.equal(byFn(unitOf(ir), "Conv_TextToString").length, 0);
+});
+
+test("const s: string = template literal still converts to string", () => {
+  const { hir, ir } = compile("    const s: string = `x ${this.Count}`;\n    KismetSystemLibrary.PrintString(s);");
+  assert.deepEqual(hir.diagnostics, []);
+  assert.ok(ir);
+  assert.deepEqual(validateIrModule(ir), []);
+  const consts = hir.classes[0]!.events[0]!.body.filter((s) => s.k === "const");
+  const init = (consts[0] as { init: HirExpr }).init;
+  assert.equal(init.type, "string");
+  assert.equal(byFn(unitOf(ir), "Conv_TextToString").length, 1);
+});
 test("a template literal assigned to a string field goes through Conv_TextToString", () => {
   const { hir, ir } = compile("    this.Label = `n ${this.Count}`;");
   assert.deepEqual(hir.diagnostics, []);

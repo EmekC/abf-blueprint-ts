@@ -883,7 +883,7 @@ class HirBuilder {
     if (declType.flags & ts.TypeFlags.Any) f.fail("ABFC2020", "'any' is not supported", d.name);
     let init: HirExpr;
     try {
-      init = this.expr(d.initializer);
+      init = this.expr(d.initializer, d.type ? bpTypeOf(this.checker, declType) : undefined);
     } catch (e) {
       if (e instanceof Fail && sym) this.locals.set(sym, { id: -1, name: d.name.text, type: "unknown", poison: true });
       throw e;

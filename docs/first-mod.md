@@ -98,7 +98,7 @@ Only a trailing run of parameters can be left out, as in TypeScript. Run `abfc s
 
 ### Text from values: template literals
 
-A template literal becomes a Format Text node. Where a `string` is expected (such as `PrintString`) or in a `const`, abfc adds `To String (Text)` (`Conv_TextToString`) after it:
+A template literal becomes a Format Text node. Where a `string` is expected (such as `PrintString`) or in a `const` without a type annotation, abfc adds `To String (Text)` (`Conv_TextToString`) after it:
 
 ```ts
 KismetSystemLibrary.PrintString(`Hello World From Typescript ${this.Count}`);
