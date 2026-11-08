@@ -570,3 +570,45 @@ test("(S12b) published class defaults are not applied again after a re-sync; unp
     assert.equal(readManifest(r.dir, "/TestMod/Relay/BP_Relay")?.classDefaultsPublished, undefined);
   });
 });
+
+test("(S22) two classes with the same name in different folders are two assets; deleting one deletes only that one", async () => {
+  await withRig({ ...OPS, publishDeletes: true }, async (r) => {
+    tallyOnly(r.dir, tally("BP_Dup"));
+    rmSync(join(r.dir, "src", "Tally.ts"));
+    for (const f of ["A", "B"]) {
+      mkdirSync(join(r.dir, "src", f), { recursive: true });
+      writeFileSync(join(r.dir, "src", f, "BP_Dup.ts"), tally("BP_Dup"), "utf8");
+    }
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.deepEqual(r.backend.stageAssets().filter((a) => a.includes("Dup")).sort(), ["/TestMod/A/BP_Dup", "/TestMod/B/BP_Dup"]);
+    rmSync(join(r.dir, "src", "A", "BP_Dup.ts"));
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /deleted \/TestMod\/A\/BP_Dup/);
+    assert.deepEqual(r.backend.stageAssets().filter((a) => a.includes("Dup")), ["/TestMod/B/BP_Dup"]);
+    x = await r.run(["build"]);
+    assert.match(x.out, /up to date/);
+  });
+});
+
+test("(S22b) a hand-made asset at a TypeScript class path is taken over (ABFC5014) and is not deleted with the file", async () => {
+  await withRig({ ...OPS, publishDeletes: true }, async (r) => {
+    tallyOnly(r.dir, tally("BP_Zed"));
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    r.backend.addHandMadeReference("/TestMod/BP_Hand", "/TestMod/BP_Zed");
+    r.backend.addHandMadeFunction("/TestMod/BP_Hand", "HandFn");
+    writeFileSync(join(r.dir, "src", "Hand.ts"), tally("BP_Hand"), "utf8");
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /ABFC5014/);
+    assert.match(x.out, /hand-made function HandFn/);
+    assert.notEqual(readManifest(r.dir, "/TestMod/BP_Hand")!.created, true);
+    rmSync(join(r.dir, "src", "Hand.ts"));
+    x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+    assert.ok(r.backend.stageAssets().includes("/TestMod/BP_Hand"), "abfc did not create it, so it does not delete it");
+    assert.doesNotMatch(x.out, /deleted \/TestMod\/BP_Hand/);
+  });
+});
