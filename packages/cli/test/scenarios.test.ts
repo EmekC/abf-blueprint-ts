@@ -296,3 +296,48 @@ test("(S10) an asset saved in the Mod Editor that the stage had not touched make
     assert.doesNotMatch(x.out, /ABFC4017/);
   });
 });
+
+test("(S13) unsaved-changes refusal then conflict re-sync publishes", async () => {
+  await withRig({ ...OPS }, async (r) => {
+    r.backend.keepAssetsOnSync = true;
+    tallyOnly(r.dir, tally("BP_Tally"));
+    let x = await r.run(["build"]);
+    assert.equal(x.code, 0, x.out);
+
+    // the editor holds an unsaved change: bp_publish refuses and copies nothing
+    const ok = r.backend.publishResult;
+    r.backend.publishResult = {
+      ...ok,
+      ok: false,
+      published: [],
+      refused: "editor refused",
+      editorReason: "modified assets (unsaved changes)",
+      message: "Refused by the open editor: /TestMod/BP_Tally (modified assets (unsaved changes)). Save or revert those assets, then publish again. Nothing was copied.",
+    };
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 3, x.out);
+    assert.match(x.out, /error ABFC7005/);
+    assert.match(x.out, /save or revert those assets/);
+    assert.match(x.out, /BP_Tally/);
+    assert.equal(r.backend.publishCalls.length, 1);
+
+    // the modder saves the asset in the editor (with a hand-made function): the real file differs from the stage's baseline
+    r.backend.addHandMadeFunction(TA, "HandFn");
+    r.backend.stageConflicts = ["Content/BP_Tally.uasset"];
+    r.backend.publishResult = ok;
+    const syncs = r.backend.calls.filter((c) => c.tool === "staging_sync").length;
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC4017/);
+    assert.match(x.out, /BP_Tally\.uasset/);
+    assert.equal(r.backend.calls.filter((c) => c.tool === "staging_sync").length, syncs + 1, "the stage was re-synced once");
+    assert.match(x.out, /warning ABFC5014/);
+    assert.deepEqual(r.backend.functionNames(TA), [], "the hand-made function is removed (TS wins)");
+    assert.equal(r.backend.publishCalls.length, 2, "the second publish reached the backend");
+    assert.equal(r.backend.stageConflicts.length, 0);
+
+    x = await r.run(["publish"]);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /nothing to publish/);
+  });
+});
