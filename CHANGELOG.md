@@ -21,8 +21,19 @@ abfc uses semantic versioning for its command-line surface: the commands, their 
 - `abfc build --drift`, which reads and drift-checks every owned asset.
 - Automatic stage re-sync after an Unreal compile failure, and `--keep-failed-stage` to keep the failed graphs for inspection (build, test, publish).
 - Release hygiene: allowlisted artifacts, an artifact scanner (names, user and build paths, dev folders, game-derived files), npm tarballs without source maps, lockstep versions, and CI workflows for pull requests and releases.
+- Hardening, found by using abfc on real mods (details of every fix: `docs/known-issues.md`):
+  - Renames and moves just work. A class whose file moved or whose name changed (also class and file together) renames its Blueprint asset with Unreal's own rename and reference fixup; a changed `extends` reparents the asset (same family) or creates it again (other family); a class that left TypeScript has its asset deleted when abfc created it; `abfc publish` carries the deletions. Needs backend 2.6.0 (`bp_asset_ops`, `bp_publish` deletions); older backends keep ABFC5012 and ABFC2048. Asset operations are sent in calls of at most 20.
+  - TypeScript wins. A build never refuses because of an edit in the Mod Editor; it replaces what TypeScript describes and removes hand-made nodes, function graphs and variables from classes that are not hybrid (components, the widget tree, timelines, macros, dispatchers and interface graphs are kept). One warning per asset (ABFC5014) lists everything replaced or removed. `interface X extends X_Manual` (hybrid) opts a class out of the sweep. A mod changed outside abfc is re-synced on its own (ABFC4017). Class defaults of assets the editor saved are applied again.
+  - `@director("Row", ClassManager.EntityDirector.X)` writes the row's gameplay tag and adds a missing tag to the mod's `Config/Tags` ini; known tags are offered as globals from `.abfc/tags.d.ts`.
+  - Engine parameters with a default are optional: `KismetSystemLibrary.PrintString("hi")`, `Delay()`, `GetPlayerCharacter()`; the node keeps Unreal's default. A short curated list of very common functions adds the K2 zero defaults (`bSweep`, `bTeleport`, `PlayerIndex`).
+  - `abfc lsp` completes library functions and `@override` stubs for the parent's events.
+  - One abfc run at a time per project (`.abfc/lock.json`).
+  - New codes: ABFC1045, ABFC2048, ABFC2078, ABFC2079, ABFC2080, ABFC2081, ABFC2082, ABFC2083, ABFC3012, ABFC4017, ABFC4018, ABFC4019, ABFC5014, ABFC5015, ABFC5016, ABFC5017, ABFC5018, ABFC7014, ABFC7015 (`docs/errors.md`).
 
 ### Changed
+
+- Behaviour changes of the hardening release: the Mod Editor's edits to a class's assets no longer stop a build or publish (ABFC5001 to ABFC5004 and ABFC4020 are warnings in `abfc status`); a field removed from TypeScript is removed from the asset (ABFC5011); changing a field's type recreates the variable (ABFC2047 is a warning); `@event` on a method that overrides a parent member is error ABFC2078 with a quick fix; `abfc adopt` is deprecated (ABFC5015); ABFC5012 only reports an ambiguous or unsupported rename; every re-sync (explicit, automatic, after a failed compile) prunes the manifests to the stage, so ABFC5002 cannot loop; class defaults that a publish already carried to the mod are not applied or republished again after a re-sync, unless the editor saved that asset (or the re-sync was explicit); `mod.name` in another letter case than the plugin file is read as the file's spelling (ABFC1045); the stub generator is at version 0.5.0 (optional parameters), so ABFC3002 asks for `abfc stubs` once.
+- Backend 2.6.0 is recommended (`abfc doctor` warns with ABFC4018 about what an older one lacks). The minimum stays 2.4.0: every new feature is gated on a capability (`assetOps`, `publishDeletes`, `gameplayTags`, `reflectDefaults`, `classManagerRowTag`, `variableDefaults`) and an older backend prints a clear warning or keeps the earlier behaviour.
 
 - The tsserver plugin is retired in favour of the language server.
 - ABFC4015 now reports the adapter's missing cross-wire entry; ABFC4012 stays "no backend_info".
@@ -32,11 +43,13 @@ abfc uses semantic versioning for its command-line surface: the commands, their 
 
 - `abfc publish --full` stops at gate 5 (ABFC7002) on the machine where it was tried: the audit's hidden Mod Editor shows the Epic/mod.io login window, which no wait or sign-in in a normal session resolved (two live runs, 60 s and 240 s). Build, test and the default publish do not need it; run the Asset Audit in the Mod Editor before an upload. See the troubleshooting guide, "The Epic login window of the stage audit".
 - The backend gives the audit's hidden editor a private home whose `AppData\Local` folder is linked to the backend's own headless folder instead of the real Local folder, so a stored mod.io session cannot be seen there. A fix is recorded for the backend; whether a bypass flag for gate 5 is wanted is an open decision.
-- There is no `abfc mv`: Unreal's asset rename is not available through the headless backend. A moved or renamed file stops the build with ABFC5012; the quick fix keeps the old asset path.
-- Function locals and changing the fields of an existing struct are not supported yet.
+- There is no `abfc mv`; it is not needed with backend 2.6.0, where a moved or renamed file renames its asset on the next build. With an older backend a moved file stops the build with ABFC5012 and the quick fix keeps the old asset path.
+- Function locals and changing the fields of an existing struct are not supported yet. A struct that leaves TypeScript stays in the mod (ABFC5018).
+- After a published deletion the open Mod Editor's asset registry keeps listing the asset until the editor is restarted; the files are already gone.
+- The full list of limitations and fixed problems is `docs/known-issues.md`.
 - The exe, installer and zip are not code-signed, so Windows SmartScreen warns on the first run.
 
 ### Requirements
 
 - The Mod Editor with a mod created in it.
-- Source install: Node 24 or newer and backend 2.4.0 or newer; `@director` rows need backend 2.5.0.
+- Source install: Node 24 or newer and backend 2.4.0 or newer; `@director` rows need backend 2.5.0. Backend 2.6.0 (tag `v2.6.0`) is recommended: renames, deletions, director tags, optional parameters and variable defaults need it. `abfc.exe` bundles it.

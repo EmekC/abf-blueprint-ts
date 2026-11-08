@@ -10,19 +10,31 @@ abfc does not touch Blueprint assets itself. It talks to a headless Mod Editor b
 
 | What | Value |
 | --- | --- |
-| Minimum server version | 2.4.0 (tag `v2.4.0`) for a source install; class-manager rows (`@director`) need 2.5.0 (tag `v2.5.0`). `abfc.exe` bundles a current version |
+| Recommended server version | 2.6.0 (tag `v2.6.0`): asset operations, publish deletions, director tags, parameter defaults, variable defaults. `abfc.exe` bundles it |
+| Minimum server version | 2.4.0 (tag `v2.4.0`) for a source install; class-manager rows (`@director`) need 2.5.0 (tag `v2.5.0`) |
 | Protocol | 1 or higher (`backend_info.protocol`) |
 | Python | 3.9 or newer on the PC (the editor uses its own Python internally) |
 | Mod Editor | installed from the Epic Games Launcher |
 
 An older server still works where it can: abfc gates every feature on a capability and prints a warning, not an error, below 2.4.0. With a server older than 2.5.0 the build warns with [ABFC2077](errors.md#abfc2077) and writes no class-manager row for `@director`. A protocol below 1 is an error.
 
+Server 2.4.0 and 2.5.0 therefore still work, with these differences from 2.6.0:
+
+- no `assetOps`: a moved or renamed class file stops the build with [ABFC5012](errors.md#abfc5012), a changed `extends` with [ABFC2048](errors.md#abfc2048), and a class that left TypeScript only loses its units ([ABFC5010](errors.md#abfc5010));
+- no `publishDeletes`: files that should disappear from the mod are listed by [ABFC7014](errors.md#abfc7014) for you to delete in the Mod Editor;
+- no `gameplayTags`: the director tag is ignored ([ABFC2082](errors.md#abfc2082));
+- no `reflectDefaults`: engine parameters stay required in the stubs (only the curated zero defaults of the stub generator apply);
+- no `variable_defaults`: changing the initializer of an existing field leaves the default as it is ([ABFC2084](errors.md#abfc2084));
+- no `staging_status` `stale` list: an asset saved in the Mod Editor that the stage never touched is not noticed as a change; use `abfc build --resync`.
+
+`abfc doctor` prints [ABFC4018](errors.md#abfc4018) with the list of what an older server lacks.
+
 ## Source install
 
 Only a source install needs this (see [install.md](install.md#source-install)); `abfc.exe` does not.
 
 1. Clone the repository: `git clone https://github.com/EmekC/abf-mod-editor-mcp <backend dir>`.
-2. Check out the release: `git -C <backend dir> checkout v2.5.0` (the tag the abfc release is built with; `v2.4.0` is the minimum, and then `@director` rows are not written).
+2. Check out the release: `git -C <backend dir> checkout v2.6.0` (the tag the abfc release is built with; `v2.4.0` is the minimum, and then renames, deletions and `@director` rows are not available, see Requirements).
 3. Make sure Python 3.9 or newer is on `PATH` (not the Microsoft Store alias), or tell abfc where it is (see below).
 
 To update, fetch and check out a newer tag. abfc never modifies the checkout.
@@ -54,12 +66,13 @@ Use `ABF_REFLECT_META=0` if the hidden editor crashes during the function-templa
 `abfc doctor` starts the backend, calls `backend_info` and prints what it found, for example:
 
 ```
-backend: server 2.4.0 (minimum 2.4.0), protocol 1
+backend: server 2.6.0 (minimum 2.4.0), protocol 1
   engine: 5.4.4
   wildcard pin types: native
   containers: backend array: true, map: true, set: true; abfc array: true, map: true, set: true, struct: true
   reflect: yes, compile node refs: yes, game test: yes, audit: yes
-  warm session: yes, stage audit: yes
+  warm session: yes, stage audit: yes, class-manager rows: yes
+  backend capabilities: asset ops: rename/delete/reparent/recreate, publish deletions: yes, gameplay tags: yes, reflect defaults: yes, class-manager row tag: yes, variable defaults: yes (recommended server 2.6.0)
   extensions: ...
 ```
 
@@ -87,6 +100,13 @@ Warnings and errors from the backend check use the codes below. `abfc doctor` ex
 | `capabilities.audit` | `abfc publish --full` |
 | `capabilities.publish` | `abfc publish` |
 | `capabilities.classManagerRows` | backend 2.5.0 or newer: `bp_apply` accepts the `class_manager_row` key, so `@director("RowName")` writes the class-manager row asset; without it the build warns and writes no row |
+| `capabilities.assetOps` | backend 2.6.0, list of `rename`, `delete`, `reparent`, `recreate` (tool `bp_asset_ops`, at most 20 operations per call, all-or-nothing per call): moved and renamed classes, changed `extends`, deleted classes. Without it: ABFC5012, ABFC2048, ABFC5010 |
+| `capabilities.publishDeletes` | backend 2.6.0: `bp_publish` with `delete_removed` removes files that are gone from the stage (with backup and a conflict check); `abfc publish` lists them as `deleted`. Without it: ABFC7014 |
+| `capabilities.gameplayTags` | backend 2.6.0: `reflect` can list the gameplay tags of the game and the mod (completion of `@director` tags), and the backend adds a missing tag to the stage's `Config/Tags/<mod>Tags.ini` before the editor starts. Without it: ABFC2082, ABFC3012 |
+| `capabilities.reflectDefaults` | backend 2.6.0: `reflect` returns `meta.defaults` for function parameters, read in Unreal's own order (the metadata key equal to the parameter name, then `CPP_Default_<Param>`); `abfc stubs` makes the trailing defaulted inputs optional. Without it: parameters stay required |
+| `capabilities.classManagerRowTag` (`bpApply.features` entry `class_manager_row_tag`) | backend 2.6.0: `class_manager_row` accepts `gameplay_tag`, and the row's tag is verified after the write |
+| `capabilities.variableDefaults` (`bpApply.features` entry `variable_defaults`) | changing the default of an existing variable in place; first appears in backend 2.6.0. Without it: ABFC2084 |
+| `staging_status` `stale` | backend 2.6.0: lists stage files that the stage never touched but whose real file was saved or deleted in the Mod Editor since the sync; abfc treats them like conflicts and re-syncs the stage (ABFC4017) |
 | `capabilities.functionLocals` | always `false` today; abfc hoists temporaries into owned member variables instead |
 | `capabilities.userPureFunctions` | always `false` today; getters are impure functions |
 | `bpApply.features` | per-feature gates, for example `event_meta` (event tooltips, ABFC2071), `self_event_calls` (ABFC4013) and `variable_defaults` (changing the default of an existing variable in place, ABFC2084) |

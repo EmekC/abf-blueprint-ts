@@ -99,7 +99,7 @@ For people who want to run abfc from Node instead of `abfc.exe`.
 
 - Node 24 or newer.
 - Python 3.9 or newer on `PATH` (not the Microsoft Store alias; `py -3` and `python` are both tried), or the path given with `--python` or `ABFC_PYTHON`.
-- A checkout of the backend, https://github.com/EmekC/abf-mod-editor-mcp. The minimum version is 2.4.0. Class-manager rows (`@director`) need 2.5.0. The `abfc doctor` command prints the version it found and warns when it is too old.
+- A checkout of the backend, https://github.com/EmekC/abf-mod-editor-mcp. Use 2.6.0 (tag `v2.6.0`): it adds renames and deletions of assets, director gameplay tags, optional engine parameters and variable defaults. The minimum is 2.4.0 and still works (class-manager rows (`@director`) need 2.5.0), with clear warnings for each missing feature. The `abfc doctor` command prints the version it found and warns when it is older than 2.6.0 or lacks a capability.
 
 **abfc itself**, either from npm once the packages are published:
 
@@ -125,7 +125,7 @@ git clone https://github.com/EmekC/abf-mod-editor-mcp <backend dir>
 git -C <backend dir> checkout <tag>
 ```
 
-Use the newest release tag, at least `v2.4.0` (`v2.5.0` for `@director` rows). Tell abfc where it is once; the path goes into your user config:
+Use `v2.6.0` or newer (the tag this abfc release is built with). `v2.4.0` is the minimum (`v2.5.0` for `@director` rows); an older tag works but builds without asset renames and deletions, director tags, optional engine parameters and variable defaults (see [backend.md](backend.md)). Tell abfc where it is once; the path goes into your user config:
 
 ```
 abfc init --backend-dir <backend dir>
