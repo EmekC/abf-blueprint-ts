@@ -50,6 +50,18 @@ export interface Manifest {
   retiredUnpublished?: string[];
   /** Where the asset came from at the last build (docs/design.md 18.2); absent in manifests written before 1.0. */
   source?: { file: string; class: string; derived: boolean };
+  /** abfc created the asset (its plan had `create`): only such assets are deleted when the class leaves the TS. Absent for hand-made/adopted assets and manifests written before 1.0. */
+  created?: boolean;
+  /** Class path of the parent the asset was last built with (`extends`); absent in manifests written before the reparent support. */
+  parent?: string;
+  /** Family of that parent (`actor`, `component`, `widget`, `object`); decides between reparent and recreate. */
+  parentFamily?: "actor" | "component" | "widget" | "object";
+  /** The asset path this asset was renamed from on the stage; the old files are deleted by the next publish (cleared by it). */
+  renamedFrom?: string;
+  /** Tombstone: the class left the TS and abfc deleted the asset from the stage; the next publish deletes its files, then the manifest goes. */
+  deleted?: boolean;
+  /** Packages other than the asset itself that a stage-only rename fixup saved (referencers); the next publish copies them. */
+  publishAlso?: string[];
 }
 
 /** `/Mod/Dir/BP_X` -> `Mod__Dir__BP_X` */

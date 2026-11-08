@@ -121,10 +121,21 @@ export function assetsNeedingRead(
       // a unit that is no longer in the TS: its stage nodes are removed (or its manifest entry dropped)
       (manifest?.units.some((mu) => !asset.units.some((unit) => unit.id === mu.id)) ?? false) ||
       defaultsStale(asset, manifest, input.stage, input.directorRows === true) ||
-      fieldsStale(asset, manifest);
+      fieldsStale(asset, manifest) ||
+      parentStale(asset, manifest);
     if (need) out.add(asset.path);
   }
   return out;
+}
+
+/**
+ * The `extends` of the class differs from the parent the asset was last built with (`manifest.parent`): the asset is read so the build can
+ * reparent or recreate it. A manifest written before the parent was recorded has no parent to compare: that case is judged from the
+ * export of any read of the asset (`parentOps`' `snapshotParent`), it does not force a read by itself.
+ */
+function parentStale(asset: IrModule["assets"][number], manifest: Manifest | null): boolean {
+  if (manifest?.parent === undefined || asset.create === undefined || asset.structFields !== undefined) return false;
+  return manifest.parent.toLowerCase() !== asset.create.parent.toLowerCase();
 }
 
 /** Own fields (non-temp variables) of the asset that differ from what the manifest recorded (new, retyped or gone from the TS). */

@@ -5,6 +5,9 @@ import type { Diagnostic, Span } from "@abfc/ir";
 /** bp_apply type grammar, e.g. "int", "object:/Script/Engine.Actor", "array:name". */
 export type BpType = string;
 
+/** `actor`: derives from Actor; `component`: from ActorComponent; `widget`: from UserWidget; `object`: anything else. */
+export type ParentFamily = "actor" | "component" | "widget" | "object";
+
 /** An own member variable (`Name!: T;` in the TS class); abfc declares it in the asset. */
 export interface HirField { name: string; type: BpType; span: Span }
 
@@ -18,6 +21,8 @@ export interface HirClass {
   classPath: string;
   /** Class path of the parent (`@bpPath` of the `extends` class). */
   parent: string;
+  /** What the parent class derives from; a changed `extends` inside one family is a reparent, across families a recreate (docs/design.md 18.2). */
+  family: ParentFamily;
   span: Span;
   events: HirEvent[];
   /** Own member variables (`Name!: T;`), in declaration order. */

@@ -14,6 +14,7 @@ import type { FunctionInfo } from "./tags.js";
 export { classPathOf } from "./tags.js";
 
 const USER_WIDGET = "/Script/UMG.UserWidget";
+const ACTOR_COMPONENT = "/Script/Engine.ActorComponent";
 const NUMERIC = new Set(["int", "int64", "byte", "float", "double", "real"]);
 const STRINGY = new Set(["name", "text", "string"]);
 /** `@blueprint` options that set class defaults (applied by the class-defaults pass). */
@@ -349,6 +350,7 @@ class HirBuilder {
       pathDerived: pathInfo.explicit === undefined,
       classPath: classPathOf(path),
       parent,
+      family: parentIsActor ? "actor" : parentIsWidget || widget ? "widget" : this.derivesFrom(parentType0, ACTOR_COMPONENT) ? "component" : "object",
       span: this.sp(node.name ?? node),
       events: [],
       fields: [],

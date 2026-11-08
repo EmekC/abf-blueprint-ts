@@ -475,6 +475,16 @@ Typical cause: a field with an initializer or a modifier other than `public`, a 
 
 Fix: declare the field as `Name!: Type;` with a supported type and a free name. For a type change, keep the type or rename the field (the old variable stays in the asset until you delete it in the Mod Editor).
 
+### ABFC2048
+
+Severity: error · Exit: 1
+
+Meaning: the `extends` clause of a class whose asset already exists was changed, and abfc cannot apply the change. Two situations: the backend does not offer `bp_asset_ops` (older than 2.6.0), or the change crosses families (for example Actor to ActorComponent, which needs the asset to be created again) and the asset was not created by abfc, so recreating it would delete hand-made content.
+
+Typical cause: the parent class was changed in TypeScript after the first build.
+
+Fix: update abf-mod-editor-mcp to 2.6.0 (a parent in the same family is then reparented by the next build, a parent in another family recreates an asset abfc created), or restore the old `extends` clause. For an asset abfc did not create, delete it in the Mod Editor and build again.
+
 ### ABFC2050
 
 Severity: error · Exit: 1
@@ -1109,13 +1119,13 @@ Fix: nothing is required; declare the field again to get it back.
 
 ### ABFC5012
 
-Severity: error · Exit: 1
+Severity: warning (one earlier asset of a class, in `abfc check` and the language server) · error (several earlier assets, a `@struct`, or a backend without `bp_asset_ops`) · Exit: 1 for the error
 
-Meaning: a class file now gives a different asset path than the one it was built as (the file moved or the class was renamed), and the old asset is still recorded. abfc will not create a second asset or retire the first.
+Meaning: a class file now gives a different asset path than the one it was built as (the file moved or the class was renamed), and the old asset is still recorded. abfc never creates a second asset and retires the first. With one earlier asset of a class and a backend that supports it (2.6.0), the next `abfc build` renames the asset (references are fixed by Unreal), and `abfc check` only warns. Otherwise it is an error.
 
-Typical cause: a `.ts` file was moved, or a class renamed, without a `path` option in `@blueprint`.
+Typical cause: a `.ts` file was moved, or a class renamed, without a `path` option in `@blueprint`; several candidates when more than one earlier asset has the class name or file.
 
-Fix: keep the old asset with `path: "<path below the mod>"` in the class options (the editor quick fix does it), or move the file back. The language server offers the quick fix on the diagnostic.
+Fix: for the error, keep one earlier asset with `path: "<path below the mod>"` in the class options (the editor quick fix does it), move the file back, or update the backend. The language server offers the quick fix on the diagnostic.
 
 ### ABFC5013
 

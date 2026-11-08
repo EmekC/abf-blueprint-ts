@@ -28,6 +28,10 @@ test("project loads: class files and test files are split", () => {
 
 const relay = buildHir(loaded, config, profile, [fileOf("Relay.ts")]);
 
+test("an Actor subclass has the parent family actor", () => {
+  assert.equal(relay.classes[0]!.family, "actor");
+});
+
 test("Relay.ts is clean (TypeScript and subset)", () => {
   assert.deepEqual(inFile(loaded.diagnostics, "src/Relay.ts"), []);
   assert.deepEqual(inFile(loaded.diagnostics, "src/Relay.test.ts"), []);
@@ -390,6 +394,7 @@ test("a kind widget class extending a UserWidget stub compiles with the widget c
   assert.equal(widget.classes.length, 1);
   const cls = widget.classes[0]!;
   assert.equal(cls.kind, "widget");
+  assert.equal(cls.family, "widget");
   assert.equal(cls.parent, "/Script/UMG.UserWidget");
   assert.equal(cls.classPath, "/TestMod/UI/WBP_ExampleInfo.WBP_ExampleInfo_C");
   assert.equal(widget.classMeta[cls.classPath], "/Script/UMG.WidgetBlueprintGeneratedClass");

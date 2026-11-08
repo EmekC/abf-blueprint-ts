@@ -89,7 +89,7 @@ export function compileFrontend(ctx: CliContext): Frontend {
   const hir = buildHir(loaded, compilerConfigOf(ctx.config), ctx.env.profile);
   const diags = [...loaded.diagnostics, ...hir.diagnostics];
   // A class file that moved since its asset was built stops here, before anything is planned or the backend starts (ABFC5012).
-  if (!hasError(diags)) diags.push(...movedClassDiagnostics(hir, listManifests(ctx.projectDir), ctx.config.mod.name));
+  if (!hasError(diags)) diags.push(...movedClassDiagnostics(hir, listManifests(ctx.projectDir), ctx.config.mod.name, { singleMatch: "error" })); // until the build wires asset ops (A10), a move stays an error
   emitAll(ctx, diags);
   if (hasError(diags)) return { loaded, hir, ir: null };
   const lowered = lowerChecked(hir, ctx.env.profile);

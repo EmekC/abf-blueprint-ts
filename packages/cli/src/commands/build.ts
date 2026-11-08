@@ -117,6 +117,7 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
   if (fe.ir === null) return false;
   const ir = fe.ir;
   // Where each asset comes from (recorded in its manifest, docs/design.md 18.2).
+  const classByPath = new Map(fe.hir.classes.map((c) => [c.path, c]));
   const sources = new Map<string, NonNullable<Manifest["source"]>>();
   for (const c of [...fe.hir.classes, ...fe.hir.structs]) sources.set(c.path, { file: c.span.file, class: c.name, derived: c.pathDerived });
   // Mod-defined structs (UserDefinedStruct): created from the TS, never read; planned first.
@@ -376,6 +377,14 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
     // Removed from the stage, not published yet: `abfc publish` lists the asset until a publish clears this.
     const retiredUnpublished = [...new Set([...(old?.retiredUnpublished ?? []), ...retired])].sort();
     const source = sources.get(a.asset) ?? old?.source;
+    // abfc created the asset (the apply creates it now, or an earlier build did); the class it was built from gives the parent.
+    const created = old?.created === true || a.create !== undefined;
+    const cls = classByPath.get(a.asset);
+    /** Pending stage-only renames/deletes survive the rewrite until a publish clears them. */
+    const carried = {
+      ...(old?.renamedFrom !== undefined ? { renamedFrom: old.renamedFrom } : {}),
+      ...(old?.publishAlso !== undefined ? { publishAlso: old.publishAlso } : {}),
+    };
     const finalManifest: Manifest = {
       asset: a.asset,
       compiler: COMPILER_ID,
@@ -387,6 +396,9 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
       ...(directorRow !== undefined ? { directorRow } : {}),
       ...(retiredUnpublished.length > 0 ? { retiredUnpublished } : {}),
       ...(source !== undefined ? { source } : {}),
+      ...(created ? { created } : {}),
+      ...(cls !== undefined ? { parent: cls.parent, parentFamily: cls.family } : {}),
+      ...carried,
     };
     finals.push(finalManifest);
     writeManifest(projectDir, {
@@ -400,6 +412,11 @@ async function buildInner(ctx: CliContext, session: BackendSession, rec: Recorde
       ...(old?.directorRow !== undefined ? { directorRow: old.directorRow } : {}),
       ...(retiredUnpublished.length > 0 ? { retiredUnpublished } : {}),
       ...(source !== undefined ? { source } : {}),
+      // the new parent is recorded only after Unreal's compile passed (the finals below); a failed compile re-syncs the stage to the old one
+      ...(old?.created === true ? { created: true } : {}),
+      ...(old?.parent !== undefined ? { parent: old.parent } : {}),
+      ...(old?.parentFamily !== undefined ? { parentFamily: old.parentFamily } : {}),
+      ...carried,
     });
     writeSourceMap(projectDir, sourceMapOf(irAsset, { ...previousNames(old), ...outcome.nodeIds }));
     appliedAssets.push(a.asset);

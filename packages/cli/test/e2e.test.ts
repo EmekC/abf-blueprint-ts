@@ -1703,9 +1703,10 @@ test("(p3) a class file whose derived path changed: ABFC5012 stops the build bef
     assert.match(x.out, /path: "Relay\/BP_Relay"/);
     assert.equal(r.started.count, starts, "the backend is not started");
     assert.equal(r.backend.applyLabels().length, applies);
+    // check has no backend: one earlier asset is only a warning (the next build with a rename-capable backend renames it)
     x = await r.run(["check"]);
-    assert.notEqual(x.code, 0, x.out);
-    assert.match(x.out, /ABFC5012/);
+    assert.equal(x.code, 0, x.out);
+    assert.match(x.out, /warning ABFC5012: BP_Relay was built as \/TestMod\/Relay\/BP_Relay .*the next abfc build renames the asset/);
     writeFileSync(src, text.replace('{ path: "/TestMod/Relay/BP_Relay" }', '{ path: "Relay/BP_Relay" }'), "utf8");
     x = await r.run(["build"]);
     assert.equal(x.code, 0, x.out);
@@ -1771,6 +1772,10 @@ test("a class whose asset is not in the stage is created once, then built like a
     assert.ok(m, "manifest written");
     assert.deepEqual(m!.units.map((u) => u.id), ["event:Bump"]);
     assert.ok(m!.variables.some((v) => v.name === "Total" && v.type === "int"));
+    // the manifest records that abfc created the asset and which parent it was built with (reparent / delete decisions)
+    assert.equal(m!.created, true);
+    assert.equal(m!.parent, "/Script/FakeEngine.Actor");
+    assert.equal(m!.parentFamily, "actor");
 
     const again = r.backend.applyLabels().length;
     x = await r.run(["build"]);
