@@ -5,8 +5,8 @@
       "rule": "name",
       "artifact": "installer",
       "entry": "abfc-setup-<version>.exe",
-      "context": "8d8384bf570c",
-      "reason": "chance match of a short guard word in the compressed installer stream: 24/64 printable bytes around it (random data), and the uncompressed installer input scans clean"
+      "context": "41cc137abde8",
+      "reason": "chance match of a short guard word in the compressed installer stream; it came back at a new spot after the installer changed (PRs #15 and #16): 26/64 printable bytes around it (random data), and the uncompressed installer input scans clean"
     }
   ]
 }
