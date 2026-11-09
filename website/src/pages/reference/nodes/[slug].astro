@@ -1,0 +1,75 @@
+---
+// One page per Blueprint-callable function, rendered from src/generated/nodes.json (written by `npm run generate`).
+import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro";
+import { Aside, Code } from "@astrojs/starlight/components";
+import data from "../../../generated/nodes.json";
+
+export function getStaticPaths() {
+  return data.nodes.map((node) => ({
+    params: { slug: node.slug.slice("reference/nodes/".length) },
+    props: { node },
+  }));
+}
+
+const { node } = Astro.props;
+---
+
+<StarlightPage
+  frontmatter={{
+    title: node.title,
+    description: node.description,
+    tableOfContents: false,
+    prev: false,
+    next: false,
+    editUrl: false,
+  }}
+>
+  <p>
+    {node.badges.map((b) => <span class={"node-badge node-badge--" + b.cls} title={b.title}>{b.label}</span>)}
+  </p>
+  <p>
+    <strong>TypeScript:</strong> <code>{node.qualified}</code> ({node.kind === "static" ? "static function" : "method"}, <code>import {"{ " + node.owner + " }"} from "{node.module}"</code>)
+  </p>
+  <p><strong>Node:</strong> {node.title} · <code>{node.key}</code></p>
+  <p><strong>Module:</strong> <a href={node.moduleUrl}>{node.moduleName}</a> › {node.owner}</p>
+  {node.text && <p>{node.text}.</p>}
+  {
+    node.snippet && (
+      <>
+        <h2 id="example">Example</h2>
+        <Code code={node.snippet.join("\n")} lang="ts" />
+      </>
+    )
+  }
+  {
+    node.params.length > 0 && (
+      <>
+        <h2 id="parameters">Parameters</h2>
+        <table>
+          <thead>
+            <tr><th>Pin</th><th>Type</th><th>Default</th></tr>
+          </thead>
+          <tbody>
+            {node.params.map((p) => (
+              <tr>
+                <td><code>{p.name}</code></td>
+                <td><code>{p.type}</code></td>
+                <td>{p.default !== null ? p.default : p.optional ? "optional" : "required"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </>
+    )
+  }
+  {node.returns.type !== "void" && <p><strong>Returns:</strong> <code>{node.returns.type}</code></p>}
+  {
+    node.signature && (
+      <>
+        <h2 id="signature">Signature</h2>
+        <Code code={node.signature} lang="ts" />
+      </>
+    )
+  }
+  {node.notes.map((n) => <Aside type={n.type}><Fragment set:html={n.html} /></Aside>)}
+</StarlightPage>

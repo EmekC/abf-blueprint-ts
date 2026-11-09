@@ -11,7 +11,7 @@
   ],
   "scripts": {
     "build": "tsc -b",
-    "test": "node --test \"packages/*/dist/test/**/*.test.js\" \"scripts/release/test/*.test.mjs\"",
+    "test": "node --test \"packages/*/dist/test/**/*.test.js\" \"scripts/release/test/*.test.mjs\" \"website/test/*.test.mjs\"",
     "clean": "tsc -b --clean",
     "vsix": "npm run build && npm run package -w abfc-vscode",
     "release:exe": "node scripts/release/build-exe.mjs",

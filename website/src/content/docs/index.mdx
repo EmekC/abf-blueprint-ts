@@ -1,0 +1,24 @@
+---
+title: abfc
+description: Write Abiotic Factor Blueprints in TypeScript
+template: splash
+hero:
+  tagline: Write Abiotic Factor Blueprints in TypeScript. abfc compiles your classes into real Blueprint nodes and publishes them to your mod.
+  actions:
+    - text: Getting started
+      link: /abf-blueprint-ts/getting-started/
+      icon: right-arrow
+    - text: GitHub
+      link: https://github.com/EmekC/abf-blueprint-ts
+      icon: github
+      variant: minimal
+---
+
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+<CardGrid>
+  <LinkCard title="Getting started" description="Install abfc, create a project and publish a first class." href="/abf-blueprint-ts/getting-started/" />
+  <LinkCard title="Node reference" description="Every engine and game-module function: its Blueprint node name, TypeScript name and an example." href="/abf-blueprint-ts/reference/nodes/" />
+  <LinkCard title="Runtime API" description="The decorators and helpers imported from @abfc/runtime." href="/abf-blueprint-ts/reference/runtime/" />
+  <LinkCard title="Errors" description="Every ABFC error code with its meaning and fix." href="/abf-blueprint-ts/reference/errors/" />
+</CardGrid>

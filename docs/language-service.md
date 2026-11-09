@@ -108,9 +108,13 @@ The VS Code extension sends `tsDiagnostics: false` and `tsHover: false`.
 - **Lint findings.** The recommended rules of `@abfc/eslint-plugin` ([lint-rules.md](lint-rules.md)), run in the
   server with the server's own TypeScript program. They have source `abfc`, the rule id as code
   (`abfc/no-loop-in-tick`) and warning severity. No ESLint config is needed or read.
-- **Hover.** The first line of a stub member's description, and a line `Blueprint: Cast To BP_Thing · Branch`: the
+- **Hover.** The first line of a stub member's description, a `[Docs]` link to the function's page on the
+  [documentation site](https://emekc.github.io/abf-blueprint-ts/reference/nodes/) for every engine or game-module function (a function the site does not list yet opens a page that points to search), and a line `Blueprint: Cast To BP_Thing · Branch`: the
   Blueprint nodes the code under the cursor lowers to (at most six; `(+N more)` after that). The node line appears only
   when the project lowers without errors.
+- **Diagnostic codes.** The code of an error or warning (`ABFC2054`) and of a lint finding is a link to its entry in
+  [errors.md](errors.md) and [lint-rules.md](lint-rules.md) on the documentation site; editors that support code
+  descriptions show it as a clickable code.
 - **Quick fixes** (kind `quickfix`):
   - `Use idiv(a, b) (Blueprint Divide_IntInt)` on ABFC2010 (integer `/` is not allowed): rewrites the division and adds
     `idiv` to the `@abfc/runtime` import.

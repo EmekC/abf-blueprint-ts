@@ -11,7 +11,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const DOCS = [
   "README.md",
   "CHANGELOG.md",
-  ...["install", "first-mod", "cli", "errors", "config", "backend", "language-service", "lint-rules", "troubleshooting", "known-issues", "releasing"].map(
+  ...["getting-started", "install", "first-mod", "runtime", "cli", "errors", "config", "backend", "language-service", "lint-rules", "troubleshooting", "known-issues", "releasing"].map(
     (n) => `docs/${n}.md`,
   ),
 ];

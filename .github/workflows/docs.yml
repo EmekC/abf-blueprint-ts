@@ -1,0 +1,85 @@
+# Builds the documentation site (website/, Astro + Starlight) and deploys it to GitHub Pages.
+# Pull requests that touch the doc inputs only build the site (to catch broken links and generator errors); nothing is deployed.
+# Pushes to main (and manual runs on main) build and deploy to https://emekc.github.io/abf-blueprint-ts/ .
+# One-time repository setting: Settings -> Pages -> Build and deployment -> Source = "GitHub Actions".
+# Maintainer notes are in docs/releasing.md and CLAUDE.md. Actions are pinned to major tags like ci.yml.
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "website/**"
+      - "CHANGELOG.md"
+      - "README.md"
+      - "packages/stubgen/data/descriptions.json"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "website/**"
+      - "CHANGELOG.md"
+      - "README.md"
+      - "packages/stubgen/data/descriptions.json"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build site
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+
+      - name: Install
+        run: npm ci
+        working-directory: website
+
+      - name: Build
+        run: npm run build
+        working-directory: website
+
+      - name: Upload site
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: website/dist
+
+  deploy:
+    name: deploy to GitHub Pages
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v5

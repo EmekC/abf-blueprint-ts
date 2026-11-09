@@ -4,7 +4,8 @@ import * as vscode from "vscode";
 import { LanguageClient, TransportKind } from "vscode-languageclient/node";
 import { CONFIG_FILE_NAME, findAbfc, projectDirOf, type AbfcLaunch } from "./discover";
 
-const INSTALL_DOCS = "https://github.com/EmekC/abf-blueprint-ts/blob/main/docs/install.md";
+const DOCS_URL = "https://emekc.github.io/abf-blueprint-ts/";
+const INSTALL_DOCS = DOCS_URL + "guides/install/";
 
 let client: LanguageClient | undefined;
 let output: vscode.OutputChannel | undefined;
@@ -153,6 +154,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     context.subscriptions.push(vscode.commands.registerCommand(id, () => runCliTask(args)));
   }
   context.subscriptions.push(vscode.commands.registerCommand("abfc.restartServer", () => restart()));
+  context.subscriptions.push(vscode.commands.registerCommand("abfc.openDocs", () => void vscode.env.openExternal(vscode.Uri.parse(DOCS_URL))));
   context.subscriptions.push(
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("abfc.path") || e.affectsConfiguration("abfc.cliPath")) void restart();

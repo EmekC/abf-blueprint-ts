@@ -1,0 +1,53 @@
+---
+// One page per /Script module: a table of its functions per class, rendered from src/generated/nodes.json.
+import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro";
+import data from "../../../generated/nodes.json";
+
+export function getStaticPaths() {
+  return data.modules.map((m) => ({
+    params: { module: m.slug.slice("reference/modules/".length) },
+    props: { m },
+  }));
+}
+
+const { m } = Astro.props;
+const nodesUrl = import.meta.env.BASE_URL + "reference/nodes/";
+---
+
+<StarlightPage
+  frontmatter={{
+    title: m.name + " module",
+    description: "All " + m.count + " Blueprint-callable functions of " + m.path + ".",
+    pagefind: false,
+    prev: false,
+    next: false,
+    editUrl: false,
+    tableOfContents: { minHeadingLevel: 2, maxHeadingLevel: 2 },
+  }}
+  headings={m.owners.map((o) => ({ depth: 2, slug: o.id, text: o.name }))}
+>
+  <p>
+    The {m.count} functions of <code>{m.path}</code> that a Blueprint can call, by class. See the <a href={nodesUrl}>node reference</a> for how to read a node page.
+  </p>
+  {
+    m.owners.map((o) => (
+      <>
+        <h2 id={o.id}>{o.name}</h2>
+        <table>
+          <thead>
+            <tr><th>Node</th><th>TypeScript</th><th>Flags</th></tr>
+          </thead>
+          <tbody>
+            {o.rows.map((r) => (
+              <tr>
+                <td><a href={r.url}>{r.title}</a></td>
+                <td><code>{r.qualified}</code></td>
+                <td>{r.flags}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </>
+    ))
+  }
+</StarlightPage>

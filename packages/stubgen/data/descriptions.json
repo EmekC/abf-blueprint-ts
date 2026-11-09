@@ -1,37 +1,318 @@
 {
   "version": 1,
   "functions": {
-    "/Script/Engine.Actor:GetOwner": { "text": "Returns the actor that owns this actor, if any" },
-    "/Script/Engine.Actor:K2_DestroyActor": { "text": "Removes the actor from the world", "displayName": "Destroy Actor" },
-    "/Script/Engine.Actor:SetActorTickEnabled": { "text": "Turns the actor's per-frame tick on or off" },
-    "/Script/Engine.Actor:SetActorTickInterval": { "text": "Sets the minimum time between two ticks of the actor" },
-    "/Script/Engine.Actor:SetTickGroup": { "text": "Chooses the tick group the actor updates in" },
-    "/Script/Engine.Controller:IsLocalController": { "text": "Tells whether the controller belongs to a player on this machine" },
-    "/Script/Engine.Controller:K2_GetPawn": { "text": "Returns the pawn this controller possesses", "displayName": "Get Controlled Pawn" },
-    "/Script/Engine.GameplayStatics:GetNumPlayerControllers": { "text": "Counts the player controllers that currently exist" },
-    "/Script/Engine.GameplayStatics:GetPlayerController": { "text": "Returns the controller of the local player with the given index" },
-    "/Script/Engine.KismetSystemLibrary:IsServer": { "text": "Tells whether this world runs as the host" },
-    "/Script/Engine.KismetSystemLibrary:IsValid": { "text": "Tells whether an object reference points to a live object" },
-    "/Script/Engine.KismetSystemLibrary:K2_ClearAndInvalidateTimerHandle": { "text": "Cancels a running timer and resets its handle", "displayName": "Clear and Invalidate Timer by Handle" },
-    "/Script/Engine.KismetSystemLibrary:K2_SetTimerDelegate": { "text": "Starts a timer that runs the given event after a delay, once or repeatedly", "displayName": "Set Timer by Event" },
-    "/Script/Engine.KismetTextLibrary:Conv_DoubleToText": { "text": "Formats a floating point number as localized text", "displayName": "To Text (double)" },
-    "/Script/Engine.KismetTextLibrary:TextIsEmpty": { "text": "Tells whether a text value has no characters" },
-    "/Script/UMG.PanelWidget:ClearChildren": { "text": "Removes every child widget from the panel" },
-    "/Script/UMG.PanelWidget:GetChildAt": { "text": "Returns the child widget at the given position" },
-    "/Script/UMG.PanelWidget:GetChildIndex": { "text": "Returns the position of a child widget in the panel" },
-    "/Script/UMG.PanelWidget:GetChildrenCount": { "text": "Returns how many child widgets the panel holds" },
-    "/Script/UMG.PanelWidget:RemoveChild": { "text": "Takes one child widget out of the panel" },
-    "/Script/UMG.TextBlock:SetColorAndOpacity": { "text": "Sets the color and opacity used to draw the text" },
-    "/Script/UMG.TextBlock:SetFont": { "text": "Replaces the font used by the text block" },
-    "/Script/UMG.TextBlock:SetText": { "text": "Replaces the text the block displays", "displayName": "SetText (Text)" },
-    "/Script/UMG.VerticalBox:AddChildToVerticalBox": { "text": "Appends a widget to the end of the vertical stack", "displayName": "Add Child to Vertical Box" },
-    "/Script/UMG.VerticalBoxSlot:SetHorizontalAlignment": { "text": "Sets how the slot content is aligned across the box width" },
-    "/Script/UMG.VerticalBoxSlot:SetPadding": { "text": "Sets the empty space around the slot content" },
-    "/Script/UMG.VerticalBoxSlot:SetVerticalAlignment": { "text": "Sets how the slot content is aligned within its row height" },
-    "/Script/UMG.Widget:GetOwningPlayer": { "text": "Returns the player controller that owns this widget" },
-    "/Script/UMG.Widget:GetParent": { "text": "Returns the panel that holds this widget" },
-    "/Script/UMG.Widget:RemoveFromParent": { "text": "Detaches the widget from its parent or from the viewport", "displayName": "Remove from Parent" },
-    "/Script/UMG.Widget:SetVisibility": { "text": "Changes how the widget is drawn and whether it takes input" },
-    "/Script/UMG.WidgetBlueprintLibrary:GetAllWidgetsOfClass": { "text": "Collects every live widget of the given class" }
+    "/Script/Engine.Actor:GetOwner": {
+      "text": "Returns the actor that owns this actor, if any",
+      "snippet": [
+        "import { Actor } from \"/Script/Engine\";",
+        "",
+        "// in a @blueprint class that extends Actor",
+        "const owner = this.GetOwner();"
+      ]
+    },
+    "/Script/Engine.Actor:K2_DestroyActor": {
+      "text": "Removes the actor from the world",
+      "displayName": "Destroy Actor",
+      "snippet": [
+        "import { Actor } from \"/Script/Engine\";",
+        "",
+        "// in a @blueprint class that extends Actor",
+        "this.K2_DestroyActor();"
+      ]
+    },
+    "/Script/Engine.Actor:SetActorTickEnabled": {
+      "text": "Turns the actor's per-frame tick on or off",
+      "snippet": [
+        "import { Actor } from \"/Script/Engine\";",
+        "",
+        "// in a @blueprint class that extends Actor",
+        "this.SetActorTickEnabled(false);"
+      ]
+    },
+    "/Script/Engine.Actor:SetActorTickInterval": {
+      "text": "Sets the minimum time between two ticks of the actor",
+      "snippet": [
+        "import { Actor } from \"/Script/Engine\";",
+        "",
+        "// in a @blueprint class that extends Actor",
+        "this.SetActorTickInterval(0.5);"
+      ]
+    },
+    "/Script/Engine.Actor:SetTickGroup": {
+      "text": "Chooses the tick group the actor updates in",
+      "snippet": [
+        "import { Actor } from \"/Script/Engine\";",
+        "",
+        "// in a @blueprint class that extends Actor; enum values are the editor's names",
+        "this.SetTickGroup(\"TG_PostUpdateWork\");"
+      ]
+    },
+    "/Script/Engine.Controller:IsLocalController": {
+      "text": "Tells whether the controller belongs to a player on this machine",
+      "snippet": [
+        "import { Controller } from \"/Script/Engine\";",
+        "",
+        "// in a @blueprint class that extends Controller",
+        "const mine = this.IsLocalController();"
+      ]
+    },
+    "/Script/Engine.Controller:K2_GetPawn": {
+      "text": "Returns the pawn this controller possesses",
+      "displayName": "Get Controlled Pawn",
+      "snippet": [
+        "import { Controller } from \"/Script/Engine\";",
+        "",
+        "// in a @blueprint class that extends Controller",
+        "const pawn = this.K2_GetPawn();"
+      ]
+    },
+    "/Script/Engine.GameplayStatics:GetNumPlayerControllers": {
+      "text": "Counts the player controllers that currently exist",
+      "snippet": [
+        "import { GameplayStatics } from \"/Script/Engine\";",
+        "",
+        "const count = GameplayStatics.GetNumPlayerControllers();"
+      ]
+    },
+    "/Script/Engine.GameplayStatics:GetPlayerController": {
+      "text": "Returns the controller of the local player with the given index",
+      "snippet": [
+        "import { GameplayStatics } from \"/Script/Engine\";",
+        "",
+        "const controller = GameplayStatics.GetPlayerController(0);"
+      ]
+    },
+    "/Script/Engine.KismetSystemLibrary:Delay": {
+      "text": "Waits the given number of seconds before the next statement of the event runs",
+      "snippet": [
+        "import { KismetSystemLibrary } from \"/Script/Engine\";",
+        "",
+        "// inside an @event: the statements after this call run 2 seconds later",
+        "KismetSystemLibrary.Delay(2.0);",
+        "KismetSystemLibrary.PrintString(\"two seconds later\");"
+      ]
+    },
+    "/Script/Engine.KismetSystemLibrary:IsServer": {
+      "text": "Tells whether this world runs as the host",
+      "snippet": [
+        "import { KismetSystemLibrary } from \"/Script/Engine\";",
+        "",
+        "if (KismetSystemLibrary.IsServer()) {",
+        "  KismetSystemLibrary.PrintString(\"running on the host\");",
+        "}"
+      ]
+    },
+    "/Script/Engine.KismetSystemLibrary:IsValid": {
+      "text": "Tells whether an object reference points to a live object",
+      "snippet": [
+        "import { KismetSystemLibrary } from \"/Script/Engine\";",
+        "",
+        "// target: any object reference, for example a pawn or a widget",
+        "const alive = KismetSystemLibrary.IsValid(target);"
+      ]
+    },
+    "/Script/Engine.KismetSystemLibrary:K2_ClearAndInvalidateTimerHandle": {
+      "text": "Cancels a running timer and resets its handle",
+      "displayName": "Clear and Invalidate Timer by Handle",
+      "snippet": [
+        "import { KismetSystemLibrary } from \"/Script/Engine\";",
+        "",
+        "// OnTick is an @event method of this class",
+        "const handle = KismetSystemLibrary.K2_SetTimerDelegate(this.OnTick, 1.0, true);",
+        "KismetSystemLibrary.K2_ClearAndInvalidateTimerHandle(handle);"
+      ]
+    },
+    "/Script/Engine.KismetSystemLibrary:K2_SetTimerDelegate": {
+      "text": "Starts a timer that runs the given event after a delay, once or repeatedly",
+      "displayName": "Set Timer by Event",
+      "snippet": [
+        "import { KismetSystemLibrary } from \"/Script/Engine\";",
+        "",
+        "// OnTick is an @event method of this class",
+        "KismetSystemLibrary.K2_SetTimerDelegate(this.OnTick, 1.0, true);"
+      ]
+    },
+    "/Script/Engine.KismetSystemLibrary:PrintString": {
+      "text": "Writes a message to the output log and, by default, on the screen",
+      "snippet": [
+        "import { KismetSystemLibrary } from \"/Script/Engine\";",
+        "",
+        "KismetSystemLibrary.PrintString(\"hi\");"
+      ]
+    },
+    "/Script/Engine.KismetTextLibrary:Conv_DoubleToText": {
+      "text": "Formats a floating point number as localized text",
+      "displayName": "To Text (double)",
+      "snippet": [
+        "import { KismetTextLibrary } from \"/Script/Engine\";",
+        "",
+        "const label = KismetTextLibrary.Conv_DoubleToText(3.5);"
+      ]
+    },
+    "/Script/Engine.KismetTextLibrary:TextIsEmpty": {
+      "text": "Tells whether a text value has no characters",
+      "snippet": [
+        "import { KismetTextLibrary } from \"/Script/Engine\";",
+        "",
+        "// label: a text value",
+        "const empty = KismetTextLibrary.TextIsEmpty(label);"
+      ]
+    },
+    "/Script/UMG.PanelWidget:ClearChildren": {
+      "text": "Removes every child widget from the panel",
+      "snippet": [
+        "import { VerticalBox } from \"/Script/UMG\";",
+        "",
+        "// list: VerticalBox (a designer widget; every panel widget has this)",
+        "list.ClearChildren();"
+      ]
+    },
+    "/Script/UMG.PanelWidget:GetChildAt": {
+      "text": "Returns the child widget at the given position",
+      "snippet": [
+        "import { VerticalBox } from \"/Script/UMG\";",
+        "",
+        "// list: VerticalBox (a designer widget)",
+        "const first = list.GetChildAt(0);"
+      ]
+    },
+    "/Script/UMG.PanelWidget:GetChildIndex": {
+      "text": "Returns the position of a child widget in the panel",
+      "snippet": [
+        "import { VerticalBox } from \"/Script/UMG\";",
+        "",
+        "// list: VerticalBox (a designer widget); child is one of its widgets",
+        "const index = list.GetChildIndex(child);"
+      ]
+    },
+    "/Script/UMG.PanelWidget:GetChildrenCount": {
+      "text": "Returns how many child widgets the panel holds",
+      "snippet": [
+        "import { VerticalBox } from \"/Script/UMG\";",
+        "",
+        "// list: VerticalBox (a designer widget)",
+        "const count = list.GetChildrenCount();"
+      ]
+    },
+    "/Script/UMG.PanelWidget:RemoveChild": {
+      "text": "Takes one child widget out of the panel",
+      "snippet": [
+        "import { VerticalBox } from \"/Script/UMG\";",
+        "",
+        "// list: VerticalBox (a designer widget); child is one of its widgets",
+        "list.RemoveChild(child);"
+      ]
+    },
+    "/Script/UMG.TextBlock:SetColorAndOpacity": {
+      "text": "Sets the color and opacity used to draw the text",
+      "snippet": [
+        "import { TextBlock } from \"/Script/UMG\";",
+        "",
+        "// text: TextBlock (a designer widget); color: a SlateColor value",
+        "text.SetColorAndOpacity(color);"
+      ]
+    },
+    "/Script/UMG.TextBlock:SetFont": {
+      "text": "Replaces the font used by the text block",
+      "snippet": [
+        "import { TextBlock } from \"/Script/UMG\";",
+        "",
+        "// text: TextBlock (a designer widget); font: a SlateFontInfo value",
+        "text.SetFont(font);"
+      ]
+    },
+    "/Script/UMG.TextBlock:SetText": {
+      "text": "Replaces the text the block displays",
+      "displayName": "SetText (Text)",
+      "snippet": [
+        "import { TextBlock } from \"/Script/UMG\";",
+        "",
+        "// text: TextBlock (a designer widget)",
+        "text.SetText(\"Hello\");"
+      ]
+    },
+    "/Script/UMG.VerticalBox:AddChildToVerticalBox": {
+      "text": "Appends a widget to the end of the vertical stack",
+      "displayName": "Add Child to Vertical Box",
+      "snippet": [
+        "import { VerticalBox } from \"/Script/UMG\";",
+        "",
+        "// list: VerticalBox (a designer widget); row is a widget you created",
+        "const slot = list.AddChildToVerticalBox(row);"
+      ]
+    },
+    "/Script/UMG.VerticalBoxSlot:SetHorizontalAlignment": {
+      "text": "Sets how the slot content is aligned across the box width",
+      "snippet": [
+        "import { VerticalBoxSlot } from \"/Script/UMG\";",
+        "",
+        "// slot: the VerticalBoxSlot returned by AddChildToVerticalBox",
+        "slot.SetHorizontalAlignment(\"HAlign_Fill\");"
+      ]
+    },
+    "/Script/UMG.VerticalBoxSlot:SetPadding": {
+      "text": "Sets the empty space around the slot content",
+      "snippet": [
+        "import { VerticalBoxSlot } from \"/Script/UMG\";",
+        "",
+        "// slot: the VerticalBoxSlot returned by AddChildToVerticalBox",
+        "slot.SetPadding({ Left: 8, Top: 4, Right: 8, Bottom: 4 });"
+      ]
+    },
+    "/Script/UMG.VerticalBoxSlot:SetVerticalAlignment": {
+      "text": "Sets how the slot content is aligned within its row height",
+      "snippet": [
+        "import { VerticalBoxSlot } from \"/Script/UMG\";",
+        "",
+        "// slot: the VerticalBoxSlot returned by AddChildToVerticalBox",
+        "slot.SetVerticalAlignment(\"VAlign_Center\");"
+      ]
+    },
+    "/Script/UMG.Widget:GetOwningPlayer": {
+      "text": "Returns the player controller that owns this widget",
+      "snippet": [
+        "import { UserWidget } from \"/Script/UMG\";",
+        "",
+        "// in a @blueprint class that extends UserWidget",
+        "const player = this.GetOwningPlayer();"
+      ]
+    },
+    "/Script/UMG.Widget:GetParent": {
+      "text": "Returns the panel that holds this widget",
+      "snippet": [
+        "import { UserWidget } from \"/Script/UMG\";",
+        "",
+        "// in a @blueprint class that extends UserWidget",
+        "const parent = this.GetParent();"
+      ]
+    },
+    "/Script/UMG.Widget:RemoveFromParent": {
+      "text": "Detaches the widget from its parent or from the viewport",
+      "displayName": "Remove from Parent",
+      "snippet": [
+        "import { UserWidget } from \"/Script/UMG\";",
+        "",
+        "// in a @blueprint class that extends UserWidget",
+        "this.RemoveFromParent();"
+      ]
+    },
+    "/Script/UMG.Widget:SetVisibility": {
+      "text": "Changes how the widget is drawn and whether it takes input",
+      "snippet": [
+        "import { UserWidget } from \"/Script/UMG\";",
+        "",
+        "// in a @blueprint class that extends UserWidget; enum values are the editor's names",
+        "this.SetVisibility(\"Collapsed\");"
+      ]
+    },
+    "/Script/UMG.WidgetBlueprintLibrary:GetAllWidgetsOfClass": {
+      "text": "Collects every live widget of the given class",
+      "snippet": [
+        "import { WidgetBlueprintLibrary } from \"/Script/UMG\";",
+        "",
+        "// MyWidget_C: a widget Blueprint class imported from its stub",
+        "const found = WidgetBlueprintLibrary.GetAllWidgetsOfClass(MyWidget_C, true);"
+      ]
+    }
   }
 }

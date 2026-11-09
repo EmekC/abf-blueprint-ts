@@ -52,6 +52,32 @@ test("hover: a statement shows its Blueprint nodes, a stub member also its descr
     assert.match(member.contents.value, /^Returns the pawn this controller drives\./);
     assert.doesNotMatch(member.contents.value, /Second line/, "only the first description line");
     assert.match(member.contents.value, /Blueprint: /, "the statement's nodes follow");
+    assert.match(member.contents.value, /\[Docs\]\(https:\/\/emekc\.github\.io\/abf-blueprint-ts\/reference\/nodes\/fakecontroller-getpawnthing\/\)/);
+    const parts = member.contents.value.split("\n\n");
+    assert.match(parts[0] ?? "", /^Returns the pawn this controller drives\./);
+    assert.match(parts[1] ?? "", /^\[Docs\]\(/, "the link follows the description");
+    assert.match(parts[2] ?? "", /^Blueprint: /, "the node line follows the link");
+    assert.deepEqual(started.client.protocolErrors, []);
+  } finally {
+    await started.dispose();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("hover: links /Script stub functions, not /Game members", async () => {
+  const dir = copyFixture("project", prepared);
+  const started = await startInMemory();
+  try {
+    const file = join(dir, "src", "Relay.ts");
+    const text = readFileSync(file, "utf8");
+    const uri = open(started.client, file);
+    const lib = await hover(started, uri, posOf(text, "RowToName", 2));
+    assert.ok(lib, "hover on a library function");
+    assert.match(lib.contents.value, /reference\/nodes\/fakelibrary-rowtoname\/\)/);
+    for (const at of [posOf(text, "Show(info", 1), posOf(text, "player?.Target", 9)]) {
+      const result = await hover(started, uri, at);
+      assert.ok(result === null || !/\[Docs\]/.test(result.contents.value), "no docs link for a /Game member");
+    }
     assert.deepEqual(started.client.protocolErrors, []);
   } finally {
     await started.dispose();

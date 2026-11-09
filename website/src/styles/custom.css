@@ -1,0 +1,46 @@
+/* Badges on the node pages (rendered by src/pages/reference/nodes/[slug].astro from website/lib/nodes.mjs). */
+.node-badge {
+  display: inline-block;
+  margin-inline-end: 0.35rem;
+  padding: 0.1rem 0.6rem;
+  border: 1px solid var(--sl-color-gray-4);
+  border-radius: 999px;
+  background-color: var(--sl-color-gray-6);
+  color: var(--sl-color-gray-1);
+  font-size: var(--sl-text-xs);
+  font-weight: 600;
+  line-height: 1.6;
+  cursor: help;
+}
+
+.node-badge--pure {
+  border-color: var(--sl-color-green);
+  background-color: var(--sl-color-green-low);
+  color: var(--sl-color-green-high);
+}
+
+.node-badge--latent {
+  border-color: var(--sl-color-orange);
+  background-color: var(--sl-color-orange-low);
+  color: var(--sl-color-orange-high);
+}
+
+.node-badge--world {
+  border-color: var(--sl-color-blue);
+  background-color: var(--sl-color-blue-low);
+  color: var(--sl-color-blue-high);
+}
+
+.node-badge--blocked {
+  border-color: var(--sl-color-red);
+  background-color: var(--sl-color-red-low);
+  color: var(--sl-color-red-high);
+}
+
+.node-badge--note {
+  border-color: var(--sl-color-gray-4);
+  background-color: var(--sl-color-gray-6);
+  color: var(--sl-color-gray-2);
+}
+
+/* Search dialog (website/src/components/Search.astro): styles are added with the component. */

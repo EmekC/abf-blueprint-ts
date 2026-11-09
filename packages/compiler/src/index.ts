@@ -1,7 +1,7 @@
 export * from "./hir.js";
 export { SourceFileCache, TS_VERSION, loadProgram, loadedFromProgram, ownedManualFilter, tsDiagnostics } from "./frontend/program.js";
 export type { LoadProgramOptions, LoadedProgram, TsProgram, TsSourceFile } from "./frontend/program.js";
-export { stubDescriptionAt, tsQuickInfoAt } from "./frontend/hover.js";
+export { stubBpPathAt, stubDescriptionAt, tsQuickInfoAt } from "./frontend/hover.js";
 export { defaultLibDir, useTypeScriptLibDir } from "./frontend/tslib.js";
 export { checkProject, lowerChecked } from "./service.js";
 export type { ProjectCheck } from "./service.js";

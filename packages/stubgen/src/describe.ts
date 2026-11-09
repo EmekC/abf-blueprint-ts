@@ -5,7 +5,7 @@ import { runtimeLayout } from "@abfc/env";
 import { displayNameOf } from "@abfc/ir";
 
 export interface DescriptionTable {
-  functions: Record<string, { text: string; displayName?: string }>;
+  functions: Record<string, { text: string; displayName?: string; snippet?: string[] }>;
 }
 
 let cached: DescriptionTable | null = null;
