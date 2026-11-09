@@ -16,6 +16,7 @@ export default defineConfig({
   integrations: [
     starlight({
       title: "abfc",
+      favicon: "/favicon.ico",
       description: "Write Abiotic Factor Blueprints in TypeScript",
       social: [{ icon: "github", label: "GitHub", href: REPO_URL }],
       customCss: ["./src/styles/custom.css"],
