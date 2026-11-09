@@ -36,7 +36,7 @@ test("lint: a loop in a tick override is reported with the rule id and the rule'
     assert.equal(d.source, "abfc");
     assert.equal(d.severity, 2, "recommended rules are warnings");
     assert.match(d.message, /ReceiveTick/);
-    assert.match(d.codeDescription?.href ?? "", /docs\/lint-rules\.md#no-loop-in-tick$/);
+    assert.match(d.codeDescription?.href ?? "", /reference\/lint-rules\/#no-loop-in-tick$/);
     assert.equal(d.range.start.line, 9, "the finding is on the `for` line (0-based)");
     assert.deepEqual(started.client.protocolErrors, []);
   } finally {

@@ -30,17 +30,37 @@ function symbolAt(loaded: LoadedProgram, sf: ts.SourceFile, pos: number): { symb
   return { symbol, id };
 }
 
-/** First line of the description of a stub symbol (a declaration under `<project>/.abfc/stubs/`) at `pos`; undefined elsewhere. */
-export function stubDescriptionAt(loaded: LoadedProgram, sf: ts.SourceFile, pos: number): string | undefined {
+/** The symbol and first declaration at `pos` when the declaration is under `<project>/.abfc/stubs/`; undefined elsewhere. */
+function stubSymbolAt(loaded: LoadedProgram, sf: ts.SourceFile, pos: number): { symbol: ts.Symbol; decl: ts.Declaration } | undefined {
   const at = symbolAt(loaded, sf, pos);
   const decl = at?.symbol.declarations?.[0];
   if (at === undefined || decl === undefined) return undefined;
   const stubsRoot = fwd(resolve(loaded.projectDir, ".abfc", "stubs")) + "/";
   if (!fwd(resolve(decl.getSourceFile().fileName)).startsWith(stubsRoot)) return undefined;
+  return { symbol: at.symbol, decl };
+}
+
+/** First line of the description of a stub symbol (a declaration under `<project>/.abfc/stubs/`) at `pos`; undefined elsewhere. */
+export function stubDescriptionAt(loaded: LoadedProgram, sf: ts.SourceFile, pos: number): string | undefined {
+  const at = stubSymbolAt(loaded, sf, pos);
+  if (at === undefined) return undefined;
   const doc = ts.displayPartsToString(at.symbol.getDocumentationComment(loaded.checker));
   for (const line of doc.split(/\r?\n/)) {
     const t = line.trim();
     if (t !== "") return t;
+  }
+  return undefined;
+}
+
+/** The `@bpPath` of the stub function or method at `pos` (for example `/Script/Engine.KismetSystemLibrary:PrintString`); undefined for other stub symbols (classes, properties) and non-stub symbols. */
+export function stubBpPathAt(loaded: LoadedProgram, sf: ts.SourceFile, pos: number): string | undefined {
+  const at = stubSymbolAt(loaded, sf, pos);
+  if (at === undefined) return undefined;
+  if (!ts.isFunctionDeclaration(at.decl) && !ts.isMethodDeclaration(at.decl) && !ts.isMethodSignature(at.decl)) return undefined;
+  for (const tag of ts.getJSDocTags(at.decl)) {
+    if (tag.tagName.text !== "bpPath") continue;
+    const text = ts.getTextOfJSDocComment(tag.comment)?.trim();
+    return text === undefined || text === "" ? undefined : text;
   }
   return undefined;
 }

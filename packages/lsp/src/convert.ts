@@ -3,11 +3,12 @@ import { DiagnosticSeverity } from "vscode-languageserver/node.js";
 import type { Diagnostic as LspDiagnostic, Range } from "vscode-languageserver/node.js";
 import type { TsSourceFile } from "@abfc/compiler";
 import type { Diagnostic, Span } from "@abfc/ir";
+import { DOCS_SITE_URL } from "./docs.js";
 
-/** Where an `ABFCnnnn` code is described (the page arrives with the 1.0 docs set). */
-export const ERRORS_DOC_URL = "https://github.com/EmekC/abf-blueprint-ts/blob/main/docs/errors.md";
-/** Where a lint rule is described; the anchor is the rule name without the `abfc/` prefix. */
-export const LINT_DOC_URL = "https://github.com/EmekC/abf-blueprint-ts/blob/main/docs/lint-rules.md";
+/** Where an `ABFCnnnn` code is described: the errors page of the documentation site (the anchor is the lowercase code). */
+export const ERRORS_DOC_URL = `${DOCS_SITE_URL}reference/errors/`;
+/** Where a lint rule is described: the lint rules page of the documentation site; the anchor is the rule name without the `abfc/` prefix. */
+export const LINT_DOC_URL = `${DOCS_SITE_URL}reference/lint-rules/`;
 
 const ZERO: Range = { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } };
 

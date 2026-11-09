@@ -57,6 +57,8 @@ test("displayed name rules and the curated table shape", () => {
   for (const [key, e] of Object.entries(table.functions)) {
     assert.match(key, /^\/[^:]+\.[A-Za-z0-9_]+:[A-Za-z0-9_]+$/);
     assert.ok(e.text.length > 0 && !e.text.endsWith("."), key);
+    assert.ok(Array.isArray(e.snippet) && e.snippet.length > 0 && e.snippet.every((l) => typeof l === "string"), `${key}: snippet`);
+    assert.match(key, /^\/Script\/(Engine|UMG|CoreUObject|SlateCore|Slate)\./, `${key}: engine module`);
   }
 });
 

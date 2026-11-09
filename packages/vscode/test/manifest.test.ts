@@ -95,6 +95,7 @@ test("commands and settings", () => {
       ["abfc.publishDryRun", "abfc: Publish (dry run)"],
       ["abfc.doctor", "abfc: Doctor"],
       ["abfc.restartServer", "abfc: Restart Language Server"],
+      ["abfc.openDocs", "abfc: Open Documentation"],
     ],
   );
   assert.equal(c.configuration.title, "abfc");

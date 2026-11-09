@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+// This guards package tests and shipped data (`packages/*/data` goes into runtime.zip and npm packages). The docs site data in `website/data` may name game modules and is deliberately not covered.
 // The forbidden words are assembled from pieces so this file does not trip its own guard.
 const FORBIDDEN = [["abi", "otic"], ["deployed", "_"], ["global", "item"]].map((p) => p.join(""));
 

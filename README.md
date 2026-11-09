@@ -4,6 +4,8 @@ abfc is a TypeScript-to-Blueprint compiler for Abiotic Factor mods. You write a 
 
 Repository: https://github.com/EmekC/abf-blueprint-ts
 
+Documentation: https://emekc.github.io/abf-blueprint-ts/
+
 ## Status
 
 Version 1.0.0, a pre-release until the `v1.0.0` tag is published: the code, the documentation and the release pipeline are complete, and the first release is checked on a clean machine before it is announced. The release notes are in [CHANGELOG.md](CHANGELOG.md). Known limits (function local variables, changing the fields of an existing struct, the stage audit of `abfc publish --full`) are listed there and in [docs/design.md](docs/design.md).
@@ -28,8 +30,10 @@ abfc doctor
 
 ## Documentation
 
+- [docs/getting-started.md](docs/getting-started.md): the minimum steps from install to a published Blueprint.
 - [docs/install.md](docs/install.md): install, update, uninstall, source install.
 - [docs/first-mod.md](docs/first-mod.md): a first mod from `abfc init` to `abfc publish`.
+- [docs/runtime.md](docs/runtime.md): the `@abfc/runtime` decorators, helper functions and types.
 - [docs/cli.md](docs/cli.md): every command, option, exit code and `--json` output.
 - [docs/config.md](docs/config.md): `abf.config.json`, the user config and the environment variables.
 - [docs/errors.md](docs/errors.md): every error and warning code, with cause and fix.

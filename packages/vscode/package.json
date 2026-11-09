@@ -87,6 +87,10 @@
       {
         "command": "abfc.restartServer",
         "title": "abfc: Restart Language Server"
+      },
+      {
+        "command": "abfc.openDocs",
+        "title": "abfc: Open Documentation"
       }
     ],
     "configuration": {

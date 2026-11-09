@@ -2,8 +2,9 @@ import { ESLintUtils } from "@typescript-eslint/utils";
 import type { ParserServicesWithTypeInformation, TSESLint } from "@typescript-eslint/utils";
 import type { TSESTree } from "@typescript-eslint/utils";
 
+// Must stay in step with DOCS_SITE_URL in packages/lsp/src/docs.ts (no dependency on the lsp package here).
 export const createRule = ESLintUtils.RuleCreator(
-  (name) => `https://github.com/EmekC/abf-blueprint-ts/blob/main/docs/lint-rules.md#${name}`,
+  (name) => `https://emekc.github.io/abf-blueprint-ts/reference/lint-rules/#${name}`,
 );
 
 export const AUTHORITY_CALLS: readonly string[] = ["HasAuthority", "IsServer", "IsDedicatedServer"];

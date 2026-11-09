@@ -55,7 +55,7 @@ test("diagnostics carry source, code description and the fix text", async () => 
     assert.ok(idiv);
     assert.equal(idiv.source, "abfc");
     assert.equal(idiv.severity, 1);
-    assert.match(idiv.codeDescription?.href ?? "", /docs\/errors\.md#abfc2010$/);
+    assert.match(idiv.codeDescription?.href ?? "", /reference\/errors\/#abfc2010$/);
     assert.match(idiv.message, /idiv/);
   } finally {
     await started.dispose();

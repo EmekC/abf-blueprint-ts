@@ -1,7 +1,8 @@
 // Hover: the Blueprint nodes of the statement, a stub member's description, optionally the TypeScript type.
 import { relative } from "node:path";
 import type { Hover, Position } from "vscode-languageserver/node.js";
-import { describeIrNode, irNodesAt, stubDescriptionAt, tsQuickInfoAt } from "@abfc/compiler";
+import { describeIrNode, irNodesAt, stubBpPathAt, stubDescriptionAt, tsQuickInfoAt } from "@abfc/compiler";
+import { nodeDocsUrl } from "./docs.js";
 import type { InitOptions, ProjectState, Snapshot } from "./project.js";
 import { pathKey } from "./uri.js";
 
@@ -25,6 +26,9 @@ export function hoverAt(state: ProjectState, snap: Snapshot, path: string, pos: 
   }
   const description = stubDescriptionAt(snap.loaded, sf, offset);
   if (description !== undefined) parts.push(description);
+  const bpPath = stubBpPathAt(snap.loaded, sf, offset);
+  const docsUrl = bpPath === undefined ? undefined : nodeDocsUrl(bpPath);
+  if (docsUrl !== undefined) parts.push(`[Docs](${docsUrl})`);
   const ir = snap.check.ir;
   if (ir !== null) {
     const rel = relative(state.dir, sf.fileName).replaceAll("\\", "/");
