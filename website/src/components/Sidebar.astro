@@ -1,0 +1,20 @@
+---
+// Starlight's Sidebar plus the node reference tree inside the same state persister, so Starlight's scroll restore includes it.
+// Re-check against `@astrojs/starlight/components/Sidebar.astro` when upgrading Starlight.
+import MobileMenuFooter from "@astrojs/starlight/components/MobileMenuFooter.astro";
+import SidebarPersister from "@astrojs/starlight/components/SidebarPersister.astro";
+import SidebarSublist from "@astrojs/starlight/components/SidebarSublist.astro";
+import NodeTree from "./NodeTree.astro";
+import { REVEAL_SCRIPT } from "../../lib/node-tree.mjs";
+
+const { sidebar } = Astro.locals.starlightRoute;
+---
+
+<SidebarPersister>
+  <SidebarSublist sublist={sidebar} />
+  <NodeTree />
+</SidebarPersister>
+<Fragment set:html={"<script>" + REVEAL_SCRIPT + "</script>"} />
+<div class="md:sl-hidden">
+  <MobileMenuFooter />
+</div>

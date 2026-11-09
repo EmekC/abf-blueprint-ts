@@ -6,3 +6,4 @@ src/content/docs/*
 public/search-index.json
 src/generated/
 public/llms-nodes.txt
+public/node-tree.json

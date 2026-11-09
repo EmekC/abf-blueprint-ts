@@ -1,0 +1,29 @@
+---
+// The "Node reference" group of the sidebar: Module > Class > Function. The markup comes from website/lib/node-tree.mjs, the styles are in src/styles/custom.css.
+import { Icon } from "@astrojs/starlight/components";
+import SidebarRestorePoint from "@astrojs/starlight/components/SidebarRestorePoint.astro";
+import tree from "../generated/node-tree.json";
+import { BASE } from "../../site.mjs";
+import { locateInTree, moduleItemsHtml } from "../../lib/node-tree.mjs";
+
+const where = locateInTree(tree, Astro.url.pathname, BASE);
+const forced = where.kind !== "other";
+---
+
+<ul id="node-tree" class="node-tree" data-base={BASE} data-version={tree.version}>
+  <li>
+    <details open={forced}>
+      <summary><span class="node-tree__label">Node reference</span><Icon name="right-caret" class="node-tree__caret" size="1.25rem" /></summary>
+      {!forced && <SidebarRestorePoint />}
+      <ul>
+        <li><a href={`${BASE}/reference/nodes/`} aria-current={where.kind === "overview" ? "page" : undefined}>Overview</a></li>
+        <Fragment set:html={moduleItemsHtml(tree, where, BASE)} />
+      </ul>
+    </details>
+  </li>
+</ul>
+
+<script>
+  import { initNodeTree } from "../../lib/node-tree.mjs";
+  initNodeTree(document);
+</script>

@@ -1,11 +1,13 @@
 // Generates the pages of the site from the repository's docs: website/src/content/docs/** (everything except the hand-written index.mdx)
 // and website/public/search-index.json. Run by `npm run generate` (also part of `npm run dev` and `npm run build`).
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BASE, REPO_URL, SITE } from "../site.mjs";
 import { DOC_PAGES, frontmatter, transformMarkdown } from "../lib/docs-sync.mjs";
 import { buildNodes, llmsNodesText, modulePages, nodesIndexPage, notFoundPage } from "../lib/nodes.mjs";
+import { nodeTree } from "../lib/node-tree.mjs";
 import { buildSearchIndex } from "../lib/search-index.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -101,6 +103,13 @@ write(join(outDir, "404.md"), notFoundPage(BASE));
 const generatedDir = join(site, "src", "generated");
 rmSync(generatedDir, { recursive: true, force: true });
 write(join(generatedDir, "nodes.json"), JSON.stringify({ nodes, modules }));
+
+// The sidebar tree (src/components/NodeTree.astro) renders the current path from the first file and loads the second one in the browser.
+const treeBody = nodeTree(modules);
+const tree = { version: createHash("sha1").update(JSON.stringify(treeBody)).digest("hex").slice(0, 10), ...treeBody };
+const treeJson = JSON.stringify(tree);
+write(join(generatedDir, "node-tree.json"), treeJson);
+write(join(site, "public", "node-tree.json"), treeJson);
 write(join(site, "public", "llms-nodes.txt"), llmsNodesText(nodes, SITE + BASE, meta));
 
 const index = buildSearchIndex({ nodes, runtimeMd: read("docs/runtime.md"), errorsMd: read("docs/errors.md"), pages, base: BASE });

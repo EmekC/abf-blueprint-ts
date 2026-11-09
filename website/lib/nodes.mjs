@@ -227,19 +227,10 @@ export function buildNodes(descriptions, signatures, base) {
 
 const byText = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
 
-/** The modules that have functions in `signatures` (the parsed node-signatures.json): `[{ path, name, slug, count }]`, sorted by name. */
-export function modulesOf(signatures) {
-  const counts = new Map();
-  for (const sig of Object.values(signatures.functions)) counts.set(sig.module, (counts.get(sig.module) ?? 0) + 1);
-  return [...counts]
-    .map(([path, count]) => ({ path, name: moduleName(path), slug: moduleSlug(path), count }))
-    .sort((a, b) => byText(a.name, b.name));
-}
-
 const flagsOf = (n) =>
   [n.pure ? "Pure" : "", n.latent ? "Latent" : "", n.worldContext ? "World context" : "", n.blocked !== null ? "Blocked" : ""].filter((s) => s !== "").join(", ");
 
-/** One entry per module for the module pages: `[{ path, name, slug, url, count, owners: [{ name, id, rows: [{ title, url, qualified, flags }] }] }]`. */
+/** One entry per module for the module pages: `[{ path, name, slug, url, count, owners: [{ name, id, rows: [{ title, url, qualified, flags, slug, blocked }] }] }]`. */
 export function modulePages(nodes) {
   const byModule = new Map();
   for (const n of nodes) {
@@ -264,7 +255,7 @@ export function modulePages(nodes) {
             name,
             id: seg(name),
             rows: members
-              .map((n) => ({ title: n.title, url: n.url, qualified: n.qualified, flags: flagsOf(n) }))
+              .map((n) => ({ title: n.title, url: n.url, qualified: n.qualified, flags: flagsOf(n), slug: n.slug, blocked: n.blocked !== null }))
               .sort((a, b) => byText(a.title, b.title) || byText(a.qualified, b.qualified)),
           }))
           .sort((a, b) => byText(a.name, b.name)),

@@ -44,8 +44,8 @@ abfc compiles TypeScript classes into Abiotic Factor Blueprints. This file tells
 ### Adding a page, and rules that protect links
 
 - New docs page: add the file to `DOC_PAGES` in `website/lib/docs-sync.mjs`, to the `sidebar` in `website/astro.config.mjs`, and to the `DOCS` list in `scripts/release/test/docs.test.mjs` (link and anchor checks).
-- The node reference sidebar comes from the module list in `website/astro.config.mjs`; do not list functions there.
-- Edit `docs/*.md`, never `website/src/content/docs/`: that folder is generated (gitignored) except the hand-written `index.mdx`. `website/public/search-index.json` is generated too.
+- The sidebar's node reference tree (Module > Class > Function) is rendered by `website/src/components/NodeTree.astro` inside the Starlight `Sidebar` override `website/src/components/Sidebar.astro`, from `src/generated/node-tree.json` and `public/node-tree.json` (both written by `npm run generate`; logic in `website/lib/node-tree.mjs`). Do not add node or module links to the `sidebar` in `website/astro.config.mjs`. When upgrading Starlight, re-check `Sidebar.astro` against Starlight's own `Sidebar.astro`.
+- Edit `docs/*.md`, never `website/src/content/docs/`: that folder is generated (gitignored) except the hand-written `index.mdx`. `website/public/search-index.json` and `website/public/node-tree.json` are generated too.
 - Link between docs files with relative links (`errors.md#abfc2054`) so GitHub and the site both work. Link to the node reference with the absolute site URL.
 - Do not rename a page slug, a node slug rule, or a heading that is an anchor target (`#abfcnnnn`, lint rule names). Released LSP, ESLint and VS Code builds link to them (`packages/lsp/src/docs.ts`, `packages/eslint-plugin/src/util.ts`, `packages/vscode/src/extension.ts`).
 - No feedback ("was this helpful") widget or text anywhere on the site or in llms.txt.
@@ -53,5 +53,5 @@ abfc compiles TypeScript classes into Abiotic Factor Blueprints. This file tells
 ### Check it locally
 
 1. `npm run build && npm test` at the repo root. This includes `website/test/*.test.mjs` and `scripts/release/test/docs.test.mjs`; the parity test needs the root build first.
-2. `cd website && npm ci && npm run build` (about 1 minute for the ~3,400 pages; it runs the generator first and fails on broken doc links). Use `npm run preview` to click through; search (Ctrl+K) works only in the built site.
+2. `cd website && npm ci && npm run build` (about 45 seconds for the ~3,400 pages, output about 200 MB in `dist/`; it runs the generator first and fails on broken doc links). Use `npm run preview` to click through; search (Ctrl+K) works only in the built site.
 3. Do not commit `website/dist/`, `website/node_modules/` or generated content.

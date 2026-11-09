@@ -44,3 +44,151 @@
 }
 
 /* Search dialog (website/src/components/Search.astro): styles are added with the component. */
+
+/* Node reference tree in the sidebar (src/components/NodeTree.astro, website/lib/node-tree.mjs): mirrors Starlight's SidebarSublist styles, which are scoped to that component. */
+.node-tree,
+.node-tree ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.node-tree {
+  --node-tree-pad: 0.5rem;
+  margin-top: -0.25rem;
+}
+
+.node-tree li {
+  overflow-wrap: anywhere;
+}
+
+.node-tree ul li {
+  margin-inline-start: var(--node-tree-pad);
+  border-inline-start: 1px solid var(--sl-color-hairline-light);
+  padding-inline-start: var(--node-tree-pad);
+}
+
+.node-tree summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.2em var(--node-tree-pad);
+  line-height: 1.4;
+  cursor: pointer;
+  user-select: none;
+}
+
+.node-tree summary::marker,
+.node-tree summary::-webkit-details-marker {
+  display: none;
+}
+
+.node-tree__label {
+  flex: 1;
+  font-size: var(--sl-text-lg);
+  font-weight: 600;
+  color: var(--sl-color-white);
+}
+
+.node-tree__caret {
+  flex-shrink: 0;
+  transition: transform 0.2s ease-in-out;
+}
+
+[dir="rtl"] .node-tree__caret {
+  transform: rotateZ(180deg);
+}
+
+.node-tree details[open] > summary > .node-tree__caret {
+  transform: rotateZ(90deg);
+}
+
+.node-tree ul summary {
+  color: var(--sl-color-gray-2);
+}
+
+.node-tree ul summary:hover {
+  color: var(--sl-color-white);
+}
+
+.node-tree__name {
+  flex: 1;
+  min-width: 0;
+}
+
+.node-tree__count {
+  font-size: var(--sl-text-xs);
+  color: var(--sl-color-gray-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.node-tree ul summary::after {
+  content: "";
+  flex-shrink: 0;
+  width: 0.4em;
+  height: 0.4em;
+  margin-inline-end: 0.2em;
+  border-inline-end: 2px solid currentColor;
+  border-block-end: 2px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.2s ease-in-out;
+}
+
+[dir="rtl"] .node-tree ul summary::after {
+  transform: rotate(135deg);
+}
+
+.node-tree ul details[open] > summary::after {
+  transform: rotate(45deg);
+}
+
+.node-tree a {
+  display: block;
+  border-radius: 0.25rem;
+  text-decoration: none;
+  color: var(--sl-color-gray-2);
+  padding: 0.3em var(--node-tree-pad);
+  line-height: 1.4;
+}
+
+.node-tree a:hover,
+.node-tree a:focus {
+  color: var(--sl-color-white);
+}
+
+.node-tree a.blocked {
+  color: var(--sl-color-gray-3);
+  text-decoration: line-through;
+  text-decoration-color: var(--sl-color-gray-4);
+}
+
+.node-tree [aria-current="page"],
+.node-tree [aria-current="page"]:hover,
+.node-tree [aria-current="page"]:focus {
+  font-weight: 600;
+  color: var(--sl-color-text-invert);
+  background-color: var(--sl-color-text-accent);
+  text-decoration: none;
+}
+
+.node-tree__status {
+  padding: 0.3em var(--node-tree-pad);
+  color: var(--sl-color-gray-3);
+  font-size: var(--sl-text-sm);
+}
+
+@media (min-width: 50rem) {
+  .node-tree {
+    margin-top: -0.5rem;
+  }
+
+  .node-tree__label {
+    font-size: var(--sl-text-base);
+  }
+
+  .node-tree a,
+  .node-tree ul summary,
+  .node-tree__status {
+    font-size: var(--sl-text-sm);
+  }
+}
